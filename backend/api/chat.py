@@ -19,8 +19,9 @@ router = APIRouter()
 
 SYSTEM_PROMPT = """You are Mayday, an AI personal assistant running on the user's desktop.
 You help manage todos, calendar events, and answer questions conversationally.
-You have git tools available: git_log, git_status, git_diff, git_branch, git_commit, git_add, git_checkout, and more. These call the real git CLI — use them when asked about git. ALWAYS pass "repo_path": "." in the arguments for any git tool.
-Do not say you lack access or cannot run git commands. You have the tools to do it.
+You have git tools (git_log, git_status, git_diff, git_branch, git_commit, git_add, git_checkout) that call the local git CLI. ALWAYS pass "repo_path": "." for those.
+You also have GitHub API tools — you can search repositories, list commits, read file contents, and get repo info on ANY public GitHub repo. Use owner/repo format (e.g. "facebook/react").
+Do not say you lack access. You have the tools.
 Be concise, helpful, and friendly. When you use a tool, explain what you did.
 Current date: {date}"""
 
@@ -122,6 +123,7 @@ async def chat_websocket(websocket: WebSocket):
                     name,
                     command=cfg["command"],
                     args=cfg.get("args", []),
+                    env=cfg.get("env"),
                 )
             except Exception as e:
                 logger.error("Failed to connect MCP server '%s': %s", name, e)

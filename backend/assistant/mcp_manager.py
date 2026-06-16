@@ -16,8 +16,8 @@ class MCPManager:
         self._exit_stacks: dict[str, AsyncExitStack] = {}
         self._tools: list[dict] = []
 
-    async def add_server_stdio(self, name: str, command: str, args: list[str] | None = None, timeout: float | None = None):
-        server_params = StdioServerParameters(command=command, args=args or [])
+    async def add_server_stdio(self, name: str, command: str, args: list[str] | None = None, timeout: float | None = None, env: dict[str, str] | None = None):
+        server_params = StdioServerParameters(command=command, args=args or [], env=env)
         exit_stack = AsyncExitStack()
         async def _connect():
             transport = await exit_stack.enter_async_context(stdio_client(server_params))
