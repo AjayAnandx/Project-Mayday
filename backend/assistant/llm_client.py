@@ -4,7 +4,7 @@ import yaml
 from pathlib import Path
 from contextlib import contextmanager
 
-from backend.assistant.function_registry import TOOL_DEFINITIONS
+from backend.assistant.function_registry import get_tool_definitions
 
 
 def _load_config():
@@ -27,11 +27,11 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def chat(self, messages: list[dict], stream: bool = False):
+    def chat(self, messages: list[dict], stream: bool = False, tools: list[dict] | None = None):
         body = {
             "model": self.model,
             "messages": messages,
-            "tools": TOOL_DEFINITIONS,
+            "tools": tools if tools is not None else get_tool_definitions(),
             "stream": stream,
         }
         if stream:
@@ -58,12 +58,11 @@ class LLMClient:
             return content, tool_calls, False
         return None, None, False
 
-    def stream_tokens(self, messages: list[dict]):
-        """Synchronous generator that yields (content_chunk, tool_calls, is_done) tuples."""
+    def stream_tokens(self, messages: list[dict], tools: list[dict] | None = None):
         with self._http.stream("POST", self.endpoint, json={
             "model": self.model,
             "messages": messages,
-            "tools": TOOL_DEFINITIONS,
+            "tools": tools if tools is not None else get_tool_definitions(),
             "stream": True,
         }, headers=self._build_headers()) as response:
             for line in response.iter_lines():

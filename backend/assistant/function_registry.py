@@ -1,9 +1,13 @@
+import asyncio
+import logging
+
 from backend.core.data_store import get_store
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
 
+logger = logging.getLogger(__name__)
 
-TOOL_DEFINITIONS = [
+LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
@@ -163,11 +167,22 @@ FUNCTION_MAP = {
 }
 
 
-def dispatch_call(name: str, arguments: dict) -> str:
-    fn = FUNCTION_MAP.get(name)
-    if not fn:
-        return f"Unknown function: {name}"
-    try:
-        return fn(**arguments)
-    except Exception as e:
-        return f"Error executing {name}: {e}"
+def get_tool_definitions(mcp_tools: list[dict] | None = None) -> list[dict]:
+    tools = list(LOCAL_TOOL_DEFINITIONS)
+    if mcp_tools:
+        tools.extend(mcp_tools)
+    return tools
+
+
+async def dispatch_call(name: str, arguments: dict, mcp_manager=None) -> str:
+    if name in FUNCTION_MAP:
+        fn = FUNCTION_MAP[name]
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, lambda: fn(**arguments))
+        except Exception as e:
+            logger.exception("Error executing local function '%s'", name)
+            return f"Error executing {name}: {e}"
+    if mcp_manager is not None:
+        return await mcp_manager.call_tool(name, arguments)
+    return f"Unknown function: {name}"

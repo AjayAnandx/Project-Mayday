@@ -13,7 +13,7 @@ Desktop AI personal assistant with:
 |----------|--------|
 | Language | Python 3.11+ (backend) + TypeScript (frontend) |
 | Frontend | React 18 + TypeScript + Vite |
-| Styling | Tailwind CSS (Catppuccin Mocha tokens) |
+| Styling | Tailwind CSS (black + green custom palette) |
 | Desktop | Electron (BrowserWindow + FastAPI subprocess) |
 | Backend | FastAPI + uvicorn |
 | Data | Local JSON file (`data.json`) |
@@ -23,6 +23,8 @@ Desktop AI personal assistant with:
 | TTS | Web Speech API `SpeechSynthesis` (frontend) / Coqui stub (backend) |
 | VAD | Silero VAD — load-on-demand stub |
 | Conv memory | Stored in local `data.json` (last 20 messages) |
+| Icons | `lucide-react` |
+| Animations | `motion` (framer-motion) |
 
 ## Architecture
 - **Two-process**: FastAPI backend (uvicorn) + React frontend (Vite dev / Electron)
@@ -67,18 +69,16 @@ mayday/
 │   ├── tsconfig.json
 │   └── src/
 │       ├── main.tsx
-│       ├── App.tsx                   # 3-panel layout root (ChatProvider)
-│       ├── index.css                 # Tailwind + Catppuccin Mocha theme
+│       ├── App.tsx                   # Page routing root (ChatProvider)
+│       ├── index.css                 # Tailwind + black/green theme (scrollbar)
 │       ├── context/
 │       │   └── ChatContext.tsx        # Shared WebSocket context
 │       ├── components/
 │       │   ├── layout/
-│       │   │   ├── Toolbar.tsx       # Title, connection indicator, new chat
-│       │   │   └── SplitPanel.tsx    # Resizable 3-panel splitter
+│       │   │   └── Sidebar.tsx       # Pill-shaped top nav bar (Chat/Todos/Calendar)
 │       │   ├── chat/
-│       │   │   ├── ChatPanel.tsx     # Message list, input, send, voice
-│       │   │   ├── MessageBubble.tsx # User/assistant/tool message rendering
-│       │   │   └── VoiceButton.tsx   # Web Speech API mic button
+│       │   │   ├── ChatPanel.tsx     # Message list, pill input, send, loading dots
+│       │   │   └── MessageBubble.tsx # User/assistant/tool pill-shaped bubbles
 │       │   ├── todos/
 │       │   │   ├── TodoPanel.tsx     # List, search, filter, add button
 │       │   │   ├── TodoItem.tsx      # Single todo row with toggle/edit/delete
@@ -89,20 +89,22 @@ mayday/
 │       │   │   ├── DayCell.tsx       # Single day cell
 │       │   │   └── EventDialog.tsx   # Create/edit form modal
 │       │   └── ui/                   # Shared primitives
-│       │       ├── Button.tsx
-│       │       ├── Input.tsx
+│       │       ├── Button.tsx        # rounded-full pill buttons
+│       │       ├── Input.tsx         # rounded-xl with green focus ring
 │       │       ├── Select.tsx
 │       │       ├── Checkbox.tsx
-│       │       ├── Modal.tsx
+│       │       ├── Modal.tsx         # rounded-2xl backdrop blur
 │       │       └── Badge.tsx
 │       ├── hooks/
 │       │   ├── useChat.ts           # WebSocket hook (token streaming)
 │       │   ├── useTodos.ts          # REST CRUD with search/filter
 │       │   ├── useEvents.ts         # REST CRUD
-│       │   └── useConversations.ts  # REST list/create/delete
+│       │   └── use-auto-resize-textarea.ts
 │       ├── services/
 │       │   ├── api.ts               # Typed REST client
 │       │   └── websocket.ts         # WebSocket client with auto-reconnect
+│       ├── lib/
+│       │   └── utils.ts             # cn() utility
 │       └── types/
 │           ├── todo.ts
 │           ├── event.ts
@@ -114,6 +116,7 @@ mayday/
 │   ├── preload.ts                   # Context bridge
 │   └── electron-builder.yml         # Packaging config
 │
+├── plan.md                          # MCP integration plan
 ├── main.py                          # Original PyQt6 entry (kept as reference)
 ├── ui/                              # Original PyQt6 widgets (kept as reference)
 ├── data_store.py                    # Original data store (kept as reference)
@@ -170,6 +173,26 @@ User types → WebSocket.send()
   → React CalendarPanel / TodoPanel auto-refresh on tool_call
 ```
 
+## Color Palette (`tailwind.config.js`)
+```
+crust:   '#050505'     (near-black root bg)
+mantle:  '#0d0d0d'
+base:    '#141414'     (dark charcoal)
+surface0:'#1c1c1c'
+surface1:'#262626'
+surface2:'#303030'
+overlay0:'#525252'
+overlay1:'#737373'
+overlay2:'#999999'
+subtext0:'#a3a3a3'
+subtext1:'#cccccc'
+text:    '#e5e5e5'
+accent:  '#22c55e'
+green:   '#22c55e'     (single accent color everywhere)
+red:     '#ef4444'
+yellow:  '#eab308'
+```
+
 ## Current Status
 
 ### Legacy (PyQt6 — kept as reference)
@@ -184,6 +207,11 @@ User types → WebSocket.send()
 - [x] Phase 4: Chat + WebSocket streaming (token-by-token, tool_call cards, context)
 - [x] Phase 5: Electron wrapper (main.ts, preload.ts, electron-builder.yml)
 - [x] Phase 6: Voice stubs (Web Speech API SpeechRecognition) + polish
+- [x] **Theme redesign**: Replaced Catppuccin Mocha with black + green palette (`#050505`, `#22c55e`)
+- [x] **Color cleanup**: Removed all sky/lavender/teal references → single green accent everywhere
+- [x] **UI polish**: Pill-shaped nav, chat input, message bubbles; green gradients in headers/empty states; `bg-crust`/`bg-black/60` backgrounds; green glow on input focus
+- [x] **Removed AITextLoading**: Replaced with simple bouncing dots indicator (JS dropped 334→205 KB)
+- [x] **MCP plan**: `plan.md` written with full architecture for MCP tool integration
 - [ ] Phase 7: Settings dialog (model selection, API config, voice settings)
 
 ## How to Run
@@ -215,3 +243,26 @@ Set `model` in `config.yaml` to any model available in your local Ollama (`ollam
 - No settings dialog yet (model/mic/speaker config via yaml only)
 - Frontend WebSocket connects on mount — reconnection logic is basic (3s retry)
 - Electron dev mode requires FastAPI running separately; production mode serves built frontend from FastAPI
+- MCP playwright server disabled (npx EPERM on Windows npm cache). Enable in `config.yaml` when running on Linux/macOS or after fixing npm permissions
+- MCP `mcp_server_git` tools require `repo_path` — LLM may need explicit guidance to pass the correct path
+- LLM model `gemma4:31b-cloud` is cloud-proxied — may have higher latency than local models. Set to any `ollama list` model for local inference
+- Chat engine uses non-streaming LLM calls despite streaming infrastructure existing in `LLMClient.stream_tokens()`
+
+## Relevant Files
+- `frontend/tailwind.config.js`: Black/green color palette
+- `frontend/src/App.tsx`: Page routing with ChatProvider
+- `frontend/src/components/layout/Sidebar.tsx`: Pill-shaped top nav bar
+- `frontend/src/components/chat/ChatPanel.tsx`: Chat page with pill input + bouncing dots loading
+- `frontend/src/components/chat/MessageBubble.tsx`: Pill-shaped user/assistant/tool bubbles
+- `frontend/src/components/todos/TodoPanel.tsx`: Full-page todo list with search/filter
+- `frontend/src/components/calendar/CalendarPanel.tsx`: Full-page month grid with events
+- `frontend/src/components/ui/Button.tsx`: `rounded-full` pill buttons with green accent
+- `frontend/src/components/ui/Input.tsx`: `rounded-xl` inputs with green focus ring
+- `frontend/src/hooks/useChat.ts`: WebSocket hook with auto-reconnect
+- `frontend/src/services/websocket.ts`: ChatWebSocket class
+- `frontend/src/services/api.ts`: Typed REST client
+- `backend/api/chat.py`: WebSocket endpoint with LLM streaming + tool dispatch
+- `backend/assistant/llm_client.py`: Ollama HTTP client
+- `backend/assistant/function_registry.py`: 9 tool definitions + dispatch
+- `config.yaml`: Shared config (Ollama, voice, server)
+- `plan.md`: MCP integration architecture and implementation plan

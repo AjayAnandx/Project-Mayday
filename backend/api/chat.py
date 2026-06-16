@@ -6,9 +6,11 @@ from datetime import date
 import httpx
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from backend.core.config import load_config
 from backend.core.data_store import get_store
 from backend.assistant.llm_client import LLMClient
-from backend.assistant.function_registry import dispatch_call, TOOL_DEFINITIONS
+from backend.assistant.function_registry import dispatch_call, get_tool_definitions
+from backend.assistant.mcp_manager import MCPManager
 from backend.assistant.memory.conversation_manager import ConversationManager
 
 logger = logging.getLogger(__name__)
@@ -17,7 +19,8 @@ router = APIRouter()
 
 SYSTEM_PROMPT = """You are Mayday, an AI personal assistant running on the user's desktop.
 You help manage todos, calendar events, and answer questions conversationally.
-You have access to tools for creating, updating, deleting, and listing todos and events.
+You have git tools available: git_log, git_status, git_diff, git_branch, git_commit, git_add, git_checkout, and more. These call the real git CLI — use them when asked about git. ALWAYS pass "repo_path": "." in the arguments for any git tool.
+Do not say you lack access or cannot run git commands. You have the tools to do it.
 Be concise, helpful, and friendly. When you use a tool, explain what you did.
 Current date: {date}"""
 
@@ -31,18 +34,27 @@ async def _send_json(ws: WebSocket, data: dict):
     await ws.send_text(json.dumps(data))
 
 
-async def _run_engine(ws: WebSocket, user_text: str, conv: ConversationManager, llm: LLMClient):
+async def _run_engine(
+    ws: WebSocket,
+    user_text: str,
+    conv: ConversationManager,
+    llm: LLMClient,
+    tools: list[dict],
+    mcp: MCPManager | None,
+):
     system = SYSTEM_PROMPT.format(date=date.today().isoformat())
     conv.add_message("user", user_text)
     messages = [{"role": "system", "content": system}] + conv.get_context()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     try:
-        # First LLM call (non-streaming) to get tool calls
         def first_call(msgs):
-            resp = llm.chat(msgs, stream=False)
+            logger.info("Calling LLM with %d tools: %s", len(tools), [t["function"]["name"] for t in tools])
+            resp = llm.chat(msgs, stream=False, tools=tools)
             resp.raise_for_status()
+            data = resp.json()
+            logger.info("LLM response choices: %d", len(data.get("choices", [])))
             return llm.extract_response(resp)
 
         content, tool_calls = await loop.run_in_executor(None, first_call, messages)
@@ -65,7 +77,7 @@ async def _run_engine(ws: WebSocket, user_text: str, conv: ConversationManager, 
             fn_args = tc["function"]["arguments"]
             if isinstance(fn_args, str):
                 fn_args = json.loads(fn_args)
-            result = dispatch_call(fn_name, fn_args)
+            result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
             conv.add_message("assistant", f"[Called {fn_name}] {result}")
             await _send_json(ws, {
                 "type": "tool_call",
@@ -73,12 +85,11 @@ async def _run_engine(ws: WebSocket, user_text: str, conv: ConversationManager, 
                 "result": result,
             })
 
-        # Second LLM call after tool dispatch
         messages = [{"role": "system", "content": system}] + conv.get_context()
 
         try:
             def second_call(msgs):
-                resp = llm.chat(msgs, stream=False)
+                resp = llm.chat(msgs, stream=False, tools=tools)
                 resp.raise_for_status()
                 return llm.extract_response(resp)
 
@@ -89,10 +100,7 @@ async def _run_engine(ws: WebSocket, user_text: str, conv: ConversationManager, 
 
     if content:
         conv.add_message("assistant", content)
-        # Send as a streaming simulation (single chunk then done)
         await _send_json(ws, {"type": "token", "content": content})
-        # Also send tool_call results that might have been embedded
-        # This keeps the frontend compatible with non-streaming too
 
     await _send_json(ws, {"type": "done"})
 
@@ -104,13 +112,34 @@ async def chat_websocket(websocket: WebSocket):
     llm = LLMClient()
     conv.new_conversation()
 
+    config = load_config()
+    mcp_servers = config.get("mcp", {}).get("servers", {})
+    mcp = MCPManager()
+    if mcp_servers:
+        for name, cfg in mcp_servers.items():
+            try:
+                await mcp.add_server_stdio(
+                    name,
+                    command=cfg["command"],
+                    args=cfg.get("args", []),
+                )
+            except Exception as e:
+                logger.error("Failed to connect MCP server '%s': %s", name, e)
+    mcp_tools = []
+    if mcp._sessions:
+        try:
+            mcp_tools = await mcp.discover_tools()
+        except Exception as e:
+            logger.error("MCP tool discovery error: %s", e)
+    tools = get_tool_definitions(mcp_tools)
+
     try:
         while True:
             data = await websocket.receive_text()
             msg = json.loads(data)
             if msg.get("type") == "message":
                 user_text = msg.get("content", "")
-                await _run_engine(websocket, user_text, conv, llm)
+                await _run_engine(websocket, user_text, conv, llm, tools, mcp)
             elif msg.get("type") == "new_conversation":
                 conv.new_conversation()
                 await _send_json(websocket, {"type": "conversation_created"})
@@ -130,3 +159,5 @@ async def chat_websocket(websocket: WebSocket):
             await _send_json(websocket, {"type": "error", "content": str(e)})
         except Exception:
             pass
+    finally:
+        await mcp.close()

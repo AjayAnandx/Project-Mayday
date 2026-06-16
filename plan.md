@@ -1,16 +1,23 @@
-# MCP Integration Plan
+# MCP Integration — Implementation Complete
 
 ## Goal
 Connect Mayday's LLM tool-calling system to external MCP (Model Context Protocol) servers — filesystem, GitHub, databases, web search, etc. — by adding a client layer that discovers and calls MCP tools alongside the 9 built-in functions.
 
-## Current State
-Mayday has a custom hardcoded tool system in `function_registry.py`:
-- 9 functions (todo CRUD + event CRUD)
-- JSON Schema definitions sent to Ollama's function-calling API
-- Synchronous `dispatch_call()` routes `name → FUNCTION_MAP`
-- Static `TOOL_DEFINITIONS` list, sent verbatim to the LLM
+## Status — COMPLETED
 
-## Target Architecture
+All files created/modified per plan. End-to-end verified:
+- Git MCP server connects, 12 tools discovered (git_log, git_status, git_branch, etc.)
+- Tool calls succeed: `git_log({'repo_path': '.', 'max_commits': 3})` returns commit history
+- WebSocket `/ws/chat` correctly serves MCP tools alongside local tools
+- LLM (gemma4:31b-cloud) correctly chooses MCP tools and dispatches results
+
+## Fixes Applied During Testing
+1. **Playwright MCP server disabled** — npx EPERM on Windows npm cache
+2. **`asyncio.get_event_loop()` → `get_running_loop()`** in `_run_engine` (Python 3.13 compat)
+3. **MCPManager.close()** — suppressed `anyio` cancel scope RuntimeError
+4. **Connection timeout** — 15s default via `asyncio.wait_for`
+
+## Architecture
 
 ```
 Ollama (LLM)
