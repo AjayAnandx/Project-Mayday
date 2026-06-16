@@ -1,0 +1,24 @@
+appId: com.mayday.app
+productName: Mayday
+directories:
+  output: dist-electron
+files:
+  - electron/**/*
+  - backend/**/*
+  - frontend/dist/**/*
+  - config.yaml
+  - requirements.txt
+extraResources:
+  - from: backend/
+    to: backend/
+    filter:
+      - "**/*"
+win:
+  target:
+    - nsis
+  icon: null
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: null
+  uninstallerIcon: null

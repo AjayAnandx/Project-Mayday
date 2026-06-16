@@ -1,0 +1,132 @@
+import json
+import asyncio
+import logging
+from datetime import date
+
+import httpx
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from backend.core.data_store import get_store
+from backend.assistant.llm_client import LLMClient
+from backend.assistant.function_registry import dispatch_call, TOOL_DEFINITIONS
+from backend.assistant.memory.conversation_manager import ConversationManager
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+SYSTEM_PROMPT = """You are Mayday, an AI personal assistant running on the user's desktop.
+You help manage todos, calendar events, and answer questions conversationally.
+You have access to tools for creating, updating, deleting, and listing todos and events.
+Be concise, helpful, and friendly. When you use a tool, explain what you did.
+Current date: {date}"""
+
+CONNECTION_HINT = (
+    "Make sure Ollama is running locally (`ollama serve`), "
+    "or update config.yaml with your cloud endpoint and API key."
+)
+
+
+async def _send_json(ws: WebSocket, data: dict):
+    await ws.send_text(json.dumps(data))
+
+
+async def _run_engine(ws: WebSocket, user_text: str, conv: ConversationManager, llm: LLMClient):
+    system = SYSTEM_PROMPT.format(date=date.today().isoformat())
+    conv.add_message("user", user_text)
+    messages = [{"role": "system", "content": system}] + conv.get_context()
+
+    loop = asyncio.get_event_loop()
+
+    try:
+        # First LLM call (non-streaming) to get tool calls
+        def first_call(msgs):
+            resp = llm.chat(msgs, stream=False)
+            resp.raise_for_status()
+            return llm.extract_response(resp)
+
+        content, tool_calls = await loop.run_in_executor(None, first_call, messages)
+    except httpx.ConnectError:
+        await _send_json(ws, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
+        await _send_json(ws, {"type": "done"})
+        return
+    except httpx.HTTPStatusError as e:
+        await _send_json(ws, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}. Check your model and API key."})
+        await _send_json(ws, {"type": "done"})
+        return
+    except Exception as e:
+        await _send_json(ws, {"type": "error", "content": f"LLM error: {e}"})
+        await _send_json(ws, {"type": "done"})
+        return
+
+    if tool_calls:
+        for tc in tool_calls:
+            fn_name = tc["function"]["name"]
+            fn_args = tc["function"]["arguments"]
+            if isinstance(fn_args, str):
+                fn_args = json.loads(fn_args)
+            result = dispatch_call(fn_name, fn_args)
+            conv.add_message("assistant", f"[Called {fn_name}] {result}")
+            await _send_json(ws, {
+                "type": "tool_call",
+                "name": fn_name,
+                "result": result,
+            })
+
+        # Second LLM call after tool dispatch
+        messages = [{"role": "system", "content": system}] + conv.get_context()
+
+        try:
+            def second_call(msgs):
+                resp = llm.chat(msgs, stream=False)
+                resp.raise_for_status()
+                return llm.extract_response(resp)
+
+            content, _ = await loop.run_in_executor(None, second_call, messages)
+        except Exception as e:
+            logger.error(f"Second LLM call error: {e}")
+            content = None
+
+    if content:
+        conv.add_message("assistant", content)
+        # Send as a streaming simulation (single chunk then done)
+        await _send_json(ws, {"type": "token", "content": content})
+        # Also send tool_call results that might have been embedded
+        # This keeps the frontend compatible with non-streaming too
+
+    await _send_json(ws, {"type": "done"})
+
+
+@router.websocket("/ws/chat")
+async def chat_websocket(websocket: WebSocket):
+    await websocket.accept()
+    conv = ConversationManager()
+    llm = LLMClient()
+    conv.new_conversation()
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            msg = json.loads(data)
+            if msg.get("type") == "message":
+                user_text = msg.get("content", "")
+                await _run_engine(websocket, user_text, conv, llm)
+            elif msg.get("type") == "new_conversation":
+                conv.new_conversation()
+                await _send_json(websocket, {"type": "conversation_created"})
+            elif msg.get("type") == "load_conversation":
+                conv_id = msg.get("conversation_id", "")
+                if conv.load_conversation(conv_id):
+                    conv_data = get_store().get_conversation(conv_id)
+                    await _send_json(websocket, {
+                        "type": "conversation_loaded",
+                        "conversation": conv_data,
+                    })
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        try:
+            await _send_json(websocket, {"type": "error", "content": str(e)})
+        except Exception:
+            pass
