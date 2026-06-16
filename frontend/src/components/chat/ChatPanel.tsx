@@ -37,7 +37,7 @@ export function ChatPanel() {
         ))}
         {streaming && (
           <div className="flex justify-start my-1">
-            <div className="bg-surface0/50 rounded-full px-4 py-2.5">
+            <div className="bg-surface0/50 rounded-lg px-4 py-2.5">
               <div className="flex gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-green animate-bounce" style={{ animationDelay: '0ms' }} />
                 <span className="w-1.5 h-1.5 rounded-full bg-green animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -53,7 +53,7 @@ export function ChatPanel() {
         <div className="mx-auto w-full max-w-2xl">
           <div
             className={cn(
-              'relative flex w-full cursor-text items-end rounded-full transition-all duration-200 outline-none overflow-hidden',
+              'relative flex w-full cursor-text items-end rounded-xl transition-all duration-200 outline-none overflow-hidden',
               'bg-black/60 ring-1 ring-white/10',
               isFocused && 'ring-green/50 shadow-lg shadow-green/10',
             )}

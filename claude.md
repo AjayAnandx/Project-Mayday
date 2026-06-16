@@ -28,10 +28,15 @@ Desktop AI personal assistant with:
 
 ## Architecture
 - **Two-process**: FastAPI backend (uvicorn) + React frontend (Vite dev / Electron)
-- Vite proxies `/api` → `localhost:8765` and `/ws` → `ws://localhost:8765`
+- Vite proxies `/api` → `localhost:8770` and `/ws` → `ws://localhost:8770`
 - Local JSON-backed data store for todos, events, conversations
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
-- 9 function tools: `create_todo`, `update_todo`, `delete_todo`, `list_todos`, `create_event`, `update_event`, `delete_event`, `list_events`, `query_events`
+- 9 built-in function tools: `create_todo`, `update_todo`, `delete_todo`, `list_todos`, `create_event`, `update_event`, `delete_event`, `list_events`, `query_events`
+- MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`)
+- `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
+- `mcp_server_git` — 12 tools for local git operations (status, log, diff, commit, branch)
+- `github-mcp-server` — GitHub API tools (search repos, list commits, read files, repo info on any public repo)
+- Requires `GITHUB_PERSONAL_ACCESS_TOKEN` env var (stored in `config.yaml`)
 - WebSocket protocol: `token`/`tool_call`/`done`/`error` message types
 - Voice pipeline stubs: Mic → VAD → whisper → LLM → TTS → speakers (interruptible)
 - Panels auto-refresh after LLM tool calls (todos + calendar update live)
@@ -42,6 +47,8 @@ mayday/
 ├── backend/                          # Python FastAPI
 │   ├── main.py                       # FastAPI app (CORS, routers, health check)
 │   ├── requirements.txt
+│   ├── bin/
+│   │   └── github-mcp-server.exe     # GitHub MCP pre-built binary (v1.3.0)
 │   ├── api/
 │   │   ├── todos.py                  # Todo CRUD routes
 │   │   ├── events.py                 # Event CRUD routes
@@ -53,6 +60,7 @@ mayday/
 │   ├── assistant/
 │   │   ├── llm_client.py             # Ollama HTTP client (streaming, tool calling)
 │   │   ├── function_registry.py      # 9 tool definitions + dispatch
+│   │   ├── mcp_manager.py            # MCP stdio connection, tool discovery, dispatch
 │   │   └── memory/
 │   │       └── conversation_manager.py  # Context window (last 20 messages)
 │   ├── functions/
@@ -211,7 +219,12 @@ yellow:  '#eab308'
 - [x] **Color cleanup**: Removed all sky/lavender/teal references → single green accent everywhere
 - [x] **UI polish**: Pill-shaped nav, chat input, message bubbles; green gradients in headers/empty states; `bg-crust`/`bg-black/60` backgrounds; green glow on input focus
 - [x] **Removed AITextLoading**: Replaced with simple bouncing dots indicator (JS dropped 334→205 KB)
-- [x] **MCP plan**: `plan.md` written with full architecture for MCP tool integration
+- [x] **MCP integration**: `MCPManager` class with stdio transport, tool discovery, dispatch
+- [x] **Git MCP server**: `mcp_server_git` — 12 local git tools (status, log, diff, commit, branch)
+- [x] **GitHub MCP server**: `github-mcp-server` v1.3.0 — list commits, search repos, read files on any public repo
+- [x] **Tool merging**: 9 local + 12 git + 100+ GitHub tools served to LLM dynamically
+- [x] **Env support**: `config.yaml` `env:` section for passing env vars to MCP subprocesses
+- [x] **Bug fixes**: `get_event_loop` → `get_running_loop`, MCPManager close error suppression, 15s connect timeout
 - [ ] Phase 7: Settings dialog (model selection, API config, voice settings)
 
 ## How to Run
@@ -219,7 +232,7 @@ yellow:  '#eab308'
 ### Dev mode (two terminals)
 ```bash
 # Terminal 1 — Backend
-uvicorn backend.main:app --reload --port 8765
+uvicorn backend.main:app --reload --port 8770
 
 # Terminal 2 — Frontend
 cd frontend && npm run dev
@@ -237,6 +250,8 @@ npx electron .        # Launch Electron (spawns backend + loads frontend)
 ```
 
 Set `model` in `config.yaml` to any model available in your local Ollama (`ollama list`).
+
+Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MCP tools.
 
 ## Known Issues
 - Voice pipeline stubs need `pip install` of heavy deps (faster-whisper, TTS, torch) — uncomment in requirements.txt when ready
