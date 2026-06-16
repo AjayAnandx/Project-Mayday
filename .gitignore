@@ -12,3 +12,4 @@ frontend/dist/
 dist-electron/
 *.log
 project-mayday-bfea9-firebase-adminsdk-fbsvc-e11a1f60be.json
+.opencode/
