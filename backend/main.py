@@ -1,9 +1,11 @@
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from backend.api import todos, events, conversations, chat, memory
+from backend.api import todos, events, conversations, chat, memory, screenshots
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -23,6 +25,12 @@ app.include_router(events.router)
 app.include_router(conversations.router)
 app.include_router(chat.router)
 app.include_router(memory.router)
+app.include_router(screenshots.router)
+
+SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "screenshots")
+if os.path.isdir(SCREENSHOTS_DIR) or True:
+    os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
+    app.mount("/screenshots", StaticFiles(directory=SCREENSHOTS_DIR), name="screenshots")
 
 
 @app.get("/api/health")

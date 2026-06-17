@@ -9,5 +9,6 @@ export interface WsResponse {
   content?: string
   name?: string
   result?: string
+  image_url?: string
   conversation?: import('./conversation').Conversation
 }

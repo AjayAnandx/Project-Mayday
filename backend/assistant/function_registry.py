@@ -5,6 +5,7 @@ from backend.core.data_store import get_store
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
 from backend.memory.memory_tools import remember, recall, recall_entity, forget
+from backend.api.screenshots import list_screenshots, get_screenshot_info, delete_screenshot_file
 from backend.core.data_store import get_store
 
 logger = logging.getLogger(__name__)
@@ -242,6 +243,45 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_screenshots",
+            "description": "List all stored screenshots with timestamps. Use this to find past screenshots to show the user.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_screenshot",
+            "description": "Get metadata for a specific screenshot by filename. The image will be displayed in the chat.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Screenshot filename (e.g. screenshot_20260617_114042.png)"},
+                },
+                "required": ["filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_screenshot",
+            "description": "Permanently delete a screenshot file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Screenshot filename to delete"},
+                },
+                "required": ["filename"],
+            },
+        },
+    },
 ]
 
 FUNCTION_MAP = {
@@ -259,6 +299,9 @@ FUNCTION_MAP = {
     "recall_entity": recall_entity,
     "forget": forget,
     "get_conversations": get_conversations_from_store,
+    "list_screenshots": list_screenshots,
+    "get_screenshot": get_screenshot_info,
+    "delete_screenshot": delete_screenshot_file,
 }
 
 

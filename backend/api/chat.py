@@ -1,6 +1,7 @@
 import json
 import asyncio
 import logging
+import os
 from datetime import date
 
 import httpx
@@ -13,6 +14,7 @@ from backend.assistant.function_registry import dispatch_call, get_tool_definiti
 from backend.assistant.mcp_manager import MCPManager
 from backend.assistant.memory.conversation_manager import ConversationManager
 from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
+from backend.api.screenshots import get_screenshot_store
 
 logger = logging.getLogger(__name__)
 
@@ -116,11 +118,27 @@ async def _run_engine(
                         if event:
                             kg.sync_event(event)
 
-            await _send_json(ws, {
-                "type": "tool_call",
-                "name": fn_name,
-                "result": result,
-            })
+            tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
+
+            if fn_name == "take_screenshot":
+                path_start = result.find("screenshot_")
+                if path_start != -1:
+                    raw_filename = result[path_start:].split()[0].rstrip(". \n")
+                    store = get_screenshot_store()
+                    src_path = os.path.join(os.path.dirname(__file__), "..", "..", raw_filename)
+                    saved = store.add_screenshot(src_path)
+                    if saved:
+                        tool_msg["image_url"] = f"/screenshots/{saved}"
+
+            if fn_name == "get_screenshot":
+                try:
+                    data = json.loads(result)
+                    if "filename" in data:
+                        tool_msg["image_url"] = f"/screenshots/{data['filename']}"
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            await _send_json(ws, tool_msg)
 
         messages = [{"role": "system", "content": system}] + conv.get_context()
 

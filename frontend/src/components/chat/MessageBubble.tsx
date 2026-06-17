@@ -16,11 +16,22 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   if (isTool) {
     return (
       <div className="flex justify-center my-1.5">
-        <div className="bg-surface0/40 border border-surface1/50 rounded-lg px-3 py-1 text-[11px] text-subtext0 max-w-[65%] flex items-center gap-1.5">
-          <span className="text-green font-mono text-[9px] uppercase tracking-wider font-semibold">
-            {message.tool_name}
-          </span>
-          <span className="opacity-60 truncate">{message.content}</span>
+        <div className="bg-surface0/40 border border-surface1/50 rounded-lg px-3 py-1.5 text-[11px] text-subtext0 min-w-0">
+          <div className="flex items-center gap-1.5 max-w-full">
+            <span className="text-green font-mono text-[9px] uppercase tracking-wider font-semibold shrink-0">
+              {message.tool_name}
+            </span>
+            <span className="opacity-60 truncate">{message.content}</span>
+          </div>
+          {message.image_url && (
+            <div className="mt-1.5 rounded-md overflow-hidden border border-surface1/50">
+              <img
+                src={message.image_url}
+                alt="Screenshot"
+                className="max-h-64 w-full object-contain bg-black/20"
+              />
+            </div>
+          )}
         </div>
       </div>
     )

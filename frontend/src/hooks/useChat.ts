@@ -7,6 +7,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool'
   content: string
   tool_name?: string
+  image_url?: string
 }
 
 let msgId = 0
@@ -53,6 +54,7 @@ export function useChat() {
               role: 'tool',
               content: data.result || '',
               tool_name: data.name,
+              image_url: data.image_url,
             })
             break
           case 'done':

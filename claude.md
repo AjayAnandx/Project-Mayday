@@ -71,10 +71,6 @@ mayday/
 │   │   ├── __init__.py
 │   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
 │   │   └── memory_tools.py           # 4 LLM tools: remember, recall, recall_entity, forget
-│   ├── memory/
-│   │   ├── __init__.py
-│   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
-│   │   └── memory_tools.py           # 4 LLM tools: remember, recall, recall_entity, forget
 │   ├── assistant/
 │   │   ├── llm_client.py             # Ollama HTTP client (streaming, tool calling)
 │   │   ├── function_registry.py      # 13 tool definitions + dispatch (9 local + 4 memory)
@@ -151,19 +147,21 @@ mayday/
 ├── conversations/                   # Per-day conversation files
 │   ├── index.json                   # Fast lookup: id → date mapping
 │   └── YYYY-MM-DD.json              # All conversations from that day
+├── screenshots/                     # Screenshot images + index.json
 ├── plan.md                          # MCP integration plan
 ├── main.py                          # Original PyQt6 entry (kept as reference)
 ├── ui/                              # Original PyQt6 widgets (kept as reference)
 ├── data_store.py                    # Original data store (kept as reference)
+├── screenshots/                      # Screenshot images + index.json
 ├── config.yaml                      # Shared config (Ollama, voice, server)
 ├── package.json                     # Root scripts (dev runs backend + frontend)
 ├── requirements.txt                 # Python deps
 └── CLAUDE.md                        # This file
 ```
 
-## API Endpoints (18 total)
+## API Endpoints (22 total)
 
-### REST (22 total)
+### REST (21 total)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Health check |
@@ -175,14 +173,13 @@ mayday/
 | `POST` | `/api/events` | Create event |
 | `PUT` | `/api/events/:id` | Update event |
 | `DELETE` | `/api/events/:id` | Delete event |
-| `GET` | `/api/conversations` | List conversations |
-| `POST` | `/api/conversations` | Create conversation |
-| `GET` | `/api/conversations/:id` | Get with messages |
-| `DELETE` | `/api/conversations/:id` | Delete |
 | `GET` | `/api/conversations` | List conversations `?date=YYYY-MM-DD` |
 | `POST` | `/api/conversations` | Create conversation |
 | `GET` | `/api/conversations/:id` | Get with messages |
 | `DELETE` | `/api/conversations/:id` | Delete |
+| `GET` | `/api/screenshots` | List screenshot metadata |
+| `GET` | `/screenshots/{filename}` | Serve screenshot image file |
+| `DELETE` | `/api/screenshots/{filename}` | Delete screenshot + index entry |
 | `GET` | `/api/memory/graph` | Full knowledge graph |
 | `GET` | `/api/memory/graph/search?q=` | Search graph nodes |
 | `GET` | `/api/memory/graph/node/:id` | Node + neighborhood |
@@ -264,6 +261,8 @@ yellow:  '#eab308'
 - [x] **Markdown rendering**: Raw LLM plain-text responses now render as styled Markdown with syntax-highlighted code blocks, tables, lists, links (system browser), and green-themed typography
 - [x] **Knowledge Graph Brain**: Persistent JSON-backed graph memory with typed nodes/edges, 4 LLM memory tools, auto-sync from todo/event CRUD, auto-query context injection, 4th "Brain" tab with Cytoscape.js visualization
 - [x] **Per-day conversation files**: Conversations migrated from monolithic `data.json` to per-day files under `conversations/` with `index.json` for fast lookup, `?date=` filter on API, `get_conversations` LLM tool
+- [x] **Selenium MCP server**: Replaced disabled Playwright with `mcp-server-selenium` (18 browser tools). Patched `normal_chrome.py` for Windows Chrome path. Verified navigate + screenshot + page description works.
+- [ ] Screenshot management system: ScreenshotStore (index.json CRUD), REST list/delete, 3 LLM tools (`list_screenshots`, `get_screenshot`, `delete_screenshot`), image rendering in chat tool bubbles via `image_url` field
 - [ ] Phase 7: Settings dialog (model selection, API config, voice settings)
 
 ## How to Run
@@ -299,6 +298,7 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - Electron dev mode requires FastAPI running separately; production mode serves built frontend from FastAPI
 - MCP playwright server disabled (npx EPERM on Windows npm cache). Enable in `config.yaml` when running on Linux/macOS or after fixing npm permissions
 - MCP `mcp_server_git` tools require `repo_path` — LLM may need explicit guidance to pass the correct path
+- MCP `mcp_server_git` tools require `repo_path` — LLM may need explicit guidance to pass the correct path
 - LLM model `gemma4:31b-cloud` is cloud-proxied — may have higher latency than local models. Set to any `ollama list` model for local inference
 - Chat engine uses non-streaming LLM calls despite streaming infrastructure existing in `LLMClient.stream_tokens()`
 
@@ -333,6 +333,7 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - `backend/assistant/function_registry.py`: 9 tool definitions + dispatch
 - `config.yaml`: Shared config (Ollama, voice, server)
 - `plan.md`: MCP integration architecture and implementation plan
+- `backend/api/screenshots.py`: ScreenshotStore + REST list/delete endpoints + 3 LLM tools
 - `backend/core/data_store.py`: JSON persistence (todos, events) + per-day conversation file storage
 - `backend/memory/knowledge_graph.py`: KnowledgeGraph singleton (JSON persistence, thread-safe)
 - `backend/memory/memory_tools.py`: 4 LLM functions for memory (remember, recall, recall_entity, forget)

@@ -452,3 +452,65 @@ mcp:
 - `frontend/package.json`
 - `CLAUDE.md`
 - `plan.md` (this file)
+
+---
+
+## Screenshot Management System — Planned
+
+### Goal
+Persistent screenshot storage with metadata index, REST API for listing/deleting, 3 LLM tools (`list_screenshots`, `get_screenshot`, `delete_screenshot`), and automatic image rendering in chat tool-call bubbles.
+
+### Status — PLANNED (not implemented)
+
+### Architecture
+
+```
+take_screenshot → selenium saves to project root
+  → chat.py copies to screenshots/ + writes index.json
+  → WS: {type:"tool_call", image_url:"/screenshots/file.png"}
+  → frontend renders <img> in tool bubble
+```
+
+### New File
+
+| File | Purpose |
+|------|---------|
+| `backend/api/screenshots.py` | `ScreenshotStore` (thread-safe, index.json CRUD) + REST router + 3 LLM helper functions |
+
+### Modified Files
+
+| File | Changes |
+|------|---------|
+| `backend/main.py` | Import `StaticFiles`, mount `/screenshots`, include screenshots router |
+| `backend/api/chat.py` | After `take_screenshot` → copy file, update index, add `image_url` to WS message |
+| `backend/assistant/function_registry.py` | Add 3 screenshot tools to `LOCAL_TOOL_DEFINITIONS` + `FUNCTION_MAP` |
+| `frontend/src/types/chat.ts` | Add `image_url?: string` to `WsResponse` |
+| `frontend/src/hooks/useChat.ts` | Add `image_url` to `ChatMessage`, pass through on `tool_call` |
+| `frontend/src/components/chat/MessageBubble.tsx` | Render `<img>` when `image_url` present |
+| `frontend/vite.config.ts` | Add `/screenshots` proxy → backend |
+| `.gitignore` | Add `screenshots/*.png` |
+
+### ScreenshotStore API
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `add_screenshot(src_path)` | `filename` | Copy to `screenshots/`, write index entry |
+| `list_screenshots()` | `list[dict]` | Index entries newest first |
+| `get_screenshot(filename)` | `dict\|None` | Single entry from index |
+| `delete_screenshot(filename)` | `bool` | Remove file + index entry |
+
+### REST Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/screenshots/{filename}` | Serve image (StaticFiles) |
+| `GET` | `/api/screenshots` | List all screenshot metadata |
+| `DELETE` | `/api/screenshots/{filename}` | Delete screenshot + index entry |
+
+### LLM Tools (3)
+
+| Tool | Description |
+|------|-------------|
+| `list_screenshots()` | List all stored screenshots with timestamps |
+| `get_screenshot(filename)` | Get metadata; image auto-displays in chat via `image_url` |
+| `delete_screenshot(filename)` | Permanently delete a screenshot |
