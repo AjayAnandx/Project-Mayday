@@ -6,7 +6,6 @@ from backend.functions.todo_functions import create_todo, update_todo, delete_to
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
 from backend.memory.memory_tools import remember, recall, recall_entity, forget, delete_entity
 from backend.api.screenshots import list_screenshots, get_screenshot_info, delete_screenshot_file
-from backend.core.data_store import get_store
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,6 @@ import { TodoItem } from './TodoItem'
 import { TodoDialog } from './TodoDialog'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
-import { Checkbox } from '../ui/Checkbox'
 import type { Todo, TodoCreate, TodoUpdate } from '../../types/todo'
 
 export function TodoPanel() {

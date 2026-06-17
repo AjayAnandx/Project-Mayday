@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from backend.memory.knowledge_graph import get_graph, extract_keywords
+from backend.memory.knowledge_graph import get_graph
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 

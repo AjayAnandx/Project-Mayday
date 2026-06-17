@@ -42,18 +42,9 @@ export function useGraph() {
     }
   }, [])
 
-  const deleteNode = useCallback(async (nodeId: string) => {
-    try {
-      await api.deleteNode(nodeId)
-      await fetchGraph()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete node')
-    }
-  }, [fetchGraph])
-
   useEffect(() => {
     fetchGraph()
   }, [fetchGraph])
 
-  return { graphData, loading, error, fetchGraph, searchGraph, fetchNode, deleteNode }
+  return { graphData, loading, error, fetchGraph, searchGraph, fetchNode }
 }

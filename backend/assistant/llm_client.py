@@ -1,21 +1,13 @@
 import json
 import httpx
-import yaml
-from pathlib import Path
-from contextlib import contextmanager
 
+from backend.core.config import load_config
 from backend.assistant.function_registry import get_tool_definitions
-
-
-def _load_config():
-    config_path = Path(__file__).resolve().parent.parent.parent / "config.yaml"
-    with open(config_path) as f:
-        return yaml.safe_load(f)
 
 
 class LLMClient:
     def __init__(self):
-        cfg = _load_config().get("ollama", {})
+        cfg = load_config().get("ollama", {})
         self.api_key = cfg.get("api_key", "")
         self.model = cfg.get("model", "gemma4:31b-cloud")
         self.endpoint = cfg.get("endpoint", "http://localhost:11434/v1/chat/completions")
