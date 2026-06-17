@@ -34,11 +34,14 @@ def extract_keywords(text: str) -> list[str]:
 class KnowledgeGraph:
     def __init__(self):
         cfg = load_config()
-        path = cfg.get("memory", {}).get("graph_path", "memory_graph.json")
-        self._path = Path(__file__).resolve().parent.parent.parent / path
-        self._lock = threading.Lock()
+        path = Path(cfg.get("memory", {}).get("graph_path", "memory_graph.json"))
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent.parent.parent / path
+        self._path = path
+        self._lock = threading.RLock()
         self._nodes: dict[str, dict] = {}
         self._edges: list[dict] = []
+        self._tombstones: dict[str, dict] = {}
         self._load()
 
     def _load(self):
@@ -47,6 +50,7 @@ class KnowledgeGraph:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
                 self._nodes = {n["id"]: n for n in data.get("nodes", [])}
                 self._edges = data.get("edges", [])
+                self._tombstones = data.get("tombstones", {})
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -54,6 +58,7 @@ class KnowledgeGraph:
         data = {
             "nodes": list(self._nodes.values()),
             "edges": self._edges,
+            "tombstones": self._tombstones,
         }
         self._path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -63,7 +68,7 @@ class KnowledgeGraph:
             self._nodes[node_id] = {
                 "id": node_id,
                 "type": type,
-                "label": label,
+                "label": label.strip(),
                 "properties": properties or {},
             }
             self._save()
@@ -71,6 +76,22 @@ class KnowledgeGraph:
 
     def add_edge(self, source: str, target: str, relation: str, properties: dict | None = None) -> str:
         with self._lock:
+            edge_id = uuid.uuid4().hex[:12]
+            self._edges.append({
+                "id": edge_id,
+                "source": source,
+                "target": target,
+                "relation": relation,
+                "properties": properties or {},
+            })
+            self._save()
+            return edge_id
+
+    def add_edge_if_missing(self, source: str, target: str, relation: str, properties: dict | None = None) -> str | None:
+        with self._lock:
+            for e in self._edges:
+                if e["source"] == source and e["target"] == target and e["relation"] == relation:
+                    return None
             edge_id = uuid.uuid4().hex[:12]
             self._edges.append({
                 "id": edge_id,
@@ -126,6 +147,16 @@ class KnowledgeGraph:
                 "nodes": list(self._nodes.values()),
                 "edges": list(self._edges),
             }
+
+    def get_clean_graph(self) -> dict:
+        with self._lock:
+            junk_ids = set()
+            for nid, n in self._nodes.items():
+                if n.get("properties", {}).get("search_result") == "true":
+                    junk_ids.add(nid)
+            nodes = [n for n in self._nodes.values() if n["id"] not in junk_ids]
+            edges = [e for e in self._edges if e["source"] not in junk_ids and e["target"] not in junk_ids]
+            return {"nodes": nodes, "edges": edges}
 
     def remove_node(self, node_id: str) -> bool:
         with self._lock:
@@ -285,6 +316,49 @@ class KnowledgeGraph:
             to_remove = [nid for nid, n in self._nodes.items() if n["type"] == "event" and n["properties"].get("event_id") == event_id]
             for nid in to_remove:
                 self.remove_node(nid)
+
+    def delete_conversation_node(self, conv_id: str):
+        with self._lock:
+            to_remove = [nid for nid, n in self._nodes.items() if n["type"] == "conversation" and n["properties"].get("conv_id") == conv_id]
+            for nid in to_remove:
+                self.remove_node(nid)
+
+    def add_tombstone(self, name: str):
+        with self._lock:
+            key = name.strip().lower()
+            self._tombstones[key] = {
+                "original_name": name,
+                "deleted_on": __import__("datetime").date.today().isoformat(),
+            }
+            self._save()
+
+    def is_deleted(self, name: str) -> dict | None:
+        with self._lock:
+            return self._tombstones.get(name.strip().lower())
+
+    def repair_graph(self) -> dict:
+        with self._lock:
+            report = {"junk_removed": 0, "projects_removed": [], "errors": []}
+            # Remove concept nodes with search_result=true
+            to_remove = set()
+            for nid, n in self._nodes.items():
+                if n["type"] == "concept" and n.get("properties", {}).get("search_result") == "true":
+                    to_remove.add(nid)
+                    report["junk_removed"] += 1
+            # Remove known stale project nodes
+            project_labels = ["project:AGI Personal Assistant", "project:Personal Development"]
+            for nid, n in self._nodes.items():
+                if n["type"] == "project" and n["label"] in project_labels:
+                    to_remove.add(nid)
+                    report["projects_removed"].append(n["label"])
+            # Remove and tombstone
+            for nid in to_remove:
+                node = self._nodes.get(nid)
+                if node and node["type"] == "project":
+                    self.add_tombstone(node["label"])
+                self.remove_node(nid)
+            report["total_removed"] = len(to_remove)
+            return report
 
 
 _graph: KnowledgeGraph | None = None

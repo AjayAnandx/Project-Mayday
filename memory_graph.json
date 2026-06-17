@@ -61,22 +61,6 @@
       "properties": {}
     },
     {
-      "id": "88eb925ac1c2",
-      "type": "concept",
-      "label": "Alex",
-      "properties": {
-        "search_result": "true"
-      }
-    },
-    {
-      "id": "a22726ec5677",
-      "type": "concept",
-      "label": "Alex",
-      "properties": {
-        "search_result": "true"
-      }
-    },
-    {
       "id": "5320c5abeee8",
       "type": "event",
       "label": "Meeting",
@@ -86,14 +70,6 @@
         "start_time": "2026-06-30T09:00:00",
         "end_time": "2026-06-30T10:00:00",
         "all_day": false
-      }
-    },
-    {
-      "id": "12de4103ee6f",
-      "type": "concept",
-      "label": "groceries",
-      "properties": {
-        "search_result": "true"
       }
     },
     {
@@ -181,14 +157,6 @@
       }
     },
     {
-      "id": "f5944567ad0d",
-      "type": "project",
-      "label": "project:AGI Personal Assistant",
-      "properties": {
-        "context": ""
-      }
-    },
-    {
       "id": "d3663ac83128",
       "type": "concept",
       "label": "Define core architecture and feature set",
@@ -202,14 +170,6 @@
         "conv_id": "547106134bb5",
         "title": "hi , i need to create a project of AGI version of personal a",
         "message_count": 5
-      }
-    },
-    {
-      "id": "30ef9cb96c48",
-      "type": "concept",
-      "label": "project",
-      "properties": {
-        "search_result": "true"
       }
     },
     {
@@ -229,15 +189,7 @@
       "properties": {
         "conv_id": "dc1a6189c3af",
         "title": "get me the info of agi project",
-        "message_count": 29
-      }
-    },
-    {
-      "id": "08b930f520c8",
-      "type": "concept",
-      "label": "project",
-      "properties": {
-        "search_result": "true"
+        "message_count": 46
       }
     },
     {
@@ -265,18 +217,244 @@
       "properties": {}
     },
     {
-      "id": "44a49c998d38",
-      "type": "project",
-      "label": "project:Personal Development",
+      "id": "10c2c193757a",
+      "type": "concept",
+      "label": "Define core goals and focus areas (e.g., health, skill acquisition, mindset)",
+      "properties": {}
+    },
+    {
+      "id": "bf0302fe19f3",
+      "type": "personality",
+      "label": "Mayday",
       "properties": {
         "context": ""
       }
     },
     {
-      "id": "10c2c193757a",
+      "id": "095b92a0831a",
       "type": "concept",
-      "label": "Define core goals and focus areas (e.g., health, skill acquisition, mindset)",
+      "label": "More professional tone; less casual, more polished and formal.",
       "properties": {}
+    },
+    {
+      "id": "7f2c112607ed",
+      "type": "conversation",
+      "label": "e59c8c8f45fd",
+      "properties": {
+        "conv_id": "e59c8c8f45fd",
+        "title": "can tell me what happend to the grocerisis todo",
+        "message_count": 9
+      }
+    },
+    {
+      "id": "94aa209ff4bb",
+      "type": "conversation",
+      "label": "dc703e4ed6aa",
+      "properties": {
+        "conv_id": "dc703e4ed6aa",
+        "title": "list od project going",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "4ad600aca21f",
+      "type": "conversation",
+      "label": "14d8a5bc1eb2",
+      "properties": {
+        "conv_id": "14d8a5bc1eb2",
+        "title": "what are project we are working on",
+        "message_count": 19
+      }
+    },
+    {
+      "id": "54f58d3da915",
+      "type": "conversation",
+      "label": "20adcbd7c5b5",
+      "properties": {
+        "conv_id": "20adcbd7c5b5",
+        "title": "list me the projest working on",
+        "message_count": 13
+      }
+    },
+    {
+      "id": "f69a55c3e548",
+      "type": "conversation",
+      "label": "8cedfd83f25e",
+      "properties": {
+        "conv_id": "8cedfd83f25e",
+        "title": "what are the project we are working on",
+        "message_count": 17
+      }
+    },
+    {
+      "id": "81159726802d",
+      "type": "conversation",
+      "label": "0e3df27ff7b9",
+      "properties": {
+        "conv_id": "0e3df27ff7b9",
+        "title": "i have a testing website todo before",
+        "message_count": 16
+      }
+    },
+    {
+      "id": "7a7e8bac7a47",
+      "type": "conversation",
+      "label": "b509ad715a36",
+      "properties": {
+        "conv_id": "b509ad715a36",
+        "title": "list of project i am working on",
+        "message_count": 27
+      }
+    },
+    {
+      "id": "75eab07f13a2",
+      "type": "concept",
+      "label": "User explicitly requested the deletion of 'AGI Personal Assistant' and 'Personal Development' projects. All associated project nodes have been cleared.",
+      "properties": {}
+    },
+    {
+      "id": "ee12d28070d2",
+      "type": "conversation",
+      "label": "c465f5e1f830",
+      "properties": {
+        "conv_id": "c465f5e1f830",
+        "title": "what was the project i was working",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "c998abfdfc5e",
+      "type": "conversation",
+      "label": "3105bf51a5bb",
+      "properties": {
+        "conv_id": "3105bf51a5bb",
+        "title": "forget the 2 project",
+        "message_count": 11
+      }
+    },
+    {
+      "id": "58591a74af55",
+      "type": "conversation",
+      "label": "3dfef5f03dd3",
+      "properties": {
+        "conv_id": "3dfef5f03dd3",
+        "title": "what are project iam working on",
+        "message_count": 8
+      }
+    },
+    {
+      "id": "4914112cbee5",
+      "type": "conversation",
+      "label": "ca6cb46490f5",
+      "properties": {
+        "conv_id": "ca6cb46490f5",
+        "title": "what are the project we had working on",
+        "message_count": 14
+      }
+    },
+    {
+      "id": "b4f4e7b42283",
+      "type": "conversation",
+      "label": "b0a2ef9d9b66",
+      "properties": {
+        "conv_id": "b0a2ef9d9b66",
+        "title": "forget AGI Personal Assistant",
+        "message_count": 8
+      }
+    },
+    {
+      "id": "b3114e891e47",
+      "type": "conversation",
+      "label": "1cf6d690e959",
+      "properties": {
+        "conv_id": "1cf6d690e959",
+        "title": "what are the current project going on",
+        "message_count": 7
+      }
+    },
+    {
+      "id": "9edb807001bc",
+      "type": "conversation",
+      "label": "92016ad4963e",
+      "properties": {
+        "conv_id": "92016ad4963e",
+        "title": "what are the we are working on",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "214274690fb8",
+      "type": "conversation",
+      "label": "8761fb8ab5a5",
+      "properties": {
+        "conv_id": "8761fb8ab5a5",
+        "title": "what are the project we are owrking on",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "63b367d806f7",
+      "type": "conversation",
+      "label": "216dbef14e5b",
+      "properties": {
+        "conv_id": "216dbef14e5b",
+        "title": "what are the project we are owrking on",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "fa553cc6445a",
+      "type": "conversation",
+      "label": "4dc3a68a8753",
+      "properties": {
+        "conv_id": "4dc3a68a8753",
+        "title": "is there any project going",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "df02d0a2b31f",
+      "type": "conversation",
+      "label": "3adc8290a1be",
+      "properties": {
+        "conv_id": "3adc8290a1be",
+        "title": "is there any proejct going",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "b66a936aa4fd",
+      "type": "conversation",
+      "label": "d1d9a6f08ae1",
+      "properties": {
+        "conv_id": "d1d9a6f08ae1",
+        "title": "is there any project going",
+        "message_count": 11
+      }
+    },
+    {
+      "id": "7a7750616d52",
+      "type": "project",
+      "label": "project:AGI Project",
+      "properties": {
+        "context": ""
+      }
+    },
+    {
+      "id": "d9419426fd00",
+      "type": "concept",
+      "label": "current_conv_id",
+      "properties": {}
+    },
+    {
+      "id": "34d4cc491549",
+      "type": "conversation",
+      "label": "b82b2a67fc44",
+      "properties": {
+        "conv_id": "b82b2a67fc44",
+        "title": "is there any project i had deleted recent",
+        "message_count": 6
+      }
     }
   ],
   "edges": [
@@ -302,74 +480,28 @@
       "properties": {}
     },
     {
-      "id": "7f5a06ac557f",
-      "source": "f5944567ad0d",
-      "target": "bbc7a7804491",
-      "relation": "status",
+      "id": "ea2ae0473a08",
+      "source": "bf0302fe19f3",
+      "target": "095b92a0831a",
+      "relation": "style_feedback",
       "properties": {}
     },
     {
-      "id": "56239ec2fc1a",
-      "source": "f5944567ad0d",
-      "target": "dea983737372",
-      "relation": "has_conversation",
-      "properties": {}
-    },
-    {
-      "id": "6695d7e22725",
-      "source": "f5944567ad0d",
-      "target": "d3663ac83128",
-      "relation": "next_task",
-      "properties": {}
-    },
-    {
-      "id": "efe24b94bffa",
-      "source": "f5944567ad0d",
-      "target": "7bcebcaf2315",
-      "relation": "status",
-      "properties": {}
-    },
-    {
-      "id": "2dc19b418e8d",
-      "source": "f5944567ad0d",
-      "target": "3098e0ecbd17",
-      "relation": "core_architecture",
-      "properties": {}
-    },
-    {
-      "id": "f0a3d0a58161",
-      "source": "f5944567ad0d",
-      "target": "bd55984b6f99",
-      "relation": "next_task",
-      "properties": {}
-    },
-    {
-      "id": "c312020aaf28",
-      "source": "f5944567ad0d",
-      "target": "a0592e5be575",
-      "relation": "last_task",
-      "properties": {}
-    },
-    {
-      "id": "c65cf16d8c24",
-      "source": "44a49c998d38",
-      "target": "bbc7a7804491",
-      "relation": "status",
-      "properties": {}
-    },
-    {
-      "id": "e89803c1358b",
-      "source": "44a49c998d38",
-      "target": "38a758a17833",
-      "relation": "has_conversation",
-      "properties": {}
-    },
-    {
-      "id": "d0d1641e6fba",
-      "source": "44a49c998d38",
-      "target": "10c2c193757a",
-      "relation": "next_task",
+      "id": "81232aa68d6c",
+      "source": "bf0302fe19f3",
+      "target": "75eab07f13a2",
+      "relation": "status_update",
       "properties": {}
     }
-  ]
+  ],
+  "tombstones": {
+    "project:agi personal assistant": {
+      "original_name": "project:AGI Personal Assistant",
+      "deleted_on": "2026-06-17"
+    },
+    "project:personal development": {
+      "original_name": "project:Personal Development",
+      "deleted_on": "2026-06-17"
+    }
+  }
 }

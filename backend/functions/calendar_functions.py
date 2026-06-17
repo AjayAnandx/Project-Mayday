@@ -12,7 +12,7 @@ def update_event(event_id: str, **kwargs) -> str:
     store = get_store()
     event = store.update_event(event_id, **kwargs)
     if event:
-        return f"Updated event: {event['title']}"
+        return f"Updated event: {event['title']} (id: {event['id']})"
     return f"Event {event_id} not found"
 
 

@@ -12,7 +12,7 @@ def update_todo(todo_id: str, **kwargs) -> str:
     store = get_store()
     todo = store.update_todo(todo_id, **kwargs)
     if todo:
-        return f"Updated todo: {todo['title']}"
+        return f"Updated todo: {todo['title']} (id: {todo['id']})"
     return f"Todo {todo_id} not found"
 
 

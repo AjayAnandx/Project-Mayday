@@ -19,8 +19,10 @@ def _today_str() -> str:
 class DataStore:
     def __init__(self):
         cfg = load_config()
-        path = cfg.get("data", {}).get("storage_path", "data.json")
-        self._path = Path(__file__).resolve().parent.parent.parent / path
+        path = Path(cfg.get("data", {}).get("storage_path", "data.json"))
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent.parent.parent / path
+        self._path = path
         self._conv_dir = Path(__file__).resolve().parent.parent.parent / "conversations"
         self._lock = threading.Lock()
         self._todos: list[dict] = []

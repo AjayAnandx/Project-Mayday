@@ -41,22 +41,32 @@ Rules: {rules}
 - Before responding, recall("style_feedback") to check for recent feedback
 - Adapt your tone based on stored feedback
 - Todos and events are auto-synced to the knowledge graph when created/updated/deleted
-- Before creating a todo, recall similar ones to avoid duplicates"""
+- Before creating a new todo, event, or entity, call recall() or recall_entity() first to check for existing data — this prevents duplicates
+- Conversations are also synced to the knowledge graph as nodes — use recall_entity() on a conversation ID to find linked projects
+### Forgetting / Deleting
+- If the user asks to forget, delete, or remove a project, topic, or entity, call forget(entity="<name>") with ONLY the entity name (no relation/value needed). This will delete the entire entity and all its connections.
+- Do NOT guess relation/value for forget(). Just pass the entity name alone.
+- Deleted entities are permanently blocked from being recreated. If remember() returns "was previously deleted", tell the user that entity was deleted before and cannot be recreated.
+- If forget(entity="<name>") returns "No entity found", the entity might be stored with a "project:" or "tag:" prefix. Try forget(entity="project:<name>") or search with recall("<name>") first to find the exact label.
+### Querying the Knowledge Graph
+- When listing projects, call recall("project:") (with colon) - this finds only project-prefixed nodes and returns clean results.
+- Do NOT use recall("project") (without colon) - it finds many irrelevant nodes.
+- recall_entity("project:<name>") is best for getting a single project's full context.
+- Only use recall("") with a specific query, not to get the entire graph."""
 
 PROJECT_INSTRUCTIONS = """
 ### Project Tracking
-- When starting or resuming a project, link this conversation by calling:
-    remember(entity="project:<name>", relation="has_conversation", value="<THE_ACTUAL_CONVERSATION_ID>", node_type="project")
-  Replace <THE_ACTUAL_CONVERSATION_ID> with the real conversation ID string from the system context - do NOT use a placeholder.
+- When starting a NEW project, link it by calling:
     remember(entity="project:<name>", relation="status", value="started", node_type="project")
-- On each new session, also link the new conversation ID under the same project using remember() with has_conversation.
+- When RESUMING an existing project:
+    1. recall_entity("project:<name>") to find the project and ALL linked conversations
+    2. If the entity does not exist (returns "No entity found"), it was previously deleted — tell the user: "The project '<name>' was deleted previously."
+    3. Otherwise, call get_conversation_history(<conv_id>) for EACH linked conversation by ID
+    4. Present a full summary: what was done, what was next, what to do now
 - Update progress:
     remember(entity="project:<name>", relation="last_task", value="<what_was_done>", node_type="project")
     remember(entity="project:<name>", relation="next_task", value="<what_is_next>", node_type="project")
-- When user says "continue <project>":
-    1. recall_entity("project:<name>") to find the project and ALL linked conversations
-    2. Call get_conversation_history(<conv_id>) for EACH linked conversation by ID
-    3. Present a full summary: what was done, what was next, what to do now"""
+- To list all active projects, call recall("project:") (with colon) — this finds all project-prefixed nodes in the knowledge graph."""
 
 CONNECTION_HINT = (
     "Make sure Ollama is running locally (`ollama serve`), "
@@ -91,9 +101,26 @@ async def _run_engine(
     if kg:
         keywords = extract_keywords(user_text)
         if keywords:
-            memories = kg.search(" ".join(keywords))
+            query = " ".join(keywords)
+            memories = [m for m in kg.search(query) if m.get("properties", {}).get("search_result") != "true"]
+            memory_lines = ""
             if memories:
-                memory_lines = "\n".join(f"- [{m['type']}] {m['label']}" for m in memories[:8])
+                memory_lines += "\n".join(f"- [{m['type']}] {m['label']}" for m in memories[:8])
+            from backend.core.data_store import get_store as get_data_store
+            store = get_data_store()
+            q = query.lower()
+            store_matches = []
+            for t in store.list_todos(include_completed=True):
+                if q in t["title"].lower() or q in t.get("description", "").lower():
+                    store_matches.append(f"- [todo] {t['title']}")
+            for e in store.list_events():
+                if q in e["title"].lower() or q in e.get("description", "").lower():
+                    store_matches.append(f"- [event] {e['title']}")
+            if store_matches:
+                if memory_lines:
+                    memory_lines += "\n"
+                memory_lines += "\n".join(store_matches[:4])
+            if memory_lines:
                 system += f"\n\n### Relevant memories:\n{memory_lines}\n###"
 
     conv.add_message("user", user_text)
@@ -138,6 +165,13 @@ async def _run_engine(
                 store = get_data_store()
                 if fn_name == "delete_todo":
                     kg.delete_todo_node(fn_args.get("todo_id", ""))
+                elif fn_name == "create_todo":
+                    import re
+                    m = re.search(r'\(id: ([a-f0-9]+)\)', result)
+                    if m:
+                        todo = store.get_todo(m.group(1))
+                        if todo:
+                            kg.sync_todo(todo)
                 else:
                     todo_id = fn_args.get("todo_id", "")
                     if todo_id:
@@ -150,6 +184,13 @@ async def _run_engine(
                 store = get_data_store()
                 if fn_name == "delete_event":
                     kg.delete_event_node(fn_args.get("event_id", ""))
+                elif fn_name == "create_event":
+                    import re
+                    m = re.search(r'\(id: ([a-f0-9]+)\)', result)
+                    if m:
+                        event = store.get_event(m.group(1))
+                        if event:
+                            kg.sync_event(event)
                 else:
                     event_id = fn_args.get("event_id", "")
                     if event_id:

@@ -4,7 +4,7 @@ import logging
 from backend.core.data_store import get_store
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
-from backend.memory.memory_tools import remember, recall, recall_entity, forget
+from backend.memory.memory_tools import remember, recall, recall_entity, forget, delete_entity
 from backend.api.screenshots import list_screenshots, get_screenshot_info, delete_screenshot_file
 from backend.core.data_store import get_store
 
@@ -234,15 +234,29 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "forget",
-            "description": "Remove a specific memory fact",
+            "description": "Remove a memory (entity, relationship, or entire entity). Pass only 'entity' to remove the entire entity and all its connections. Pass entity+relation+value to remove a specific relationship edge. If you are unsure of the relation/value, pass only entity — it will remove everything.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "entity": {"type": "string", "description": "The subject entity"},
-                    "relation": {"type": "string", "description": "Relationship type"},
-                    "value": {"type": "string", "description": "The object value or entity"},
+                    "entity": {"type": "string", "description": "The subject entity to forget or remove"},
+                    "relation": {"type": "string", "description": "Relationship type (optional — omit to remove entire entity)"},
+                    "value": {"type": "string", "description": "The object value or entity (optional — omit to remove entire entity)"},
                 },
-                "required": ["entity", "relation", "value"],
+                "required": ["entity"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_entity",
+            "description": "Permanently delete an entity and all its connections from long-term memory. Use when the user wants to remove a project, concept, or any memory node entirely.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Exact name of the entity to delete"},
+                },
+                "required": ["name"],
             },
         },
     },
@@ -336,6 +350,7 @@ FUNCTION_MAP = {
     "recall": recall,
     "recall_entity": recall_entity,
     "forget": forget,
+    "delete_entity": delete_entity,
     "get_conversations": get_conversations_from_store,
     "get_conversation_history": get_conversation_history_from_store,
     "list_screenshots": list_screenshots,
