@@ -17,9 +17,9 @@ class MessageCreate(BaseModel):
 
 
 @router.get("")
-def list_conversations():
+def list_conversations(date: str = ""):
     store = get_store()
-    return store.list_conversations()
+    return store.list_conversations(date=date or None)
 
 
 @router.post("", status_code=201)

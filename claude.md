@@ -16,13 +16,13 @@ Desktop AI personal assistant with:
 | Styling | Tailwind CSS (black + green custom palette) |
 | Desktop | Electron (BrowserWindow + FastAPI subprocess) |
 | Backend | FastAPI + uvicorn |
-| Data | Local JSON file (`data.json`) |
+| Data | Todos/events in `data.json`; conversations in per-day files under `conversations/` |
 | Chat streaming | WebSocket (`/ws/chat` — token-by-token) |
 | LLM | Ollama local — `gemma4:31b-cloud` |
 | STT | Web Speech API `SpeechRecognition` (frontend) / faster-whisper stub (backend) |
 | TTS | Web Speech API `SpeechSynthesis` (frontend) / Coqui stub (backend) |
 | VAD | Silero VAD — load-on-demand stub |
-| Conv memory | Stored in local `data.json` (last 20 messages) |
+| Conv memory | Per-day files in `conversations/YYYY-MM-DD.json` + `index.json` for fast lookup |
 | Icons | `lucide-react` |
 | Animations | `motion` (framer-motion) |
 | Markdown render | `react-markdown` + `remark-gfm` + `rehype-highlight` |
@@ -30,7 +30,7 @@ Desktop AI personal assistant with:
 
 ## Architecture
 - **Two-process**: FastAPI backend (uvicorn) + React frontend (Vite dev / Electron)
-- Vite proxies `/api` → `localhost:8770` and `/ws` → `ws://localhost:8770`
+- Vite proxies `/api` → `localhost:8771` and `/ws` → `ws://localhost:8771`
 - Local JSON-backed data store for todos, events, conversations
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
 - 9 built-in function tools: `create_todo`, `update_todo`, `delete_todo`, `list_todos`, `create_event`, `update_event`, `delete_event`, `list_events`, `query_events`
@@ -46,7 +46,10 @@ Desktop AI personal assistant with:
 - Memory tools: `remember`, `recall`, `recall_entity`, `forget` — available to LLM alongside built-in tools
 - Auto-sync: todo/event CRUD → graph nodes; conversation CRUD → conversation nodes
 - Auto-query: LLM context injection of relevant memories before each response
-- 4 tools for LLM: `remember` (store fact), `recall` (search), `recall_entity` (entity detail), `forget` (remove fact)`
+- 4 tools for LLM: `remember` (store fact), `recall` (search), `recall_entity` (entity detail), `forget` (remove fact)
+- Conversations stored as per-day files (`conversations/2026-06-17.json`) with `index.json` for fast listing
+- `get_conversations` tool: LLM can retrieve conversations from a specific date (`get_conversations(date="2026-06-17")`)
+- `GET /api/conversations?date=` filter: REST API accepts `?date=YYYY-MM-DD` to filter by day
 
 ## Project Structure
 ```
@@ -64,6 +67,10 @@ mayday/
 │   ├── core/
 │   │   ├── data_store.py             # JSON persistence (thread-safe)
 │   │   └── config.py                 # YAML config loader
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
+│   │   └── memory_tools.py           # 4 LLM tools: remember, recall, recall_entity, forget
 │   ├── memory/
 │   │   ├── __init__.py
 │   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
@@ -141,6 +148,9 @@ mayday/
 │   ├── preload.ts                   # Context bridge
 │   └── electron-builder.yml         # Packaging config
 │
+├── conversations/                   # Per-day conversation files
+│   ├── index.json                   # Fast lookup: id → date mapping
+│   └── YYYY-MM-DD.json              # All conversations from that day
 ├── plan.md                          # MCP integration plan
 ├── main.py                          # Original PyQt6 entry (kept as reference)
 ├── ui/                              # Original PyQt6 widgets (kept as reference)
@@ -166,6 +176,10 @@ mayday/
 | `PUT` | `/api/events/:id` | Update event |
 | `DELETE` | `/api/events/:id` | Delete event |
 | `GET` | `/api/conversations` | List conversations |
+| `POST` | `/api/conversations` | Create conversation |
+| `GET` | `/api/conversations/:id` | Get with messages |
+| `DELETE` | `/api/conversations/:id` | Delete |
+| `GET` | `/api/conversations` | List conversations `?date=YYYY-MM-DD` |
 | `POST` | `/api/conversations` | Create conversation |
 | `GET` | `/api/conversations/:id` | Get with messages |
 | `DELETE` | `/api/conversations/:id` | Delete |
@@ -249,6 +263,7 @@ yellow:  '#eab308'
 - [x] **Bug fixes**: `get_event_loop` → `get_running_loop`, MCPManager close error suppression, 15s connect timeout
 - [x] **Markdown rendering**: Raw LLM plain-text responses now render as styled Markdown with syntax-highlighted code blocks, tables, lists, links (system browser), and green-themed typography
 - [x] **Knowledge Graph Brain**: Persistent JSON-backed graph memory with typed nodes/edges, 4 LLM memory tools, auto-sync from todo/event CRUD, auto-query context injection, 4th "Brain" tab with Cytoscape.js visualization
+- [x] **Per-day conversation files**: Conversations migrated from monolithic `data.json` to per-day files under `conversations/` with `index.json` for fast lookup, `?date=` filter on API, `get_conversations` LLM tool
 - [ ] Phase 7: Settings dialog (model selection, API config, voice settings)
 
 ## How to Run
@@ -318,6 +333,7 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - `backend/assistant/function_registry.py`: 9 tool definitions + dispatch
 - `config.yaml`: Shared config (Ollama, voice, server)
 - `plan.md`: MCP integration architecture and implementation plan
+- `backend/core/data_store.py`: JSON persistence (todos, events) + per-day conversation file storage
 - `backend/memory/knowledge_graph.py`: KnowledgeGraph singleton (JSON persistence, thread-safe)
 - `backend/memory/memory_tools.py`: 4 LLM functions for memory (remember, recall, recall_entity, forget)
 - `backend/api/memory.py`: REST API for graph visualization (GET/DELETE nodes)

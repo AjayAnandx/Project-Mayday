@@ -5,8 +5,22 @@ from backend.core.data_store import get_store
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
 from backend.memory.memory_tools import remember, recall, recall_entity, forget
+from backend.core.data_store import get_store
 
 logger = logging.getLogger(__name__)
+
+
+def get_conversations_from_store(date: str) -> str:
+    convs = get_store().list_conversations(date=date)
+    if not convs:
+        return f"No conversations found on {date}."
+    lines = [f"Conversations on {date}:"]
+    for c in convs:
+        title = c.get("title", "Untitled")
+        count = c.get("message_count", 0)
+        lines.append(f"  - {title} ({count} messages, id: {c['id']})")
+    return "\n".join(lines)
+
 
 LOCAL_TOOL_DEFINITIONS = [
     {
@@ -214,6 +228,20 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_conversations",
+            "description": "Retrieve conversations from a specific date to recall past discussions. Use when the user asks about a previous conversation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "Date in YYYY-MM-DD format"},
+                },
+                "required": ["date"],
+            },
+        },
+    },
 ]
 
 FUNCTION_MAP = {
@@ -230,6 +258,7 @@ FUNCTION_MAP = {
     "recall": recall,
     "recall_entity": recall_entity,
     "forget": forget,
+    "get_conversations": get_conversations_from_store,
 }
 
 

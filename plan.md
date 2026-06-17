@@ -150,12 +150,12 @@ Transform raw LLM plain-text responses into well-structured, formatted output us
 
 ---
 
-## Knowledge Graph Brain — Planned
+## Knowledge Graph Brain — Implementation Complete
 
 ### Goal
 Unified knowledge graph as Mayday's persistent memory ("brain") — all todos, events, conversations, user preferences, and semantic relationships stored as typed nodes + edges in a local JSON-backed graph. Interactive visualizer in the frontend (4th tab) using Cytoscape.js.
 
-### Status — PLANNED
+### Status — COMPLETED
 
 ### Architecture
 
@@ -338,9 +338,99 @@ def build_context(user_text: str, kg: KnowledgeGraph) -> str:
     return ""
 ```
 
-### Summary: Files
+---
 
-**8 new files**
+## Per-Day Conversation Files — Implementation Complete
+
+### Goal
+Replace monolithic `data.json` conversation storage with per-day files in a `conversations/` directory for faster date-based queries and reduced file I/O.
+
+### Status — COMPLETED
+
+### What Was Done
+1. **`conversations/` directory** — Each day gets one file (`YYYY-MM-DD.json`), plus `index.json` for fast id→date lookup
+2. **Auto-migration** — On first startup, existing conversations in `data.json` are grouped by date, written to individual daily files, and removed from `data.json` (one-time)
+3. **`?date=YYYY-MM-DD` filter** — `GET /api/conversations?date=2026-06-17` returns only conversations from that day
+4. **`get_conversations` LLM tool** — LLM can call `get_conversations(date="2026-06-17")` to retrieve past conversations during chat
+5. **Index rebuild** — If `index.json` is missing/corrupt, folder scan rebuilds it
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `backend/core/data_store.py` | Rewrote all 6 conversation methods to use per-day files + index; added migration logic; removed `self._conversations` array |
+| `backend/api/conversations.py` | Added `date: str = ""` query param to `list_conversations` |
+| `backend/assistant/function_registry.py` | Added `get_conversations` tool definition + dispatch entry |
+| `frontend/src/services/api.ts` | Updated `listConversations(date?)` to pass date param |
+| `CLAUDE.md` | Updated project structure, API table, status |
+
+### Storage Structure
+
+```
+conversations/
+├── index.json              # [{id, date, title, message_count}, ...]
+├── 2026-06-16.json         # {date, conversations: [{id, title, messages}, ...]}
+└── 2026-06-17.json
+```
+
+### Edge Cases
+- Missing `index.json` → rebuild by scanning `YYYY-MM-DD.json` files
+- Empty daily file → deleted automatically when last conversation is removed
+- Thread safety maintained via existing `threading.Lock`
+
+---
+
+## Selenium MCP Server — Implementation Complete
+
+### Goal
+Replace the disabled Playwright MCP server (blocked by npx EPERM on Windows) with a pure Python Selenium-based MCP server for browser automation.
+
+### Status — COMPLETED
+
+### What Was Done
+1. **Installed package**: `pip install mcp-server-selenium` (PhungXuanAnh/selenium-mcp-server)
+2. **Added to `config.yaml`**: New selenium server entry under `mcp.servers`
+3. **18 browser automation tools** now available to the LLM: navigate, click, type, screenshot, element query, JavaScript execution, console/network logs, local storage CRUD
+4. **No npm/npx involved** — eliminates EPERM issue entirely
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `config.yaml` | Added `selenium` server entry (`python -m mcp_server_selenium`) |
+
+### Available Tools (18)
+
+| Category | Tools |
+|----------|-------|
+| Navigation | `navigate`, `check_page_ready`, `take_screenshot` |
+| Element | `get_an_element`, `get_elements`, `get_direct_children`, `click_to_element`, `set_value_to_input_element` |
+| Styling | `get_style_an_element` |
+| JavaScript | `run_javascript_in_console`, `run_javascript_and_get_console_output` |
+| Logs | `get_console_logs`, `get_network_logs` |
+| Storage | `local_storage_add`, `local_storage_read`, `local_storage_read_all`, `local_storage_remove`, `local_storage_remove_all` |
+
+### Config Entry
+
+```yaml
+mcp:
+  servers:
+    selenium:
+      command: python
+      args: ["-m", "mcp_server_selenium"]
+```
+
+### Edge Cases
+- Server auto-starts Chrome via DevTools Protocol — no manual Chrome launch needed
+- Chrome verified installed at `C:\Program Files\Google\Chrome\Application\chrome.exe`
+- If Chrome not found, tool calls fail gracefully with error message
+- Runs as stdio subprocess per WebSocket session (same lifecycle as git/github servers)
+
+---
+
+## Knowledge Graph Brain — Implementation Complete
+
+### Goal
 - `backend/memory/knowledge_graph.py`
 - `backend/memory/memory_tools.py`
 - `backend/api/memory.py`

@@ -45,8 +45,8 @@ export const api = {
     request<{ deleted: boolean }>(`/events/${id}`, { method: 'DELETE' }),
 
   // Conversations
-  listConversations: () =>
-    request<Conversation[]>('/conversations'),
+  listConversations: (date = '') =>
+    request<Conversation[]>(`/conversations${date ? `?date=${date}` : ''}`),
 
   createConversation: (title = 'New conversation') =>
     request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify({ title }) }),

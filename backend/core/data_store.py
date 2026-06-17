@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 import threading
 from datetime import datetime, timezone
@@ -11,16 +12,21 @@ def _utcnow():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _today_str() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
 class DataStore:
     def __init__(self):
         cfg = load_config()
         path = cfg.get("data", {}).get("storage_path", "data.json")
         self._path = Path(__file__).resolve().parent.parent.parent / path
+        self._conv_dir = Path(__file__).resolve().parent.parent.parent / "conversations"
         self._lock = threading.Lock()
         self._todos: list[dict] = []
         self._events: list[dict] = []
-        self._conversations: list[dict] = []
         self._load()
+        self._init_conv_dir()
 
     def _load(self):
         if self._path.exists():
@@ -28,7 +34,6 @@ class DataStore:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
                 self._todos = data.get("todos", [])
                 self._events = data.get("events", [])
-                self._conversations = data.get("conversations", [])
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -36,9 +41,93 @@ class DataStore:
         data = {
             "todos": self._todos,
             "events": self._events,
-            "conversations": self._conversations,
         }
         self._path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def _init_conv_dir(self):
+        if not self._conv_dir.exists():
+            self._conv_dir.mkdir(parents=True, exist_ok=True)
+            self._migrate_conversations()
+
+    def _migrate_conversations(self):
+        if self._path.exists():
+            try:
+                data = json.loads(self._path.read_text(encoding="utf-8"))
+                convs = data.get("conversations", [])
+                if not convs:
+                    return
+                index = self._load_index()
+                for conv in convs:
+                    conv_date = conv.get("created_at", "")[:10] or _today_str()
+                    day = self._load_day(conv_date)
+                    for existing in day["conversations"]:
+                        if existing["id"] == conv["id"]:
+                            break
+                    else:
+                        day["conversations"].append(conv)
+                        self._save_day(conv_date, day)
+                    index.append({
+                        "id": conv["id"],
+                        "date": conv_date,
+                        "title": conv.get("title", "Conversation"),
+                        "message_count": len(conv.get("messages", [])),
+                    })
+                self._save_index(index)
+                data["conversations"] = []
+                self._path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    def _daily_path(self, date_str: str) -> Path:
+        return self._conv_dir / f"{date_str}.json"
+
+    def _load_day(self, date_str: str) -> dict:
+        p = self._daily_path(date_str)
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        return {"date": date_str, "conversations": []}
+
+    def _save_day(self, date_str: str, data: dict):
+        self._daily_path(date_str).write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def _index_path(self) -> Path:
+        return self._conv_dir / "index.json"
+
+    def _load_index(self) -> list[dict]:
+        p = self._index_path()
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        return []
+
+    def _save_index(self, index: list[dict]):
+        self._index_path().write_text(
+            json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def _rebuild_index(self):
+        index = []
+        for fname in os.listdir(str(self._conv_dir)):
+            if fname.endswith(".json") and fname != "index.json":
+                try:
+                    day = json.loads((self._conv_dir / fname).read_text(encoding="utf-8"))
+                    for conv in day.get("conversations", []):
+                        index.append({
+                            "id": conv["id"],
+                            "date": day["date"],
+                            "title": conv.get("title", "Conversation"),
+                            "message_count": len(conv.get("messages", [])),
+                        })
+                except (json.JSONDecodeError, OSError):
+                    pass
+        self._save_index(index)
 
     # --- Todos ---
 
@@ -157,7 +246,7 @@ class DataStore:
                     return event
             return None
 
-    # --- Conversations ---
+    # --- Conversations (per-day files) ---
 
     def create_conversation(self, title: str = "New conversation") -> dict:
         with self._lock:
@@ -168,13 +257,28 @@ class DataStore:
                 "updated_at": _utcnow(),
                 "messages": [],
             }
-            self._conversations.append(conv)
-            self._save()
+            date_str = _today_str()
+            day = self._load_day(date_str)
+            day["conversations"].append(conv)
+            self._save_day(date_str, day)
+            index = self._load_index()
+            index.append({
+                "id": conv["id"],
+                "date": date_str,
+                "title": title,
+                "message_count": 0,
+            })
+            self._save_index(index)
             return conv
 
     def add_message(self, conversation_id: str, role: str, content: str) -> dict | None:
         with self._lock:
-            for conv in self._conversations:
+            index = self._load_index()
+            entry = next((e for e in index if e["id"] == conversation_id), None)
+            if not entry:
+                return None
+            day = self._load_day(entry["date"])
+            for conv in day["conversations"]:
                 if conv["id"] == conversation_id:
                     msg = {
                         "role": role,
@@ -185,29 +289,65 @@ class DataStore:
                     conv["updated_at"] = _utcnow()
                     if len(conv["messages"]) == 1 and role == "user":
                         conv["title"] = content[:60]
-                    self._save()
+                        entry["title"] = conv["title"]
+                    entry["message_count"] = len(conv["messages"])
+                    self._save_day(entry["date"], day)
+                    self._save_index(index)
                     return msg
             return None
 
     def get_conversation(self, conversation_id: str) -> dict | None:
         with self._lock:
-            for conv in self._conversations:
+            index = self._load_index()
+            entry = next((e for e in index if e["id"] == conversation_id), None)
+            if not entry:
+                return None
+            day = self._load_day(entry["date"])
+            for conv in day["conversations"]:
                 if conv["id"] == conversation_id:
                     return conv
             return None
 
-    def list_conversations(self) -> list[dict]:
+    def list_conversations(self, date: str | None = None) -> list[dict]:
         with self._lock:
-            return sorted(self._conversations, key=lambda c: c["updated_at"], reverse=True)
+            index = self._load_index()
+            if date:
+                index = [e for e in index if e["date"] == date]
+            sorted_index = sorted(index, key=lambda e: e.get("date", ""), reverse=True)
+            result = []
+            for entry in sorted_index:
+                day = self._load_day(entry["date"])
+                for conv in day["conversations"]:
+                    if conv["id"] == entry["id"]:
+                        conv_slim = {
+                            "id": conv["id"],
+                            "title": conv["title"],
+                            "created_at": conv["created_at"],
+                            "updated_at": conv["updated_at"],
+                            "message_count": len(conv["messages"]),
+                        }
+                        result.append(conv_slim)
+                        break
+            return result
 
     def delete_conversation(self, conversation_id: str) -> bool:
         with self._lock:
-            before = len(self._conversations)
-            self._conversations = [c for c in self._conversations if c["id"] != conversation_id]
-            if len(self._conversations) != before:
-                self._save()
-                return True
-            return False
+            index = self._load_index()
+            entry = next((e for e in index if e["id"] == conversation_id), None)
+            if not entry:
+                return False
+            day = self._load_day(entry["date"])
+            before = len(day["conversations"])
+            day["conversations"] = [c for c in day["conversations"] if c["id"] != conversation_id]
+            if len(day["conversations"]) == before:
+                return False
+            if day["conversations"]:
+                self._save_day(entry["date"], day)
+            else:
+                self._daily_path(entry["date"]).unlink(missing_ok=True)
+            index = [e for e in index if e["id"] != conversation_id]
+            self._save_index(index)
+            return True
 
     def get_recent_messages(self, conversation_id: str, limit: int = 20) -> list[dict]:
         conv = self.get_conversation(conversation_id)
