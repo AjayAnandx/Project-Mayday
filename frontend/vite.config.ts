@@ -6,12 +6,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:8772',
+      '/api': 'http://localhost:8770',
       '/ws': {
-        target: 'ws://localhost:8772',
+        target: 'ws://localhost:8770',
         ws: true,
       },
-      '/screenshots': 'http://localhost:8772',
+      '/screenshots': 'http://localhost:8770',
     },
   },
 })

@@ -12,6 +12,7 @@ from backend.core.data_store import get_store
 from backend.assistant.llm_client import LLMClient
 from backend.assistant.function_registry import dispatch_call, get_tool_definitions
 from backend.assistant.mcp_manager import MCPManager
+from backend.assistant.selenium_tools import SELENIUM_TOOL_DEFINITIONS
 from backend.assistant.memory.conversation_manager import ConversationManager
 from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
 from backend.api.screenshots import get_screenshot_store
@@ -174,15 +175,32 @@ async def chat_websocket(websocket: WebSocket):
     mcp = MCPManager()
     if mcp_servers:
         for name, cfg in mcp_servers.items():
-            try:
-                await mcp.add_server_stdio(
-                    name,
-                    command=cfg["command"],
-                    args=cfg.get("args", []),
-                    env=cfg.get("env"),
-                )
-            except Exception as e:
-                logger.error("Failed to connect MCP server '%s': %s", name, e)
+            if cfg.get("lazy"):
+                try:
+                    await mcp.add_server_stdio(
+                        name,
+                        command=cfg["command"],
+                        args=cfg.get("args", []),
+                        env=cfg.get("env"),
+                        lazy=True,
+                    )
+                except Exception as e:
+                    logger.error("Failed to register lazy MCP server '%s': %s", name, e)
+            else:
+                try:
+                    await mcp.add_server_stdio(
+                        name,
+                        command=cfg["command"],
+                        args=cfg.get("args", []),
+                        env=cfg.get("env"),
+                    )
+                except Exception as e:
+                    logger.error("Failed to connect MCP server '%s': %s", name, e)
+    if mcp_servers:
+        for name, cfg in mcp_servers.items():
+            if cfg.get("lazy"):
+                if name == "selenium":
+                    mcp.add_static_tools(name, SELENIUM_TOOL_DEFINITIONS)
     mcp_tools = []
     if mcp._sessions:
         try:
