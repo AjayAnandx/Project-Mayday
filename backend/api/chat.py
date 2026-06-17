@@ -13,6 +13,7 @@ from backend.assistant.llm_client import LLMClient
 from backend.assistant.function_registry import dispatch_call, get_tool_definitions
 from backend.assistant.mcp_manager import MCPManager
 from backend.assistant.selenium_tools import SELENIUM_TOOL_DEFINITIONS
+from backend.assistant.fetch_tools import FETCH_TOOL_DEFINITIONS
 from backend.assistant.memory.conversation_manager import ConversationManager
 from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
 from backend.api.screenshots import get_screenshot_store
@@ -201,6 +202,8 @@ async def chat_websocket(websocket: WebSocket):
             if cfg.get("lazy"):
                 if name == "selenium":
                     mcp.add_static_tools(name, SELENIUM_TOOL_DEFINITIONS)
+                elif name == "fetch":
+                    mcp.add_static_tools(name, FETCH_TOOL_DEFINITIONS)
     mcp_tools = []
     if mcp._sessions:
         try:
