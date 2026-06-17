@@ -25,6 +25,8 @@ Desktop AI personal assistant with:
 | Conv memory | Stored in local `data.json` (last 20 messages) |
 | Icons | `lucide-react` |
 | Animations | `motion` (framer-motion) |
+| Markdown render | `react-markdown` + `remark-gfm` + `rehype-highlight` |
+| Graph viz | `cytoscape` (force-directed, cose layout) |
 
 ## Architecture
 - **Two-process**: FastAPI backend (uvicorn) + React frontend (Vite dev / Electron)
@@ -40,6 +42,11 @@ Desktop AI personal assistant with:
 - WebSocket protocol: `token`/`tool_call`/`done`/`error` message types
 - Voice pipeline stubs: Mic → VAD → whisper → LLM → TTS → speakers (interruptible)
 - Panels auto-refresh after LLM tool calls (todos + calendar update live)
+- Knowledge Graph "Brain" persists all todos, events, conversations, user preferences, and semantic relationships as typed nodes + edges in `memory_graph.json`
+- Memory tools: `remember`, `recall`, `recall_entity`, `forget` — available to LLM alongside built-in tools
+- Auto-sync: todo/event CRUD → graph nodes; conversation CRUD → conversation nodes
+- Auto-query: LLM context injection of relevant memories before each response
+- 4 tools for LLM: `remember` (store fact), `recall` (search), `recall_entity` (entity detail), `forget` (remove fact)`
 
 ## Project Structure
 ```
@@ -57,9 +64,13 @@ mayday/
 │   ├── core/
 │   │   ├── data_store.py             # JSON persistence (thread-safe)
 │   │   └── config.py                 # YAML config loader
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
+│   │   └── memory_tools.py           # 4 LLM tools: remember, recall, recall_entity, forget
 │   ├── assistant/
 │   │   ├── llm_client.py             # Ollama HTTP client (streaming, tool calling)
-│   │   ├── function_registry.py      # 9 tool definitions + dispatch
+│   │   ├── function_registry.py      # 13 tool definitions + dispatch (9 local + 4 memory)
 │   │   ├── mcp_manager.py            # MCP stdio connection, tool discovery, dispatch
 │   │   └── memory/
 │   │       └── conversation_manager.py  # Context window (last 20 messages)
@@ -86,7 +97,8 @@ mayday/
 │       │   │   └── Sidebar.tsx       # Pill-shaped top nav bar (Chat/Todos/Calendar)
 │       │   ├── chat/
 │       │   │   ├── ChatPanel.tsx     # Message list, pill input, send, loading dots
-│       │   │   └── MessageBubble.tsx # User/assistant/tool pill-shaped bubbles
+│       │   │   ├── MessageBubble.tsx # User/assistant/tool pill-shaped bubbles
+│       │   │   └── MarkdownRenderer.tsx # react-markdown styled renderer for LLM output
 │       │   ├── todos/
 │       │   │   ├── TodoPanel.tsx     # List, search, filter, add button
 │       │   │   ├── TodoItem.tsx      # Single todo row with toggle/edit/delete
@@ -103,10 +115,15 @@ mayday/
 │       │       ├── Checkbox.tsx
 │       │       ├── Modal.tsx         # rounded-2xl backdrop blur
 │       │       └── Badge.tsx
+│       ├── brain/
+│       │   ├── BrainPanel.tsx       # Main graph page with search bar
+│       │   ├── GraphCanvas.tsx      # Cytoscape.js force-directed graph
+│       │   └── NodeDetail.tsx       # Side panel for selected node info
 │       ├── hooks/
 │       │   ├── useChat.ts           # WebSocket hook (token streaming)
 │       │   ├── useTodos.ts          # REST CRUD with search/filter
 │       │   ├── useEvents.ts         # REST CRUD
+│       │   ├── useGraph.ts          # Memory graph data fetching
 │       │   └── use-auto-resize-textarea.ts
 │       ├── services/
 │       │   ├── api.ts               # Typed REST client
@@ -136,7 +153,7 @@ mayday/
 
 ## API Endpoints (18 total)
 
-### REST
+### REST (22 total)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Health check |
@@ -152,6 +169,11 @@ mayday/
 | `POST` | `/api/conversations` | Create conversation |
 | `GET` | `/api/conversations/:id` | Get with messages |
 | `DELETE` | `/api/conversations/:id` | Delete |
+| `GET` | `/api/memory/graph` | Full knowledge graph |
+| `GET` | `/api/memory/graph/search?q=` | Search graph nodes |
+| `GET` | `/api/memory/graph/node/:id` | Node + neighborhood |
+| `DELETE` | `/api/memory/graph/node/:id` | Delete node + edges |
+| `GET` | `/api/memory/stats` | Node/edge counts |
 
 ### WebSocket
 | Path | Description |
@@ -225,6 +247,8 @@ yellow:  '#eab308'
 - [x] **Tool merging**: 9 local + 12 git + 100+ GitHub tools served to LLM dynamically
 - [x] **Env support**: `config.yaml` `env:` section for passing env vars to MCP subprocesses
 - [x] **Bug fixes**: `get_event_loop` → `get_running_loop`, MCPManager close error suppression, 15s connect timeout
+- [x] **Markdown rendering**: Raw LLM plain-text responses now render as styled Markdown with syntax-highlighted code blocks, tables, lists, links (system browser), and green-themed typography
+- [x] **Knowledge Graph Brain**: Persistent JSON-backed graph memory with typed nodes/edges, 4 LLM memory tools, auto-sync from todo/event CRUD, auto-query context injection, 4th "Brain" tab with Cytoscape.js visualization
 - [ ] Phase 7: Settings dialog (model selection, API config, voice settings)
 
 ## How to Run
@@ -263,12 +287,25 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - LLM model `gemma4:31b-cloud` is cloud-proxied — may have higher latency than local models. Set to any `ollama list` model for local inference
 - Chat engine uses non-streaming LLM calls despite streaming infrastructure existing in `LLMClient.stream_tokens()`
 
+## Knowledge Graph Node Visual Style
+
+| Type | Hex | Shape |
+|------|-----|-------|
+| `user` | `#22c55e` (green) | Rounded rectangle |
+| `todo` | `#eab308` (yellow) | Rounded rectangle |
+| `event` | `#3b82f6` (blue) | Rounded rectangle |
+| `concept` | `#a855f7` (purple) | Ellipse |
+| `conversation` | `#737373` (gray) | Rounded rectangle |
+| `tag` | `#f97316` (orange) | Diamond |
+| `date` | `#525252` (dark gray) | Ellipse |
+
 ## Relevant Files
 - `frontend/tailwind.config.js`: Black/green color palette
 - `frontend/src/App.tsx`: Page routing with ChatProvider
 - `frontend/src/components/layout/Sidebar.tsx`: Pill-shaped top nav bar
 - `frontend/src/components/chat/ChatPanel.tsx`: Chat page with pill input + bouncing dots loading
 - `frontend/src/components/chat/MessageBubble.tsx`: Pill-shaped user/assistant/tool bubbles
+- `frontend/src/components/chat/MarkdownRenderer.tsx`: `react-markdown` styled renderer for LLM output
 - `frontend/src/components/todos/TodoPanel.tsx`: Full-page todo list with search/filter
 - `frontend/src/components/calendar/CalendarPanel.tsx`: Full-page month grid with events
 - `frontend/src/components/ui/Button.tsx`: `rounded-full` pill buttons with green accent
@@ -281,3 +318,9 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - `backend/assistant/function_registry.py`: 9 tool definitions + dispatch
 - `config.yaml`: Shared config (Ollama, voice, server)
 - `plan.md`: MCP integration architecture and implementation plan
+- `backend/memory/knowledge_graph.py`: KnowledgeGraph singleton (JSON persistence, thread-safe)
+- `backend/memory/memory_tools.py`: 4 LLM functions for memory (remember, recall, recall_entity, forget)
+- `backend/api/memory.py`: REST API for graph visualization (GET/DELETE nodes)
+- `frontend/src/components/brain/BrainPanel.tsx`: Graph page with search/refresh
+- `frontend/src/components/brain/GraphCanvas.tsx`: Cytoscape.js force-directed graph canvas
+- `frontend/src/components/brain/NodeDetail.tsx`: Node detail side panel with connections

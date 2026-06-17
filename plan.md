@@ -1,9 +1,13 @@
-# MCP Integration — Implementation Complete
+# Implementation Plans
 
-## Goal
+---
+
+## MCP Integration — Implementation Complete
+
+### Goal
 Connect Mayday's LLM tool-calling system to external MCP (Model Context Protocol) servers — filesystem, GitHub, databases, web search, etc. — by adding a client layer that discovers and calls MCP tools alongside the 9 built-in functions.
 
-## Status — COMPLETED
+### Status — COMPLETED
 
 All files created/modified per plan. End-to-end verified:
 - Git MCP server connects, 12 tools discovered (git_log, git_status, git_branch, etc.)
@@ -97,3 +101,264 @@ WebSocket message → _run_engine()
 | Async pattern | `dispatch_call` becomes async; sync local functions run via thread executor; MCP calls are native async |
 | Server config | Declared in `config.yaml` under `mcp.servers` with `command` + `args` |
 | Security | Stdio transport is inherently local — no network exposure; MCP server process permissions govern access |
+
+---
+
+## Markdown-Powered LLM Output — Implementation Complete
+
+### Goal
+Transform raw LLM plain-text responses into well-structured, formatted output using Markdown rendering. LLM responses (bold, lists, code blocks, tables, links) were displayed verbatim as raw syntax — now rendered as styled HTML matching the black/green theme.
+
+### Status — COMPLETED
+
+### What Was Done
+1. **Installed dependencies**: `react-markdown`, `remark-gfm` (tables, strikethrough), `rehype-highlight` (syntax highlighting)
+2. **Created `MarkdownRenderer.tsx`**: A React component wrapping `react-markdown` with custom renderers for every Markdown element — headings (green), inline/block code (monospace + highlighting), lists (green markers), links (open in system browser), blockquotes, horizontal rules, tables, bold, italic, and paragraphs
+3. **Updated `MessageBubble.tsx`**: Assistant messages now render via `<MarkdownRenderer>` instead of raw text. Bubble width widened from `max-w-[65%]` to `max-w-[80%]`. User messages remain plain text.
+4. **Added syntax highlighting CSS**: Custom dark theme in `index.css` for `rehype-highlight` classes (`.hljs-*`, green-tuned palette matching `#22c55e`, `#86efac`, `#4ade80`)
+
+### Files
+
+#### CREATE: `frontend/src/components/chat/MarkdownRenderer.tsx`
+- `MarkdownRenderer` component wrapping `ReactMarkdown`
+- Custom `components` overriding every HTML element with Tailwind-styled versions
+- `remarkPlugins: [remarkGfm]` — GitHub Flavored Markdown (tables, strikethrough)
+- `rehypePlugins: [rehypeHighlight]` — syntax highlighting for code blocks
+- Link handler: `target="_blank" rel="noopener noreferrer"` opens in system browser
+
+#### MODIFY: `frontend/src/components/chat/MessageBubble.tsx`
+- Import `MarkdownRenderer`
+- Assistant messages: replace `{message.content}` with `<MarkdownRenderer content={message.content} />`
+- Assistant bubbles: widen from `max-w-[65%]` to `max-w-[80%]`
+- User messages: stay plain text at `max-w-[65%]`
+
+#### MODIFY: `frontend/src/index.css`
+- Add custom `.hljs-*` dark theme CSS classes for syntax highlighting
+- Color tokens: keywords `#22c55e`, strings `#86efac`, built-ins `#4ade80`, comments `#737373`
+
+### Custom Renderers
+| Element | Style |
+|---------|-------|
+| h1–h4 | `text-green`, bold/semibold, compact margins |
+| inline code | `bg-surface1/70 text-green` monospace pill |
+| code blocks | `bg-black/60` border, rounded, syntax highlighted |
+| links | `text-green underline`, open `_blank` |
+| lists | `list-disc`/`list-decimal`, `list-inside` |
+| tables | Collapsed borders, green headers, dark rows |
+| blockquotes | `border-l-2 border-green/50`, italic, muted |
+| hr | Thin `border-surface1/60` |
+
+---
+
+## Knowledge Graph Brain — Planned
+
+### Goal
+Unified knowledge graph as Mayday's persistent memory ("brain") — all todos, events, conversations, user preferences, and semantic relationships stored as typed nodes + edges in a local JSON-backed graph. Interactive visualizer in the frontend (4th tab) using Cytoscape.js.
+
+### Status — PLANNED
+
+### Architecture
+
+```
+                    ┌──────────────────────────────────┐
+                    │         Frontend (React)          │
+                    │  ┌────────────────────────────┐   │
+                    │  │  Graph Visualizer (4th Tab) │   │
+                    │  │  Cytoscape.js canvas with    │   │
+                    │  │  force layout, colored nodes │   │
+                    │  └────────────────────────────┘   │
+                    │                                    │
+                    │  Chat  │  Todos  │  Calendar       │
+                    └──────────┬───────────────────────-┘
+                               │ REST + WS
+                    ┌──────────▼───────────────────────-┐
+                    │        Backend (FastAPI)           │
+                    │                                    │
+                    │  ┌──────────────────────────────┐  │
+                    │  │   Knowledge Graph "Brain"     │  │
+                    │  │   (memory_graph.json)         │  │
+                    │  │                               │  │
+                    │  │  Todos ── sync ──→ Nodes      │  │
+                    │  │  Events ─ sync ──→ Nodes      │  │
+                    │  │  Chat   ── recall/store ──→   │  │
+                    │  │  LLM    ── auto-query ──→     │  │
+                    │  └──────────────────────────────┘  │
+                    │              │ sync                │
+                    │  ┌───────────▼──────────────────┐  │
+                    │  │   DataStore (data.json)      │  │
+                    │  │   (REST-optimized cache)     │  │
+                    │  └──────────────────────────────┘  │
+                    └────────────────────────────────────┘
+```
+
+### Graph Model
+
+**Node types:**
+
+| Type | Example | Auto-created by |
+|-----------|---------|----------------|
+| `user` | "Alex" | First run |
+| `todo` | "Buy milk" | `create_todo` tool |
+| `event` | "Team standup" | `create_event` tool |
+| `conversation` | "Chat about project" | New conversation start |
+| `concept` | "dark mode", "React", "deadline" | LLM `remember()` call |
+| `tag` | "urgent", "work" | Todo CRUD sync |
+| `date` | "2026-06-20" | Date properties on nodes |
+
+**Example subgraph:**
+```
+(user:Alex) ──prefers──→ (concept:dark mode)
+    │
+    ├──created──→ (todo:Buy milk) ──due_date──→ (date:2026-06-20)
+    │                  │
+    │                  └──has_tag──→ (tag:groceries)
+    │
+    ├──created──→ (event:Standup) ──starts_at──→ (date:2026-06-16T10:00)
+    │
+    └──has──→ (conversation:Chat #1) ──mentions──→ (concept:deadline)
+```
+
+**Edge types:** `has_title`, `has_description`, `has_tag`, `due_date`, `starts_at`, `ends_at`, `relates_to`, `prefers`, `mentions`, `created_by`, `assigned_to`, `depends_on`, `blocks`, `created`, `has`
+
+### New Backend Files
+
+#### CREATE: `backend/memory/knowledge_graph.py`
+- `KnowledgeGraph` singleton class
+- Data: `memory_graph.json` in project root
+- Thread-safe (same pattern as `DataStore`)
+- Core API:
+  - `add_node(type, label, properties) → id`
+  - `add_edge(source, target, relation, properties)`
+  - `search(query) → list[triple]` — fuzzy text match across labels + properties
+  - `get_subgraph(node_id, depth=2) → {nodes, edges}` — neighborhood traversal
+  - `get_full_graph() → {nodes, edges}` — for visualization
+  - `sync_todo(todo)`, `sync_event(event)`, `sync_conversation(conv)` — auto-create/update nodes + edges
+  - `remove_node(id)`, `remove_edge(source, target, relation)`
+  - `stats() → dict` — node/edge counts by type
+
+#### CREATE: `backend/memory/memory_tools.py`
+- 4 LLM tool functions wrapping the KG:
+  - `remember(entity, relation, value, context?)` — store a fact triple
+  - `recall(query)` — search + return formatted text
+  - `recall_entity(name)` — everything about an entity
+  - `forget(entity, relation, value)` — remove specific fact
+
+#### CREATE: `backend/api/memory.py`
+- REST routes for visualization:
+  - `GET /api/memory/graph` — full graph as `{nodes, edges}`
+  - `GET /api/memory/graph/search?q=` — matching subgraph
+  - `GET /api/memory/graph/node/{id}` — node + neighborhood
+  - `DELETE /api/memory/graph/node/{id}` — remove node + edges
+
+### New Frontend Files
+
+#### CREATE: `frontend/src/types/graph.ts`
+```typescript
+export interface GraphNode {
+  id: string; type: string; label: string; properties: Record<string, any>
+}
+export interface GraphEdge {
+  id: string; source: string; target: string; relation: string; properties: Record<string, any>
+}
+export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[] }
+```
+
+#### CREATE: `frontend/src/hooks/useGraph.ts`
+- Fetches graph data from REST API
+- Search, node detail, refresh
+
+#### CREATE: `frontend/src/components/brain/BrainPanel.tsx`
+- Main container for the graph visualization page
+- Search bar + graph canvas + detail panel
+- Empty state, loading state
+
+#### CREATE: `frontend/src/components/brain/GraphCanvas.tsx`
+- Cytoscape.js wrapper with force-directed layout (`cose`)
+- Node colors by type (green=user, yellow=todo, blue=event, purple=concept, etc.)
+- Rounded pill nodes with labels
+- Directed edges with arrowheads + relation labels on hover
+- Click → select node, show detail
+- Drag to rearrange, scroll to zoom
+
+#### CREATE: `frontend/src/components/brain/NodeDetail.tsx`
+- Selected node info: type badge, label, properties
+- Connected nodes list (incoming + outgoing edges)
+- Click connected node → navigate to it on graph
+
+### Modified Files
+
+| File | Changes |
+|------|---------|
+| `backend/main.py` | Register `memory.py` router |
+| `backend/api/chat.py` | Init `KnowledgeGraph` singleton; auto-query KG before LLM calls; inject "Relevant memories" into system prompt |
+| `backend/api/todos.py` | After CRUD ops, call `KnowledgeGraph.get_instance().sync_todo(todo)` |
+| `backend/api/events.py` | After CRUD ops, call `KnowledgeGraph.get_instance().sync_event(event)` |
+| `backend/assistant/function_registry.py` | Import 4 memory tools; add to `LOCAL_TOOL_DEFINITIONS` + `FUNCTION_MAP` |
+| `frontend/src/App.tsx` | Add `'brain'` to `Page` type; render `<BrainPanel />` |
+| `frontend/src/components/layout/Sidebar.tsx` | Add 4th nav item with `BrainCircuit` icon |
+| `frontend/src/services/api.ts` | Add `fetchGraph()`, `searchGraph()`, `fetchNode()`, `deleteNode()` |
+| `frontend/package.json` | Add `cytoscape` + `react-cytoscapejs` |
+| `CLAUDE.md` | Document brain system + relevant files |
+
+### Node Visual Style
+
+| Type | Hex | Shape |
+|------|-----|-------|
+| `user` | `#22c55e` (green) | Rounded rectangle |
+| `todo` | `#eab308` (yellow) | Rounded rectangle |
+| `event` | `#3b82f6` (blue) | Rounded rectangle |
+| `concept` | `#a855f7` (purple) | Ellipse |
+| `conversation` | `#737373` (gray) | Rounded rectangle |
+| `tag` | `#f97316` (orange) | Diamond |
+| `date` | `#525252` (dark gray) | Ellipse |
+
+### The Learning Loop
+
+```
+Every LLM turn:
+  1. Extract keywords from user message
+  2. Auto-query Brain: search(keywords) → relevant facts
+  3. Inject into system prompt as "### Relevant memories:\n- ...\n###"
+  4. LLM responds (may call remember() for new facts)
+  5. Response stored in conversation node
+
+Every todo/event CRUD:
+  1. Write to DataStore (existing REST behavior)
+  2. Also sync to Brain as typed nodes + relationships
+```
+
+### System Prompt Injection
+
+```python
+def build_context(user_text: str, kg: KnowledgeGraph) -> str:
+    keywords = extract_keywords(user_text)
+    memories = kg.search(keywords)
+    if memories:
+        return "### Relevant memories:\n" + "\n".join(f"- {m}" for m in memories) + "\n###"
+    return ""
+```
+
+### Summary: Files
+
+**8 new files**
+- `backend/memory/knowledge_graph.py`
+- `backend/memory/memory_tools.py`
+- `backend/api/memory.py`
+- `frontend/src/types/graph.ts`
+- `frontend/src/hooks/useGraph.ts`
+- `frontend/src/components/brain/BrainPanel.tsx`
+- `frontend/src/components/brain/GraphCanvas.tsx`
+- `frontend/src/components/brain/NodeDetail.tsx`
+
+**9 modified files**
+- `backend/main.py`
+- `backend/api/chat.py`
+- `backend/api/todos.py`
+- `backend/api/events.py`
+- `backend/assistant/function_registry.py`
+- `frontend/src/App.tsx`
+- `frontend/src/components/layout/Sidebar.tsx`
+- `frontend/src/services/api.ts`
+- `frontend/package.json`
+- `CLAUDE.md`
+- `plan.md` (this file)

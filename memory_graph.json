@@ -1,0 +1,115 @@
+{
+  "nodes": [
+    {
+      "id": "14eee757b93b",
+      "type": "todo",
+      "label": "Buy groceries",
+      "properties": {
+        "todo_id": "660f0d2c2b9a",
+        "description": "milk, eggs, bread",
+        "due_date": "2026-06-20",
+        "priority": 1,
+        "completed": false,
+        "tags": [
+          "shopping",
+          "urgent"
+        ]
+      }
+    },
+    {
+      "id": "cf0cda72ada3",
+      "type": "tag",
+      "label": "shopping",
+      "properties": {}
+    },
+    {
+      "id": "daedf7fcb49c",
+      "type": "tag",
+      "label": "urgent",
+      "properties": {}
+    },
+    {
+      "id": "b446810aa2a4",
+      "type": "event",
+      "label": "Team standup",
+      "properties": {
+        "event_id": "39286818578d",
+        "description": "Daily standup",
+        "start_time": "2026-06-17T10:00",
+        "end_time": "2026-06-17T10:30",
+        "all_day": false
+      }
+    },
+    {
+      "id": "c9db7878d280",
+      "type": "concept",
+      "label": "Alex",
+      "properties": {
+        "context": ""
+      }
+    },
+    {
+      "id": "353dbffa681b",
+      "type": "concept",
+      "label": "dark mode",
+      "properties": {}
+    },
+    {
+      "id": "f93bc03e4fde",
+      "type": "concept",
+      "label": "Python",
+      "properties": {}
+    },
+    {
+      "id": "88eb925ac1c2",
+      "type": "concept",
+      "label": "Alex",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
+      "id": "a22726ec5677",
+      "type": "concept",
+      "label": "Alex",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
+      "id": "5320c5abeee8",
+      "type": "event",
+      "label": "Meeting",
+      "properties": {
+        "event_id": "14ec9c7b487b",
+        "description": "",
+        "start_time": "2026-06-30T09:00:00",
+        "end_time": "2026-06-30T10:00:00",
+        "all_day": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "4e440ffa5e35",
+      "source": "14eee757b93b",
+      "target": "cf0cda72ada3",
+      "relation": "has_tag",
+      "properties": {}
+    },
+    {
+      "id": "2c49a8b0017e",
+      "source": "14eee757b93b",
+      "target": "daedf7fcb49c",
+      "relation": "has_tag",
+      "properties": {}
+    },
+    {
+      "id": "d518278aa146",
+      "source": "c9db7878d280",
+      "target": "353dbffa681b",
+      "relation": "prefers",
+      "properties": {}
+    }
+  ]
+}

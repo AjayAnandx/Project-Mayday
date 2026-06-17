@@ -4,6 +4,7 @@ import logging
 from backend.core.data_store import get_store
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
+from backend.memory.memory_tools import remember, recall, recall_entity, forget
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,67 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember",
+            "description": "Store a fact or relationship in long-term memory",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity": {"type": "string", "description": "The subject entity"},
+                    "relation": {"type": "string", "description": "Relationship type (e.g. prefers, mentions, relates_to)"},
+                    "value": {"type": "string", "description": "The object value or entity"},
+                    "context": {"type": "string", "description": "Optional context for disambiguation"},
+                },
+                "required": ["entity", "relation", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall",
+            "description": "Search memory for any information matching a query",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_entity",
+            "description": "Get all information stored about a specific entity",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Entity name"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "forget",
+            "description": "Remove a specific memory fact",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity": {"type": "string", "description": "The subject entity"},
+                    "relation": {"type": "string", "description": "Relationship type"},
+                    "value": {"type": "string", "description": "The object value or entity"},
+                },
+                "required": ["entity", "relation", "value"],
+            },
+        },
+    },
 ]
 
 FUNCTION_MAP = {
@@ -164,6 +226,10 @@ FUNCTION_MAP = {
     "delete_event": delete_event,
     "list_events": list_events,
     "query_events": query_events,
+    "remember": remember,
+    "recall": recall,
+    "recall_entity": recall_entity,
+    "forget": forget,
 }
 
 

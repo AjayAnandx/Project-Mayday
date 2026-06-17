@@ -1,6 +1,7 @@
 import type { Todo, TodoCreate, TodoUpdate } from '../types/todo'
 import type { Event, EventCreate, EventUpdate } from '../types/event'
 import type { Conversation } from '../types/conversation'
+import type { GraphData, GraphNode } from '../types/graph'
 
 const BASE = '/api'
 
@@ -52,4 +53,17 @@ export const api = {
 
   deleteConversation: (id: string) =>
     request<{ deleted: boolean }>(`/conversations/${id}`, { method: 'DELETE' }),
+
+  // Memory Graph
+  fetchGraph: () =>
+    request<GraphData>('/memory/graph'),
+
+  searchGraph: (q: string) =>
+    request<GraphData>(`/memory/graph/search?q=${encodeURIComponent(q)}`),
+
+  fetchNode: (id: string) =>
+    request<{ node: GraphNode; subgraph: GraphData }>(`/memory/graph/node/${id}`),
+
+  deleteNode: (id: string) =>
+    request<{ deleted: boolean }>(`/memory/graph/node/${id}`, { method: 'DELETE' }),
 }

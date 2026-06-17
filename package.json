@@ -2,7 +2,7 @@
   "name": "mayday-monorepo",
   "private": true,
   "scripts": {
-    "backend": "uvicorn backend.main:app --reload --port 8765",
+    "backend": "python -m uvicorn backend.main:app --reload --port 8770",
     "frontend": "cd frontend && npm run dev",
     "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
     "build": "cd frontend && npm run build",

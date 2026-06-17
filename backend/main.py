@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api import todos, events, conversations, chat
+from backend.api import todos, events, conversations, chat, memory
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ app.include_router(todos.router)
 app.include_router(events.router)
 app.include_router(conversations.router)
 app.include_router(chat.router)
+app.include_router(memory.router)
 
 
 @app.get("/api/health")

@@ -4,6 +4,7 @@ import { Sidebar, type Page } from './components/layout/Sidebar'
 import { ChatPanel } from './components/chat/ChatPanel'
 import { TodoPanel } from './components/todos/TodoPanel'
 import { CalendarPanel } from './components/calendar/CalendarPanel'
+import { BrainPanel } from './components/brain/BrainPanel'
 
 function AppContent() {
   const { connected, newConversation } = useChatContext()
@@ -21,6 +22,7 @@ function AppContent() {
         {currentPage === 'chat' && <ChatPanel />}
         {currentPage === 'todos' && <TodoPanel />}
         {currentPage === 'calendar' && <CalendarPanel />}
+        {currentPage === 'brain' && <BrainPanel />}
       </div>
     </div>
   )

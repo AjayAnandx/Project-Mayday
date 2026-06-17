@@ -12,6 +12,7 @@ from backend.assistant.llm_client import LLMClient
 from backend.assistant.function_registry import dispatch_call, get_tool_definitions
 from backend.assistant.mcp_manager import MCPManager
 from backend.assistant.memory.conversation_manager import ConversationManager
+from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,18 @@ async def _run_engine(
     llm: LLMClient,
     tools: list[dict],
     mcp: MCPManager | None,
+    kg: KnowledgeGraph | None = None,
 ):
     system = SYSTEM_PROMPT.format(date=date.today().isoformat())
+
+    if kg:
+        keywords = extract_keywords(user_text)
+        if keywords:
+            memories = kg.search(" ".join(keywords))
+            if memories:
+                memory_lines = "\n".join(f"- [{m['type']}] {m['label']}" for m in memories[:8])
+                system += f"\n\n### Relevant memories:\n{memory_lines}\n###"
+
     conv.add_message("user", user_text)
     messages = [{"role": "system", "content": system}] + conv.get_context()
 
@@ -80,6 +91,31 @@ async def _run_engine(
                 fn_args = json.loads(fn_args)
             result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
             conv.add_message("assistant", f"[Called {fn_name}] {result}")
+
+            if kg and fn_name in ("create_todo", "update_todo", "delete_todo"):
+                from backend.core.data_store import get_store as get_data_store
+                store = get_data_store()
+                if fn_name == "delete_todo":
+                    kg.delete_todo_node(fn_args.get("todo_id", ""))
+                else:
+                    todo_id = fn_args.get("todo_id", "")
+                    if todo_id:
+                        todo = store.get_todo(todo_id)
+                        if todo:
+                            kg.sync_todo(todo)
+
+            if kg and fn_name in ("create_event", "update_event", "delete_event"):
+                from backend.core.data_store import get_store as get_data_store
+                store = get_data_store()
+                if fn_name == "delete_event":
+                    kg.delete_event_node(fn_args.get("event_id", ""))
+                else:
+                    event_id = fn_args.get("event_id", "")
+                    if event_id:
+                        event = store.get_event(event_id)
+                        if event:
+                            kg.sync_event(event)
+
             await _send_json(ws, {
                 "type": "tool_call",
                 "name": fn_name,
@@ -113,6 +149,8 @@ async def chat_websocket(websocket: WebSocket):
     llm = LLMClient()
     conv.new_conversation()
 
+    kg = get_graph()
+
     config = load_config()
     mcp_servers = config.get("mcp", {}).get("servers", {})
     mcp = MCPManager()
@@ -141,7 +179,7 @@ async def chat_websocket(websocket: WebSocket):
             msg = json.loads(data)
             if msg.get("type") == "message":
                 user_text = msg.get("content", "")
-                await _run_engine(websocket, user_text, conv, llm, tools, mcp)
+                await _run_engine(websocket, user_text, conv, llm, tools, mcp, kg)
             elif msg.get("type") == "new_conversation":
                 conv.new_conversation()
                 await _send_json(websocket, {"type": "conversation_created"})
