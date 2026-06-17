@@ -515,4 +515,63 @@ take_screenshot → selenium saves to project root
 | `get_screenshot(filename)` | Get metadata; image auto-displays in chat via `image_url` |
 | `delete_screenshot(filename)` | Permanently delete a screenshot |
 
+---
+
+## Knowledge Graph CRUD Fixes — Implementation Complete
+
+### Goal
+Fix Mayday's memory system so the LLM can properly CRUD knowledge graph entities: prevent data duplication, enable permanent deletion, clean up accumulated junk, and make the LLM aware of its operations.
+
+### Status — COMPLETED
+
+### Problems Solved
+
+| Problem | Fix |
+|---------|-----|
+| `remember()` created duplicate edges on every call | `add_edge_if_missing()` — checks (source, target, relation) before creating |
+| `forget()` required relation+value — LLM had to guess them | `forget(entity)` auto-redirects to `delete_entity()` |
+| Deleted entities reappeared after `remember()` in new sessions | **Tombstone system** — permanent record in `memory_graph.json` blocks recreation |
+| `recall()` polluted graph with `search_result` junk nodes | Removed the `add_node()` call from `recall()` |
+| Unrelated "project" concept nodes found by `recall("project")` | System prompt tells LLM to use `recall("project:")` (with colon) |
+| Graph API and Brain tab showed internal junk nodes | `get_clean_graph()` filters out `search_result` nodes |
+| Conversation REST API didn't sync to graph | `POST/DELETE /api/conversations` now syncs/cleans graph |
+| Labels with whitespace created duplicate nodes | `add_node()` auto-strips whitespace |
+| `delete_entity("AGI Personal Assistant")` couldn't find `project:AGI Personal Assistant` node | `_find_exact_node()` tries both raw name and known prefixes |
+| LLM didn't explain what it created/updated/deleted | System prompt `### Operation Reporting` section added |
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `backend/test_memory_graph_sync.py` | 38 unit tests covering dedup, tombstone, repair, filter, prefix matching |
+
+### Modified Files
+
+| File | Changes |
+|------|---------|
+| `backend/memory/knowledge_graph.py` | `add_edge_if_missing()`, `get_clean_graph()`, `add_tombstone()`, `is_deleted()`, `repair_graph()`, `delete_conversation_node()`, `add_node()` strips whitespace |
+| `backend/memory/memory_tools.py` | `_check_tombstone()`, `_find_exact_node()`, `forget()` auto-redirect, `delete_entity()` records tombstone, `remember()` checks tombstone |
+| `backend/api/chat.py` | `### Operation Reporting`, `### Querying the Knowledge Graph`, updated forgetting/delete instructions, auto-context filters junk |
+| `backend/api/memory.py` | `POST /api/memory/repair` endpoint, `GET /api/memory/graph` uses `get_clean_graph()` |
+| `backend/api/conversations.py` | Graph sync on create, cleanup on delete |
+| `backend/assistant/function_registry.py` | `forget` params made optional, `delete_entity` registered, descriptions updated |
+| `backend/functions/todo_functions.py` | `update_todo` returns `(id: ...)` in result |
+| `backend/functions/calendar_functions.py` | `update_event` returns `(id: ...)` in result |
+| `backend/core/data_store.py` | Absolute path support for storage file |
+
+### Data Flow
+
+```
+forget("AGI Personal Assistant")
+  → delete_entity("AGI Personal Assistant")    # auto-redirect
+  → _find_exact_node() finds "project:AGI Personal Assistant"
+  → kg.remove_node(id)                         # removes node + all edges
+  → kg.add_tombstone("project:AGI Personal Assistant")  # permanent record
+
+New session: remember("project:AGI Personal Assistant", ...)
+  → _check_tombstone() finds tombstone
+  → Returns "was previously deleted on 2026-06-17. Not recreating it."
+  → LLM tells user: "That project was deleted previously."
+```
+
 

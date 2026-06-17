@@ -185,6 +185,7 @@ mayday/
 | `GET` | `/api/memory/graph/node/:id` | Node + neighborhood |
 | `DELETE` | `/api/memory/graph/node/:id` | Delete node + edges |
 | `GET` | `/api/memory/stats` | Node/edge counts |
+| `POST` | `/api/memory/repair` | One-time cleanup of junk nodes + stale projects |
 
 ### WebSocket
 | Path | Description |
@@ -266,6 +267,16 @@ yellow:  '#eab308'
 - [ ] Phase 7: Settings dialog (model selection, API config, voice settings)
 - [x] **Personality system**: Config-driven personality in `config.yaml` (`personality:` section with tone, traits, rules). LLM auto-learns user preferences via `remember("Mayday", "style_feedback", ...)` with `node_type="personality"`. System prompt injects personality + learning instructions on each turn.
 - [x] **Project tracking + context resume**: LLM stores ALL project conversations via `remember(relation="has_conversation", node_type="project")`. New `get_conversation_history` tool loads past conversations by ID. On resume, LLM recalls project → loads ALL linked conversations → presents full context.
+- [x] **delete_entity LLM tool**: `delete_entity(name)` removes an entire node + all its edges from the knowledge graph
+- [x] **Edge deduplication**: `add_edge_if_missing()` prevents duplicate edges in the graph; `remember()` returns `"Already remembered"` on repeat calls
+- [x] **Conversation REST graph sync**: `POST/DELETE /api/conversations` now syncs/cleans up graph nodes
+- [x] **Forget entity-only fallback**: `forget(entity)` without relation/value auto-redirects to `delete_entity()` — LLM never needs to guess edge params
+- [x] **Tombstone system**: Deleted entities are permanently recorded in `memory_graph.json` — `remember()` blocks recreation with `"was previously deleted on <date>"`
+- [x] **Graph repair endpoint**: `POST /api/memory/repair` — one-time cleanup that removes `search_result` junk nodes + stale project nodes + records tombstones
+- [x] **Clean graph API filtering**: `GET /api/memory/graph` and auto-context injection filter out internal `search_result` junk nodes — Brain tab shows only real data
+- [x] **Label normalization**: `add_node()` auto-strips whitespace; `_find_exact_node()` handles `project:`/`tag:` prefixed lookups
+- [x] **LLM operation awareness**: System prompt instructs LLM to explicitly report what was created/updated/deleted after EVERY tool call
+- [x] **38 passing tests** covering dedup, tombstone, repair, clean graph, prefix matching, and end-to-end delete flows
 
 ## How to Run
 
@@ -334,13 +345,13 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - `frontend/src/services/api.ts`: Typed REST client
 - `backend/api/chat.py`: WebSocket endpoint with LLM streaming + tool dispatch
 - `backend/assistant/llm_client.py`: Ollama HTTP client
-- `backend/assistant/function_registry.py`: 9 tool definitions + dispatch
+- `backend/assistant/function_registry.py`: 14 tool definitions + dispatch (9 local + 5 memory)
 - `config.yaml`: Shared config (Ollama, voice, server)
 - `plan.md`: MCP integration architecture and implementation plan
 - `backend/api/screenshots.py`: ScreenshotStore + REST list/delete endpoints + 3 LLM tools
 - `backend/core/data_store.py`: JSON persistence (todos, events) + per-day conversation file storage
 - `backend/memory/knowledge_graph.py`: KnowledgeGraph singleton (JSON persistence, thread-safe)
-- `backend/memory/memory_tools.py`: 4 LLM functions for memory (remember, recall, recall_entity, forget)
+- `backend/memory/memory_tools.py`: 5 LLM functions for memory (remember, recall, recall_entity, forget, delete_entity)
 - `backend/api/memory.py`: REST API for graph visualization (GET/DELETE nodes)
 - `frontend/src/components/brain/BrainPanel.tsx`: Graph page with search/refresh
 - `frontend/src/components/brain/GraphCanvas.tsx`: Cytoscape.js force-directed graph canvas

@@ -52,7 +52,15 @@ Rules: {rules}
 - When listing projects, call recall("project:") (with colon) - this finds only project-prefixed nodes and returns clean results.
 - Do NOT use recall("project") (without colon) - it finds many irrelevant nodes.
 - recall_entity("project:<name>") is best for getting a single project's full context.
-- Only use recall("") with a specific query, not to get the entire graph."""
+- Only use recall("") with a specific query, not to get the entire graph.
+### Operation Reporting
+- After EVERY tool call, tell the user what you did: what was created/updated/deleted and what changed.
+- For creates: state the title and type (todo/event/project/memory).
+- For updates: state what fields changed and their new values.
+- For deletes: state what was removed and confirm it's gone from both the data store and the knowledge graph.
+- Example: "Created todo 'Buy milk' (high priority, due tomorrow). I also synced it to the knowledge graph."
+- Example: "Updated todo 'Buy milk' - set priority from 1 to 2. Knowledge graph is also updated."
+- Example: "Deleted project 'AGI Personal Assistant' from the knowledge graph. It is tombstoned and cannot be recreated."""
 
 PROJECT_INSTRUCTIONS = """
 ### Project Tracking
