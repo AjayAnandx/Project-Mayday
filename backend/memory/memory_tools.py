@@ -1,7 +1,7 @@
 from backend.memory.knowledge_graph import get_graph, extract_keywords
 
 
-def remember(entity: str, relation: str, value: str, context: str = "") -> str:
+def remember(entity: str, relation: str, value: str, context: str = "", node_type: str = "concept") -> str:
     kg = get_graph()
     results = kg.search(entity)
     source_id = None
@@ -10,7 +10,7 @@ def remember(entity: str, relation: str, value: str, context: str = "") -> str:
             source_id = r["id"]
             break
     if not source_id:
-        source_id = kg.add_node("concept", entity, {"context": context})
+        source_id = kg.add_node(node_type, entity, {"context": context})
     target_results = kg.search(value)
     target_id = None
     for r in target_results:

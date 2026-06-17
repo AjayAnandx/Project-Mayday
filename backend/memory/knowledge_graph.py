@@ -234,7 +234,7 @@ class KnowledgeGraph:
                 }
             self._save()
 
-    def sync_conversation(self, conv: dict):
+    def sync_conversation(self, conv: dict) -> str:
         with self._lock:
             existing = None
             for n in self._nodes.values():
@@ -242,20 +242,24 @@ class KnowledgeGraph:
                     existing = n
                     break
             if existing:
-                existing["label"] = conv.get("title", "Conversation")
+                existing["label"] = conv["id"]
                 existing["properties"]["message_count"] = len(conv.get("messages", []))
-            else:
-                node_id = uuid.uuid4().hex[:12]
-                self._nodes[node_id] = {
-                    "id": node_id,
-                    "type": "conversation",
-                    "label": conv.get("title", "Conversation"),
-                    "properties": {
-                        "conv_id": conv["id"],
-                        "message_count": len(conv.get("messages", [])),
-                    },
-                }
+                existing["properties"]["title"] = conv.get("title", "Conversation")
+                self._save()
+                return existing["id"]
+            node_id = uuid.uuid4().hex[:12]
+            self._nodes[node_id] = {
+                "id": node_id,
+                "type": "conversation",
+                "label": conv["id"],
+                "properties": {
+                    "conv_id": conv["id"],
+                    "title": conv.get("title", "Conversation"),
+                    "message_count": len(conv.get("messages", [])),
+                },
+            }
             self._save()
+            return node_id
 
     def _ensure_tag_node(self, tag: str) -> str:
         for n in self._nodes.values():

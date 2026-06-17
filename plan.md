@@ -455,12 +455,12 @@ mcp:
 
 ---
 
-## Screenshot Management System — Planned
+## Screenshot Management System — Implementation Complete
 
 ### Goal
 Persistent screenshot storage with metadata index, REST API for listing/deleting, 3 LLM tools (`list_screenshots`, `get_screenshot`, `delete_screenshot`), and automatic image rendering in chat tool-call bubbles.
 
-### Status — PLANNED (not implemented)
+### Status — COMPLETED
 
 ### Architecture
 
@@ -514,3 +514,5 @@ take_screenshot → selenium saves to project root
 | `list_screenshots()` | List all stored screenshots with timestamps |
 | `get_screenshot(filename)` | Get metadata; image auto-displays in chat via `image_url` |
 | `delete_screenshot(filename)` | Permanently delete a screenshot |
+
+

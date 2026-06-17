@@ -30,6 +30,34 @@ Do not say you lack access. You have the tools.
 Be concise, helpful, and friendly. When you use a tool, explain what you did.
 Current date: {date}"""
 
+PERSONALITY_INSTRUCTIONS = """
+### Personality
+Tone: {tone}
+Traits: {traits}
+Rules: {rules}
+
+### Auto-Learning
+- If the user gives feedback about your behavior or style, call remember(entity="Mayday", relation="style_feedback", value="<feedback>", node_type="personality")
+- Before responding, recall("style_feedback") to check for recent feedback
+- Adapt your tone based on stored feedback
+- Todos and events are auto-synced to the knowledge graph when created/updated/deleted
+- Before creating a todo, recall similar ones to avoid duplicates"""
+
+PROJECT_INSTRUCTIONS = """
+### Project Tracking
+- When starting or resuming a project, link this conversation by calling:
+    remember(entity="project:<name>", relation="has_conversation", value="<THE_ACTUAL_CONVERSATION_ID>", node_type="project")
+  Replace <THE_ACTUAL_CONVERSATION_ID> with the real conversation ID string from the system context - do NOT use a placeholder.
+    remember(entity="project:<name>", relation="status", value="started", node_type="project")
+- On each new session, also link the new conversation ID under the same project using remember() with has_conversation.
+- Update progress:
+    remember(entity="project:<name>", relation="last_task", value="<what_was_done>", node_type="project")
+    remember(entity="project:<name>", relation="next_task", value="<what_is_next>", node_type="project")
+- When user says "continue <project>":
+    1. recall_entity("project:<name>") to find the project and ALL linked conversations
+    2. Call get_conversation_history(<conv_id>) for EACH linked conversation by ID
+    3. Present a full summary: what was done, what was next, what to do now"""
+
 CONNECTION_HINT = (
     "Make sure Ollama is running locally (`ollama serve`), "
     "or update config.yaml with your cloud endpoint and API key."
@@ -50,6 +78,15 @@ async def _run_engine(
     kg: KnowledgeGraph | None = None,
 ):
     system = SYSTEM_PROMPT.format(date=date.today().isoformat())
+
+    _personality = load_config().get("personality", {})
+    if _personality:
+        system += PERSONALITY_INSTRUCTIONS.format(
+            tone=_personality.get("default_tone", "neutral"),
+            traits=", ".join(_personality.get("traits", [])),
+            rules="\n".join(f"- {r}" for r in _personality.get("rules", [])),
+        )
+    system += PROJECT_INSTRUCTIONS
 
     if kg:
         keywords = extract_keywords(user_text)
@@ -158,6 +195,11 @@ async def _run_engine(
     if content:
         conv.add_message("assistant", content)
         await _send_json(ws, {"type": "token", "content": content})
+
+    if kg and conv.current_id:
+        conv_data = get_store().get_conversation(conv.current_id)
+        if conv_data:
+            kg.sync_conversation(conv_data)
 
     await _send_json(ws, {"type": "done"})
 

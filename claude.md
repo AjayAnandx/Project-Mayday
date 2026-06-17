@@ -262,8 +262,10 @@ yellow:  '#eab308'
 - [x] **Knowledge Graph Brain**: Persistent JSON-backed graph memory with typed nodes/edges, 4 LLM memory tools, auto-sync from todo/event CRUD, auto-query context injection, 4th "Brain" tab with Cytoscape.js visualization
 - [x] **Per-day conversation files**: Conversations migrated from monolithic `data.json` to per-day files under `conversations/` with `index.json` for fast lookup, `?date=` filter on API, `get_conversations` LLM tool
 - [x] **Selenium MCP server**: Replaced disabled Playwright with `mcp-server-selenium` (18 browser tools). Patched `normal_chrome.py` for Windows Chrome path. Verified navigate + screenshot + page description works.
-- [ ] Screenshot management system: ScreenshotStore (index.json CRUD), REST list/delete, 3 LLM tools (`list_screenshots`, `get_screenshot`, `delete_screenshot`), image rendering in chat tool bubbles via `image_url` field
+- [x] **Screenshot management system**: ScreenshotStore (index.json CRUD), REST list/delete, 3 LLM tools (`list_screenshots`, `get_screenshot`, `delete_screenshot`), image rendering in chat tool bubbles via `image_url` field
 - [ ] Phase 7: Settings dialog (model selection, API config, voice settings)
+- [x] **Personality system**: Config-driven personality in `config.yaml` (`personality:` section with tone, traits, rules). LLM auto-learns user preferences via `remember("Mayday", "style_feedback", ...)` with `node_type="personality"`. System prompt injects personality + learning instructions on each turn.
+- [x] **Project tracking + context resume**: LLM stores ALL project conversations via `remember(relation="has_conversation", node_type="project")`. New `get_conversation_history` tool loads past conversations by ID. On resume, LLM recalls project → loads ALL linked conversations → presents full context.
 
 ## How to Run
 
@@ -313,6 +315,8 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 | `conversation` | `#737373` (gray) | Rounded rectangle |
 | `tag` | `#f97316` (orange) | Diamond |
 | `date` | `#525252` (dark gray) | Ellipse |
+| `project` | `#f59e0b` (amber) | Rounded rectangle |
+| `personality` | `#ec4899` (pink) | Ellipse |
 
 ## Relevant Files
 - `frontend/tailwind.config.js`: Black/green color palette

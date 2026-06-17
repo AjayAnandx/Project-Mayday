@@ -23,6 +23,22 @@ def get_conversations_from_store(date: str) -> str:
     return "\n".join(lines)
 
 
+def get_conversation_history_from_store(conversation_id: str, limit: int = 20) -> str:
+    store = get_store()
+    conv = store.get_conversation(conversation_id)
+    if not conv:
+        return f"Conversation not found: {conversation_id}"
+    msgs = store.get_recent_messages(conversation_id, limit=limit)
+    lines = [f"=== Previous Session ==="]
+    lines.append(f"Title: {conv.get('title', 'Untitled')}")
+    lines.append(f"ID: {conversation_id}")
+    lines.append(f"Messages: {len(msgs)}")
+    lines.append("")
+    for m in msgs:
+        lines.append(f"{m['role']}: {m['content']}")
+    return "\n".join(lines)
+
+
 LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
@@ -180,6 +196,7 @@ LOCAL_TOOL_DEFINITIONS = [
                     "relation": {"type": "string", "description": "Relationship type (e.g. prefers, mentions, relates_to)"},
                     "value": {"type": "string", "description": "The object value or entity"},
                     "context": {"type": "string", "description": "Optional context for disambiguation"},
+                    "node_type": {"type": "string", "description": "Node type for the entity (concept, personality, project, tag, date). Default: concept"},
                 },
                 "required": ["entity", "relation", "value"],
             },
@@ -246,6 +263,27 @@ LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "get_conversation_history",
+            "description": "Retrieve full conversation history by conversation ID to recall past discussions and context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "conversation_id": {
+                        "type": "string",
+                        "description": "The conversation ID to retrieve (use recall_entity on a project to find linked conversation IDs).",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of recent messages to return (default 20).",
+                    },
+                },
+                "required": ["conversation_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_screenshots",
             "description": "List all stored screenshots with timestamps. Use this to find past screenshots to show the user.",
             "parameters": {
@@ -299,6 +337,7 @@ FUNCTION_MAP = {
     "recall_entity": recall_entity,
     "forget": forget,
     "get_conversations": get_conversations_from_store,
+    "get_conversation_history": get_conversation_history_from_store,
     "list_screenshots": list_screenshots,
     "get_screenshot": get_screenshot_info,
     "delete_screenshot": delete_screenshot_file,

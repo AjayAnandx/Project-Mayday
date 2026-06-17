@@ -87,6 +87,196 @@
         "end_time": "2026-06-30T10:00:00",
         "all_day": false
       }
+    },
+    {
+      "id": "12de4103ee6f",
+      "type": "concept",
+      "label": "groceries",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
+      "id": "bbc7a7804491",
+      "type": "concept",
+      "label": "started",
+      "properties": {}
+    },
+    {
+      "id": "dabf26b6edb7",
+      "type": "concept",
+      "label": "less formal, more casual, simpler language",
+      "properties": {}
+    },
+    {
+      "id": "dea983737372",
+      "type": "concept",
+      "label": "current_conversation_id",
+      "properties": {}
+    },
+    {
+      "id": "d7aacb7ac9f8",
+      "type": "concept",
+      "label": "Tracks user tasks",
+      "properties": {}
+    },
+    {
+      "id": "694e32a83407",
+      "type": "concept",
+      "label": "created User model",
+      "properties": {}
+    },
+    {
+      "id": "f041c3fc016d",
+      "type": "concept",
+      "label": "implement JWT auth",
+      "properties": {}
+    },
+    {
+      "id": "38a758a17833",
+      "type": "concept",
+      "label": "fb1d53b2bb58",
+      "properties": {}
+    },
+    {
+      "id": "318ff19ab67d",
+      "type": "conversation",
+      "label": "fb1d53b2bb58",
+      "properties": {
+        "conv_id": "fb1d53b2bb58",
+        "title": "E2E Personality + Project Test",
+        "message_count": 0
+      }
+    },
+    {
+      "id": "39b5c35789ad",
+      "type": "concept",
+      "label": "too formal; be more casual and use simpler language",
+      "properties": {}
+    },
+    {
+      "id": "3bf7762f89c0",
+      "type": "concept",
+      "label": "84c8704a47b8",
+      "properties": {}
+    },
+    {
+      "id": "beaa6af5bc6e",
+      "type": "conversation",
+      "label": "84c8704a47b8",
+      "properties": {
+        "conv_id": "84c8704a47b8",
+        "title": "E2E Personality + Project Test",
+        "message_count": 0
+      }
+    },
+    {
+      "id": "e6ecbaa427d9",
+      "type": "conversation",
+      "label": "9fe54933a931",
+      "properties": {
+        "conv_id": "9fe54933a931",
+        "title": "hi",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "f5944567ad0d",
+      "type": "project",
+      "label": "project:AGI Personal Assistant",
+      "properties": {
+        "context": ""
+      }
+    },
+    {
+      "id": "d3663ac83128",
+      "type": "concept",
+      "label": "Define core architecture and feature set",
+      "properties": {}
+    },
+    {
+      "id": "855e5b0d84ac",
+      "type": "conversation",
+      "label": "547106134bb5",
+      "properties": {
+        "conv_id": "547106134bb5",
+        "title": "hi , i need to create a project of AGI version of personal a",
+        "message_count": 5
+      }
+    },
+    {
+      "id": "30ef9cb96c48",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
+      "id": "7ea3d899771a",
+      "type": "conversation",
+      "label": "bc07ff4b91f3",
+      "properties": {
+        "conv_id": "bc07ff4b91f3",
+        "title": "list me the project we are working on",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "df0f2fed701d",
+      "type": "conversation",
+      "label": "dc1a6189c3af",
+      "properties": {
+        "conv_id": "dc1a6189c3af",
+        "title": "get me the info of agi project",
+        "message_count": 29
+      }
+    },
+    {
+      "id": "08b930f520c8",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
+      "id": "7bcebcaf2315",
+      "type": "concept",
+      "label": "active_planning",
+      "properties": {}
+    },
+    {
+      "id": "3098e0ecbd17",
+      "type": "concept",
+      "label": "Agentic Workflow (Task Planner + Sub-agents), Self-Coding Sandbox, and Multimodal Context (Screen/Audio sensing)",
+      "properties": {}
+    },
+    {
+      "id": "bd55984b6f99",
+      "type": "concept",
+      "label": "Define a 'Day 1' MVP feature set based on Agentic AI principles",
+      "properties": {}
+    },
+    {
+      "id": "a0592e5be575",
+      "type": "concept",
+      "label": "Brainstormed AGI capabilities and gathered latest industry trends (Agentic AI, Multi-agent systems)",
+      "properties": {}
+    },
+    {
+      "id": "44a49c998d38",
+      "type": "project",
+      "label": "project:Personal Development",
+      "properties": {
+        "context": ""
+      }
+    },
+    {
+      "id": "10c2c193757a",
+      "type": "concept",
+      "label": "Define core goals and focus areas (e.g., health, skill acquisition, mindset)",
+      "properties": {}
     }
   ],
   "edges": [
@@ -109,6 +299,76 @@
       "source": "c9db7878d280",
       "target": "353dbffa681b",
       "relation": "prefers",
+      "properties": {}
+    },
+    {
+      "id": "7f5a06ac557f",
+      "source": "f5944567ad0d",
+      "target": "bbc7a7804491",
+      "relation": "status",
+      "properties": {}
+    },
+    {
+      "id": "56239ec2fc1a",
+      "source": "f5944567ad0d",
+      "target": "dea983737372",
+      "relation": "has_conversation",
+      "properties": {}
+    },
+    {
+      "id": "6695d7e22725",
+      "source": "f5944567ad0d",
+      "target": "d3663ac83128",
+      "relation": "next_task",
+      "properties": {}
+    },
+    {
+      "id": "efe24b94bffa",
+      "source": "f5944567ad0d",
+      "target": "7bcebcaf2315",
+      "relation": "status",
+      "properties": {}
+    },
+    {
+      "id": "2dc19b418e8d",
+      "source": "f5944567ad0d",
+      "target": "3098e0ecbd17",
+      "relation": "core_architecture",
+      "properties": {}
+    },
+    {
+      "id": "f0a3d0a58161",
+      "source": "f5944567ad0d",
+      "target": "bd55984b6f99",
+      "relation": "next_task",
+      "properties": {}
+    },
+    {
+      "id": "c312020aaf28",
+      "source": "f5944567ad0d",
+      "target": "a0592e5be575",
+      "relation": "last_task",
+      "properties": {}
+    },
+    {
+      "id": "c65cf16d8c24",
+      "source": "44a49c998d38",
+      "target": "bbc7a7804491",
+      "relation": "status",
+      "properties": {}
+    },
+    {
+      "id": "e89803c1358b",
+      "source": "44a49c998d38",
+      "target": "38a758a17833",
+      "relation": "has_conversation",
+      "properties": {}
+    },
+    {
+      "id": "d0d1641e6fba",
+      "source": "44a49c998d38",
+      "target": "10c2c193757a",
+      "relation": "next_task",
       "properties": {}
     }
   ]
