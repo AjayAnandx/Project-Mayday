@@ -87,6 +87,7 @@ CORE_TOOL_NAMES = {
     "get_conversations", "get_conversation_history",
     "list_screenshots", "get_screenshot", "delete_screenshot",
     "query_operations",
+    "unified_search",
 }
 
 GIT_KEYWORDS = re.compile(r"\b(git|commit|branch|diff|log|status|staged|unstaged|push|pull|clone)\b", re.I)

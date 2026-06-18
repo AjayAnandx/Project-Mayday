@@ -721,126 +721,86 @@ New session: remember("project:AGI Personal Assistant", ...)
 ### Goal
 Make Mayday useful for real daily workflows with recurring tasks, cross-type search, and data portability.
 
-### Status — IN PROGRESS
+### Status — 3a COMPLETED, 3b COMPLETED, 3c PLANNED
 
 ---
 
-### 3a. Recurring Tasks & Events
+### 3a. Recurring Tasks & Events — COMPLETED
 
-#### Data Model
-Add `recurrence` field to both todos and events:
-
-```typescript
-recurrence?: {
-  pattern: 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'yearly'
-  interval?: number     // every N (default 1)
-  end_date?: string     // YYYY-MM-DD, optional
-  count?: number        // max occurrences, optional
-}
-```
-
-#### Backend Changes
-
-| File | Changes |
-|------|---------|
-| `backend/core/data_store.py` | Add `recurrence` to `create_todo`, `update_todo`, `create_event`, `update_event`; add `expand_recurring(entity, start, end)` that generates instances for a date range using simple date arithmetic |
-| `backend/functions/todo_functions.py` | Pass `recurrence` through in `create_todo`/`update_todo` |
-| `backend/functions/calendar_functions.py` | Pass `recurrence` through; `list_events` auto-expands recurring events into the requested date range |
-| `backend/api/events.py` | `GET /api/events?start_date&end_date` — expand recurring instances into the range on-the-fly (after initial fetch from store) |
-| `backend/api/todos.py` | No expansion needed (todos show as-is) |
-
-#### Frontend Changes
-
-| File | Changes |
-|------|---------|
-| `frontend/src/types/todo.ts` | Add `recurrence?: RecurrenceRule` interface |
-| `frontend/src/types/event.ts` | Same |
-| `frontend/src/components/todos/TodoDialog.tsx` | Add recurrence section: `<select>` for pattern (none/daily/weekly/biweekly/monthly/yearly) + optional interval/end-date inputs |
-| `frontend/src/components/todos/TodoItem.tsx` | Show recurrence badge (green pill: "weekly") |
-| `frontend/src/components/calendar/EventDialog.tsx` | Same recurrence section |
-| `frontend/src/components/calendar/DayCell.tsx` | Show recurring indicator (ring or dot badge) |
-| `frontend/src/components/calendar/MonthGrid.tsx` | Display expanded instances with `recurring` flag |
-
-#### Expansion Logic (`data_store.py`)
-
-```python
-def expand_recurring(self, entity: dict, start_date: str, end_date: str) -> list[dict]:
-    rec = entity.get("recurrence")
-    if not rec:
-        return [entity]
-    pattern = rec["pattern"]
-    interval = rec.get("interval", 1)
-    end = rec.get("end_date") or end_date
-    instances = []
-    # Generate instances within [start_date, end_date] using pattern
-    # For weekly: add 7*interval days
-    # For monthly: add interval months
-    # Each instance copies entity fields + adjusts start_time/end_time
-    return instances
-```
+All 16 items fully implemented. Recurrence supports `daily`/`weekly`/`biweekly`/`monthly`/`yearly` patterns with optional interval, end date, and max count. Events auto-expand into date ranges via `GET /api/events?start_date&end_date`. Both dialogs have recurrence UI, TodoItem shows a green `Repeat` badge, DayCell shows a `Repeat` icon for recurring events. Expansion logic in `data_store.py` has a 500-instance safety cap and handles both `start_time`/`end_time` (events) and `due_date` (todos).
 
 ---
 
-### 3b. Unified Search
+### 3b. Unified Search — COMPLETED
 
-#### New Backend Endpoint
+#### What It Is
+
+Unified Search is a single entry point — both as a REST endpoint and an LLM tool — that lets you search across **every type of data** Mayday stores at once: todos, events, conversations, memory graph nodes, and operation history. Instead of having to know which panel to look in ("was that a todo or an event?"), you type one query and get categorized results from everything.
 
 ```
-GET /api/search?q=<query>&limit=20
+GET /api/search?q="weekly standup"
+→ {
+    "todos": [{"id":"abc","title":"Prepare weekly standup slides","snippet":"...slides for weekly standup..."}],
+    "events": [{"id":"def","title":"Weekly standup","snippet":"recurring Mon 9am"}],
+    "conversations": [{"id":"ghi","title":"Standup planning","date":"2026-06-17","snippet":"...talked about standup format..."}],
+    "graph_nodes": [{"id":"jkl","label":"weekly standup","type":"event","snippet":"relates_to: team meetings"}],
+    "operations": [{"id":"mno","action":"create","entity_type":"event","entity_name":"Weekly standup","timestamp":"2026-06-01"}]
+  }
 ```
 
-Response:
-```json
-{
-  "todos": [{"id", "title", "snippet", "matched_field"}],
-  "events": [...],
-  "conversations": [{"id", "title", "date", "snippet"}],
-  "graph_nodes": [{"id", "label", "type", "snippet"}],
-  "operations": [{"id", "action", "entity_type", "entity_name", "timestamp"}]
-}
-```
+#### How It Works
 
-#### Backend Changes
-
-| File | Changes |
-|------|---------|
-| `backend/api/search.py` | **CREATE** — New router; queries all 5 stores, merges results ranked by relevance, returns categorized JSON |
-| `backend/main.py` | Import + register search router |
-| `backend/assistant/function_registry.py` | Add `unified_search(query)` LLM tool definition + dispatch entry |
-| `backend/api/chat.py` | Add `"unified_search"` to `CORE_TOOL_NAMES` |
-
-#### Search Query Mapping
+The backend creates a new route at `GET /api/search?q=<query>&limit=20`. On each request, it fans out to all 5 data stores in parallel:
 
 | Data Source | What's searched | Method |
 |-------------|-----------------|--------|
-| Todos | title, description | `get_store().list_todos(query=q)` |
-| Events | title, description | `get_store().list_events(query=q)` |
-| Conversations | title (index) + message text | Scan daily files, search message contents |
-| Graph nodes | label, properties | `get_graph().search(q)` |
-| Operations | entity_name, user_message | `get_operation_log().query(query=q)` |
+| Todos | title, description | `get_store().list_todos(query=q)` — existing in-memory filter |
+| Events | title, description | `get_store().list_events(query=q)` — existing in-memory filter |
+| Conversations | title + message text | Scan per-day files under `conversations/`, search message `content` fields — O(n) over days |
+| Graph nodes | label, properties | `get_graph().search(q)` — existing label/property fuzzy match |
+| Operations | entity_name, user_message | `get_operation_log().query(query=q)` — existing full-text index O(log n) |
 
-#### Frontend Changes
+Each source returns up to `limit` results. The response is a single JSON object with 5 categorized arrays, so the LLM or frontend can display results grouped by type.
 
-| File | Changes |
-|------|---------|
-| `frontend/src/services/api.ts` | Add `searchAll(query)` function |
-| `frontend/src/hooks/useSearch.ts` | **CREATE** — search hook with 300ms debounce, abort controller |
-| `frontend/src/components/search/SearchOverlay.tsx` | **CREATE** — modal overlay with search input + categorized results; click navigates to correct panel |
-| `frontend/src/components/layout/Sidebar.tsx` | Add search icon button; register Ctrl+K global listener |
-| `frontend/src/App.tsx` | Render `SearchOverlay` when active |
+The LLM tool `unified_search(query)` is added to `CORE_TOOL_NAMES` so it's always available in every conversation turn. When a user asks "find that thing about the API" or "what did I do with X", the LLM calls unified_search instead of guessing which store to query.
 
-#### LLM Tool
+On the frontend, a new SearchOverlay component is triggered by **Ctrl+K** (or a search icon in the sidebar). It shows a focused input with categorized results in a modal overlay. Clicking a result navigates to the relevant panel (Todos tab for a todo result, Calendar tab for an event, etc.). A custom `useSearch` hook handles 300ms debounce and abort controller for fast typing.
 
-```python
-{
-    "name": "unified_search",
-    "description": "Search across all Mayday data (todos, events, conversations, memories, operations). Use when the user asks a broad question like 'find that thing about the API' or 'what did I do with X'.",
-    "parameters": {
-        "query": {"type": "string", "description": "Search query"}
-    },
-    "required": ["query"]
-}
-```
+#### What Problem It Solves
+
+Currently, if a user types "find the meeting about the API design", the LLM has to:
+1. Guess whether it's a todo, event, or conversation
+2. Call the right specific tool (`list_todos`, `list_events`, `get_conversations`, `recall`, or `query_operations`)
+3. Call additional tools if the first guess was wrong
+
+This is slow, unreliable, and wastes tokens. The user can't search across data types themselves either — they'd have to switch between the Todos, Calendar, Brain, and Chat panels manually.
+
+Unified Search solves both problems:
+- **For the LLM**: One tool call replaces 5 potential guesses. The LLM gets a complete picture in a single round trip.
+- **For the user**: A Ctrl+K search bar that finds anything from anywhere in Mayday.
+
+#### Expected Effect
+
+| Before | After |
+|--------|-------|
+| LLM needs 2-4 tool calls to find cross-type info | LLM gets it in 1 call |
+| User must manually scan 3-4 panels to find something | Ctrl+K finds it instantly |
+| Conversations are only searchable by date | Full-text search across all messages |
+| Different search logic scattered across 5 stores | Centralized `/api/search` endpoint |
+| No way to ask "what did I do yesterday?" in one query | `unified_search("yesterday")` returns: created todos, deleted events, conversations, operations |
+
+#### Why This Is High Impact
+
+Unified Search is the **single most impactful feature** for making Mayday feel intelligent rather than mechanical. It transforms the LLM from a tool that can only act on known data into one that can **find** data it doesn't know about. For the user, it eliminates the friction of remembering where something was stored. It's the difference between saying "I can't find it" and pressing Ctrl+K.
+
+#### Implementation Cost
+
+- 1 new file: `backend/api/search.py` (~80 lines)
+- 1 new file: `frontend/src/hooks/useSearch.ts` (~15 lines)
+- 1 new file: `frontend/src/components/search/SearchOverlay.tsx` (~100 lines)
+- 5 existing files modified with 1-3 lines each
+- All searches use existing store methods — no new indexing infrastructure required
+- The conversation text search is the only O(n) scan (over per-day files), but capped at recent days or a configured max
 
 ---
 

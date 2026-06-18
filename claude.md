@@ -33,7 +33,7 @@ Desktop AI personal assistant with:
 - Vite proxies `/api` → `localhost:8771` and `/ws` → `ws://localhost:8771`
 - Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
-- 21 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status`
+- 22 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status` + `unified_search`
 - MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`)
 - `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
 - `mcp_server_git` — 12 tools for local git operations (status, log, diff, commit, branch)
@@ -64,6 +64,7 @@ mayday/
 │   │   ├── todos.py                  # Todo CRUD routes
 │   │   ├── events.py                 # Event CRUD routes
 │   │   ├── conversations.py          # Conversation routes
+│   │   ├── search.py                 # Unified search across all stores
 │   │   └── chat.py                   # WebSocket endpoint (streaming)
 │   ├── core/
 │   │   ├── data_store.py             # JSON persistence (thread-safe)
@@ -124,11 +125,14 @@ mayday/
 │       │   ├── BrainPanel.tsx       # Main graph page with search bar
 │       │   ├── GraphCanvas.tsx      # Cytoscape.js force-directed graph
 │       │   └── NodeDetail.tsx       # Side panel for selected node info
+│       ├── search/
+│       │   └── SearchOverlay.tsx    # Ctrl+K search modal with categorized results
 │       ├── hooks/
 │       │   ├── useChat.ts           # WebSocket hook (token streaming)
 │       │   ├── useTodos.ts          # REST CRUD with search/filter
 │       │   ├── useEvents.ts         # REST CRUD
 │       │   ├── useGraph.ts          # Memory graph data fetching
+│       │   ├── useSearch.ts         # Debounced unified search hook
 │       │   └── use-auto-resize-textarea.ts
 │       ├── services/
 │       │   ├── api.ts               # Typed REST client
@@ -139,7 +143,8 @@ mayday/
 │           ├── todo.ts
 │           ├── event.ts
 │           ├── conversation.ts
-│           └── chat.ts
+│           ├── chat.ts
+│           └── search.ts
 │
 ├── electron/                         # Electron main process
 │   ├── main.ts                      # BrowserWindow + spawn uvicorn
@@ -163,9 +168,9 @@ mayday/
 └── CLAUDE.md                        # This file
 ```
 
-## API Endpoints (22 total)
+## API Endpoints (23 total)
 
-### REST (23 total)
+### REST (24 total)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Health check |
@@ -192,6 +197,7 @@ mayday/
 | `DELETE` | `/api/memory/graph/node/:id` | Delete node + edges |
 | `GET` | `/api/memory/stats` | Node/edge counts |
 | `POST` | `/api/memory/repair` | One-time cleanup of junk nodes + stale projects |
+| `GET` | `/api/search` | Unified search across todos, events, conversations, graph, operations `?q=&limit=` |
 
 ### WebSocket
 | Path | Description |
@@ -298,6 +304,7 @@ yellow:  '#eab308'
 - [x] **Bug fix: silent second LLM call**: Second call passed `tools=filtered_tools`, allowing LLM to call another tool instead of generating text. When LLM returned only tool_calls (no content), user saw tool_call bubble but no natural language response. Fixed by removing tools from second call (`tools=[]`).
 - [x] **70 passing tests** (30 operation log + 40 memory graph) covering record, query, stats, full-text, persistence, concurrency, dedup, tombstone, repair, clean graph, prefix matching
 - [x] **Duplicate detection for todos & events**: LLM create_todo/create_event checks for existing items with same title (case-insensitive) before creating. Todo dedup narrows by due_date; event dedup narrows by same day. `force=True` bypasses. Frontend dialogs show inline yellow warning banner with debounced API check. `GET /api/todos/check-duplicates` and `GET /api/events/check-duplicates` endpoints.
+- [x] **Unified Search**: `GET /api/search?q=&limit=` endpoint searches all 5 stores (todos, events, conversations, graph nodes, operations) simultaneously. LLM tool `unified_search(query)` replaces 2-4 guessing game tool calls with one. Frontend Ctrl+K modal overlay with categorized results and click-to-navigate.
 
 ## How to Run
 
@@ -374,6 +381,10 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - `backend/memory/knowledge_graph.py`: KnowledgeGraph singleton (JSON persistence, thread-safe)
 - `backend/memory/memory_tools.py`: 5 LLM functions for memory (remember, recall, recall_entity, forget, delete_entity)
 - `backend/api/memory.py`: REST API for graph visualization (GET/DELETE nodes)
+- `backend/api/search.py`: Unified search across all 5 data stores
 - `frontend/src/components/brain/BrainPanel.tsx`: Graph page with search/refresh
 - `frontend/src/components/brain/GraphCanvas.tsx`: Cytoscape.js force-directed graph canvas
 - `frontend/src/components/brain/NodeDetail.tsx`: Node detail side panel with connections
+- `frontend/src/components/search/SearchOverlay.tsx`: Ctrl+K search modal with categorized results
+- `frontend/src/hooks/useSearch.ts`: Debounced unified search hook with abort controller
+- `frontend/src/types/search.ts`: TypeScript interfaces for search results

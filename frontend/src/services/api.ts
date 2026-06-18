@@ -1,6 +1,7 @@
 import type { Todo, TodoCreate, TodoUpdate } from '../types/todo'
 import type { Event, EventCreate, EventUpdate } from '../types/event'
 import type { GraphData, GraphNode } from '../types/graph'
+import type { SearchResults } from '../types/search'
 
 const BASE = '/api'
 
@@ -58,4 +59,8 @@ export const api = {
 
   fetchNode: (id: string) =>
     request<{ node: GraphNode; subgraph: GraphData }>(`/memory/graph/node/${id}`),
+
+  // Search
+  searchAll: (q: string) =>
+    request<SearchResults>(`/search?q=${encodeURIComponent(q)}&limit=20`),
 }

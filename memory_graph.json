@@ -982,6 +982,16 @@
         "all_day": false,
         "recurrence": null
       }
+    },
+    {
+      "id": "6b534cfad5f3",
+      "type": "conversation",
+      "label": "6c2661d3edd1",
+      "properties": {
+        "conv_id": "6c2661d3edd1",
+        "title": "what did I do with groceries",
+        "message_count": 6
+      }
     }
   ],
   "edges": [

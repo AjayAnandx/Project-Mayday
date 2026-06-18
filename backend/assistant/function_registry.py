@@ -83,6 +83,25 @@ def query_operations_from_log(action: str | None = None, entity_type: str | None
     return "\n".join(lines)
 
 
+def unified_search(query: str) -> str:
+    from backend.api.search import unified_search as search_api
+    result = search_api(q=query, limit=10)
+    parts = []
+    if result["todos"]:
+        parts.append("📋 Todos:\n" + "\n".join(f"  - {t['title']} ({t['id']})" for t in result["todos"]))
+    if result["events"]:
+        parts.append("📅 Events:\n" + "\n".join(f"  - {e['title']} ({e['snippet']})" for e in result["events"]))
+    if result["conversations"]:
+        parts.append("💬 Conversations:\n" + "\n".join(f"  - {c['title']} ({c['date']})" for c in result["conversations"]))
+    if result["graph_nodes"]:
+        parts.append("🧠 Memories:\n" + "\n".join(f"  - [{n['type']}] {n['label']}" for n in result["graph_nodes"]))
+    if result["operations"]:
+        parts.append("📜 Operations:\n" + "\n".join(f"  - [{o['timestamp'][:10]}] {o['action']} {o['entity_type']} '{o['entity_name']}'" for o in result["operations"]))
+    if not parts:
+        return f"No results found for: {query}"
+    return "\n\n".join(parts)
+
+
 LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
@@ -452,6 +471,20 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "unified_search",
+            "description": "Search across all Mayday data (todos, events, conversations, memories, operations) at once. Use this when the user asks a broad question like 'find that thing about the API' or 'what did I do with X' instead of guessing which specific store to search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 FUNCTION_MAP = {
@@ -476,6 +509,7 @@ FUNCTION_MAP = {
     "get_screenshot": get_screenshot_info,
     "delete_screenshot": delete_screenshot_file,
     "query_operations": query_operations_from_log,
+    "unified_search": unified_search,
 }
 
 
