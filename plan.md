@@ -517,127 +517,142 @@ take_screenshot → selenium saves to project root
 
 ---
 
-## Operation Log (Historical Activity Tracking) — Planned
+## Operation Log (Historical Activity Tracking) — Implementation Complete
 
 ### Goal
 Give Mayday awareness of past CRUD operations — what was created, updated, or deleted, and when — so the LLM can answer questions like "Did I delete any project yesterday?" or "How many meetings did I cancel this month?"
 
-### Status — PLANNED (not yet implemented)
+### Status — COMPLETED
 
-### Design
+### Architecture
 
-New append-only `operations.json` that records every create/update/delete across todos, events, conversations, and memory entities. The LLM gets a `query_operations()` tool to search it.
+Per-month indexed file storage (`operations/YYYY-MM.json`) with 5 in-memory indexes for fast queries. Operations recorded from both REST API endpoints and LLM tool dispatch paths.
+
+```
+record(action, entity_type, entity_name, ...)
+    │
+    ├── append to operations/YYYY-MM.json
+    │
+    └── update 5 in-memory indexes:
+         ├── _by_id: dict[str, dict]             # O(1) lookup
+         ├── _by_action: dict[str, list]          # action→ops
+         ├── _by_type: dict[str, list]            # entity_type→ops
+         ├── _by_date: sorted list + bisect       # binary search O(log n)
+         └── _text_idx: dict[str, set]            # inverted index for full-text
+```
 
 ### New File
 
 #### CREATE: `backend/core/operation_log.py`
 
-```python
-class OperationLog:
-    """Append-only log of all CRUD operations."""
-    _path: Path  # -> operations.json
-    _lock: RLock
-    _ops: list[dict]
+- `OperationLog` class (singleton, thread-safe via RLock)
+- Lazy month loading — only loads current month + queried months
+- `record(action, entity_type, entity_id, entity_name, details, user_message)` → writes to month file + updates all indexes
+- `query(action, entity_type, date_from, date_to, query, limit=20)` → O(log n) + O(1) per filter
+- `get_stats(action, entity_type)` → counts
+- In-memory index persisted to `operations/index.json` (months list + op count)
+- On startup: loads index, scans existing month files lazily
 
-    def record(self, action: str, entity_type: str, entity_id: str,
-               entity_name: str, details: dict = None, user_message: str = "")
+#### CREATE: `backend/test_operation_log.py`
 
-    def query(self, action=None, entity_type=None,
-              date_from=None, date_to=None, query=None, limit=20) -> list[dict]
+- 30 tests covering:
+  - `record`: creates entry, indexes by action/type, full-text, writes to file
+  - `query`: empty, all, filter action, filter type, action+type, full-text, limit, date range, newest-first
+  - `stats`: empty, counts, filtered
+  - `full_text_index`: tokenize (empty, basic, case, punctuation)
+  - `persistence`: saves/loads index, tracks months
+  - `edge_cases`: no details, nonexistent action/type/text, stats with nonexistent filter
+  - `concurrency`: concurrent record (thread-safe)
+  - `singleton`: returns same instance
 
-    def get_stats(self, action=None, entity_type=None) -> str
-```
-
-### Data Structure
+### Data Structure (per month file: `operations/2026-06.json`)
 
 ```json
-{
-  "operations": [
-    {
-      "id": "op_a1b2c3d4",
-      "timestamp": "2026-06-17T14:30:00",
-      "action": "delete",
-      "entity_type": "todo",
-      "entity_id": "660f0d2c2b9a",
-      "entity_name": "Buy groceries",
-      "details": {"priority": 1, "due_date": "2026-06-20"},
-      "user_message": "delete the groceries todo"
-    }
-  ]
-}
+[
+  {
+    "id": "op_a1b2c3d4",
+    "timestamp": "2026-06-17T14:30:00",
+    "action": "delete",
+    "entity_type": "todo",
+    "entity_id": "660f0d2c2b9a",
+    "entity_name": "Buy groceries",
+    "details": {"priority": 1},
+    "user_message": "delete the groceries todo"
+  }
+]
 ```
 
-### Record at Every CRUD Point
+### Index File (`operations/index.json`)
 
-| File | Action |
-|------|--------|
-| `backend/api/todos.py` | `POST` create, `PUT` update, `DELETE` delete |
-| `backend/api/events.py` | `POST` create, `PUT` update, `DELETE` delete |
-| `backend/api/conversations.py` | `POST` create, `DELETE` delete |
-| `backend/memory/memory_tools.py` | `remember()`, `delete_entity()`, `forget()` redirect |
-| `backend/api/chat.py` | LLM tool dispatch results |
+```json
+{"months": ["2026-06"], "total": 36}
+```
+
+### Recorded at Every CRUD Point
+
+| File | Action | Path |
+|------|--------|------|
+| `backend/api/todos.py` | POST/PUT/DELETE | REST API |
+| `backend/api/events.py` | POST/PUT/DELETE | REST API |
+| `backend/api/conversations.py` | POST/DELETE | REST API |
+| `backend/functions/todo_functions.py` | create/update/delete | LLM tool dispatch |
+| `backend/functions/calendar_functions.py` | create/update/delete | LLM tool dispatch |
+| `backend/memory/memory_tools.py` | remember, delete_entity, forget, set_status | LLM tool dispatch |
 
 ### New LLM Tool
 
 ```python
 {
     "name": "query_operations",
-    "description": "Search the history of all create/update/delete operations across todos, events, projects, and memory. Use when the user asks about past activity like deleted items, cancellations, or changes.",
+    "description": "Search the history of all create/update/delete operations across todos, events, conversations, projects, and memory entities. Use when the user asks about past activity like deleted items, cancellations, or changes.",
     "parameters": {
         "action": {"type": "string", "enum": ["create", "update", "delete"], "description": "Filter by action type (optional)"},
-        "entity_type": {"type": "string", "description": "Filter by entity type: todo, event, project, concept (optional)"},
+        "entity_type": {"type": "string", "description": "Filter by entity type: todo, event, conversation, project, concept (optional)"},
         "date_from": {"type": "string", "description": "Start date YYYY-MM-DD (optional)"},
         "date_to": {"type": "string", "description": "End date YYYY-MM-DD (optional)"},
-        "query": {"type": "string", "description": "Full-text search in entity name, details, or user message (optional)"},
+        "query": {"type": "string", "description": "Full-text search in entity name or user message (optional)"},
     }
 }
 ```
 
 ### System Prompt Changes (`chat.py`)
 
-- Add to `### Auto-Learning` / new section:
-  - "When the user asks about past activity (deleted/canceled/changed items), call `query_operations()` to search the operation log."
-  - "Use `action='delete'` for deletions/cancellations, `action='update'` for modifications."
+- `CORE_TOOL_NAMES` includes `"query_operations"` — always available, never filtered
+- Auto-context injection (line 234-246): when user message matches `delete|cancel|remov|yesterday|last week|this month|...`, injects last 10 operations into system prompt
 
-### Auto-Context Injection (`chat.py`)
+### Bug Fixes Applied
 
-- When user message keywords include `delete`, `cancel`, `remov`, `yesterday`, `last week`, `this month`:
-  - Auto-inject recent `delete` operations from the log into the system prompt
+| Bug | Fix |
+|-----|-----|
+| Recording only in REST endpoints — LLM tool calls bypassed | Added `get_operation_log().record()` to `todo_functions.py` and `calendar_functions.py` |
+| Second LLM call passed `tools=filtered_tools` — LLM called another tool instead of generating text, content returned `None` | Changed second call to `tools=[]` so LLM can only generate text |
 
-### Wire Into Function Registry
+### Dispatch Function (`function_registry.py`)
 
-- `backend/assistant/function_registry.py`
-  - Import `query_operations_from_log`
-  - Add tool definition to `LOCAL_TOOL_DEFINITIONS`
-  - Add to `FUNCTION_MAP`
+```python
+FUNCTION_MAP["query_operations"] = query_operations_from_log
+```
 
-### Files Modified
+`query_operations_from_log(action, entity_type, date_from, date_to, query)` calls `OperationLog.query()` and formats results.
 
-| File | Changes |
-|------|---------|
-| `backend/core/operation_log.py` | **CREATE** — `OperationLog` class |
-| `backend/api/todos.py` | Record after every CRUD operation |
-| `backend/api/events.py` | Record after every CRUD operation |
-| `backend/api/conversations.py` | Record on create and delete |
-| `backend/memory/memory_tools.py` | Record on remember, delete_entity, forget |
-| `backend/api/chat.py` | Auto-context injection for historical keywords |
-| `backend/assistant/function_registry.py` | Add `query_operations` tool |
-| `backend/test_operation_log.py` | **CREATE** — Tests for record, query, stats |
+### Tool Stratification
+
+`query_operations` is in `CORE_TOOL_NAMES` — always sent to the LLM in every conversation turn. Not in `SKIP_SECOND_CALL` — LLM gets a second chance to synthesize the query results into natural language.
 
 ### Example Queries
 
 ```
-User: "Did I delete any project yesterday?"
-  → LLM calls query_operations(action="delete", entity_type="project", date_from="2026-06-16")
-  → "Yes, you deleted 'AGI Personal Assistant' and 'Personal Development' yesterday."
-
 User: "How many meetings did I cancel this month?"
   → LLM calls query_operations(action="delete", entity_type="event", date_from="2026-06-01")
-  → "You canceled 2 meetings this month: 'Team standup' (Jun 3) and 'Sprint review' (Jun 10)."
+  → "You haven't canceled any meetings this month."
 
-User: "What did I change in my todos today?"
-  → LLM calls query_operations(entity_type="todo", date_from="2026-06-17")
-  → "You created 'Buy milk', updated 'Submit report' (priority 1→2), and deleted 'Old task'."
+User: "What did I create yesterday?"
+  → LLM calls query_operations(action="create", date_from="2026-06-17")
+  → "Found 3 operations: [2026-06-17T10:00] create todo 'Buy milk' ..."
+
+User: "Show me recent activity"
+  → LLM calls query_operations()  # no filters, last 20
+  → Shows last 20 operations across all types
 ```
 
 ---
