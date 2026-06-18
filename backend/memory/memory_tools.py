@@ -1,3 +1,4 @@
+from backend.core.operation_log import get_operation_log
 from backend.memory.knowledge_graph import get_graph
 
 _PREFIXES = ("project:", "tag:", "date:", "concept:")
@@ -42,6 +43,8 @@ def remember(entity: str, relation: str, value: str, context: str = "", node_typ
         target_id = kg.add_node("concept", value, {})
     edge_id = kg.add_edge_if_missing(source_id, target_id, relation)
     if edge_id:
+        get_operation_log().record("create", "memory", source_id, entity,
+                                    details={"relation": relation, "target": value})
         return f"Remembered: {entity} --[{relation}]--> {value}"
     return f"Already remembered: {entity} --[{relation}]--> {value}"
 
@@ -92,6 +95,8 @@ def delete_entity(name: str) -> str:
     if not exact:
         return f"No entity found: {name}"
     kg.set_status(exact["label"], "scraped")
+    get_operation_log().record("delete", exact["type"], exact["id"], name,
+                                details={"status": "scraped"})
     return f"Scraped entity: {name} (type: {exact['type']}). It remains in the knowledge graph with status 'scraped' and can be reactivated with set_status()."
 
 
@@ -107,6 +112,8 @@ def forget(entity: str, relation: str | None = None, value: str | None = None) -
             if kg.remove_edge(s["id"], t["id"], relation):
                 removed += 1
     if removed:
+        get_operation_log().record("delete", "memory", entity, entity,
+                                    details={"relation": relation, "target": value})
         return f"Forgot: {entity} --[{relation}]--> {value} ({removed} edge(s) removed)"
     return f"No matching memory found to forget: {entity} --[{relation}]--> {value}"
 
@@ -118,4 +125,6 @@ def set_status(name: str, status: str) -> str:
         return f"No entity found: {name}"
     old = exact["properties"].get("status", "active")
     kg.set_status(exact["label"], status)
+    get_operation_log().record("update", exact["type"], exact["id"], name,
+                                details={"status": f"{old} -> {status}"})
     return f"Updated '{name}' status: {old} → {status}"

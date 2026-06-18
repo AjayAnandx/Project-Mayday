@@ -3,13 +3,14 @@ import asyncio
 import logging
 import os
 import re
-from datetime import date
+from datetime import date, timedelta, datetime
 
 import httpx
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from backend.core.config import load_config
 from backend.core.data_store import get_store
+from backend.core.operation_log import get_operation_log
 from backend.assistant.llm_client import LLMClient
 from backend.assistant.function_registry import dispatch_call, get_tool_definitions
 from backend.assistant.mcp_manager import MCPManager
@@ -85,6 +86,7 @@ CORE_TOOL_NAMES = {
     "remember", "recall", "recall_entity", "forget", "delete_entity", "set_status",
     "get_conversations", "get_conversation_history",
     "list_screenshots", "get_screenshot", "delete_screenshot",
+    "query_operations",
 }
 
 GIT_KEYWORDS = re.compile(r"\b(git|commit|branch|diff|log|status|staged|unstaged|push|pull|clone)\b", re.I)
@@ -228,6 +230,20 @@ async def _run_engine(
                 memory_lines += "\n".join(store_matches[:4])
             if memory_lines:
                 system += f"\n\n### Relevant memories:\n{memory_lines}\n###"
+
+    HISTORY_KEYWORDS = re.compile(r"\b(delete|cancel|remov|yesterday|last\s*week|this\s*month|changed|created|operation|activity|log)\b", re.I)
+    if HISTORY_KEYWORDS.search(user_text):
+        ops = get_operation_log().query(limit=10)
+        if ops:
+            lines = ["### Recent operations:"]
+            for op in ops:
+                ts = op.get("timestamp", "")[:10]
+                act = op.get("action", "")
+                etype = op.get("entity_type", "")
+                name = op.get("entity_name", "")
+                lines.append(f"  [{ts}] {act} {etype} '{name}'")
+            lines.append("###")
+            system += "\n\n" + "\n".join(lines)
 
     conv.add_message("user", user_text)
     messages = [{"role": "system", "content": system}] + conv.get_context()

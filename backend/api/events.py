@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from backend.core.data_store import get_store
+from backend.core.operation_log import get_operation_log
 from backend.memory.knowledge_graph import get_graph
 
 router = APIRouter(prefix="/api/events", tags=["events"])
@@ -48,6 +49,7 @@ def create_event(body: EventCreate):
     store = get_store()
     event = store.create_event(**body.model_dump())
     get_graph().sync_event(event)
+    get_operation_log().record("create", "event", event["id"], event["title"])
     return event
 
 
@@ -59,13 +61,17 @@ def update_event(event_id: str, body: EventUpdate):
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
     get_graph().sync_event(event)
+    get_operation_log().record("update", "event", event_id, event["title"], details=kwargs)
     return event
 
 
 @router.delete("/{event_id}")
 def delete_event(event_id: str):
     store = get_store()
+    event = store.get_event(event_id)
+    name = event["title"] if event else event_id
     if not store.delete_event(event_id):
         raise HTTPException(status_code=404, detail="Event not found")
     get_graph().delete_event_node(event_id)
+    get_operation_log().record("delete", "event", event_id, name)
     return {"deleted": True}

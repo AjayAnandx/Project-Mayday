@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from backend.core.data_store import get_store
+from backend.core.operation_log import get_operation_log
 from backend.memory.knowledge_graph import get_graph
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -28,6 +29,7 @@ def create_conversation(body: ConversationCreate):
     store = get_store()
     conv = store.create_conversation(title=body.title)
     get_graph().sync_conversation(conv)
+    get_operation_log().record("create", "conversation", conv["id"], conv["title"])
     return conv
 
 
@@ -43,9 +45,12 @@ def get_conversation(conversation_id: str):
 @router.delete("/{conversation_id}")
 def delete_conversation(conversation_id: str):
     store = get_store()
+    conv = store.get_conversation(conversation_id)
+    name = conv["title"] if conv else conversation_id
     if not store.delete_conversation(conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
     get_graph().delete_conversation_node(conversation_id)
+    get_operation_log().record("delete", "conversation", conversation_id, name)
     return {"deleted": True}
 
 

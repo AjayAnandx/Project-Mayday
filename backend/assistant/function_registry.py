@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from backend.core.data_store import get_store
+from backend.core.operation_log import get_operation_log
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
 from backend.memory.memory_tools import remember, recall, recall_entity, forget, delete_entity, set_status
@@ -59,6 +60,27 @@ def get_conversation_history_from_store(conversation_id: str, limit: int = 5) ->
         last_text = last.get("content", "")[:150]
         parts.append(f"Last:  {last.get('role')}: {last_text}")
     return "\n".join(parts)
+
+
+def query_operations_from_log(action: str | None = None, entity_type: str | None = None,
+                               date_from: str | None = None, date_to: str | None = None,
+                               query: str | None = None) -> str:
+    log = get_operation_log()
+    results = log.query(action=action, entity_type=entity_type,
+                        date_from=date_from, date_to=date_to, query=query, limit=20)
+    if not results:
+        return "No matching operations found."
+    lines = [f"Found {len(results)} operation(s):"]
+    for op in results:
+        ts = op.get("timestamp", "")[:16]
+        action = op.get("action", "")
+        etype = op.get("entity_type", "")
+        name = op.get("entity_name", "")
+        msg = op.get("user_message", "")
+        lines.append(f"  [{ts}] {action} {etype} '{name}'")
+        if msg:
+            lines.append(f"    user said: {msg[:120]}")
+    return "\n".join(lines)
 
 
 LOCAL_TOOL_DEFINITIONS = [
@@ -371,6 +393,23 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_operations",
+            "description": "Search the history of all create/update/delete operations across todos, events, conversations, projects, and memory entities. Use when the user asks about past activity like deleted items, cancellations, or changes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["create", "update", "delete"], "description": "Filter by action type (optional)"},
+                    "entity_type": {"type": "string", "description": "Filter by entity type: todo, event, conversation, project, concept (optional)"},
+                    "date_from": {"type": "string", "description": "Start date YYYY-MM-DD (optional)"},
+                    "date_to": {"type": "string", "description": "End date YYYY-MM-DD (optional)"},
+                    "query": {"type": "string", "description": "Full-text search in entity name or user message (optional)"},
+                },
+            },
+        },
+    },
 ]
 
 FUNCTION_MAP = {
@@ -394,6 +433,7 @@ FUNCTION_MAP = {
     "list_screenshots": list_screenshots,
     "get_screenshot": get_screenshot_info,
     "delete_screenshot": delete_screenshot_file,
+    "query_operations": query_operations_from_log,
 }
 
 

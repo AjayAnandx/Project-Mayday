@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from backend.core.data_store import get_store
+from backend.core.operation_log import get_operation_log
 from backend.memory.knowledge_graph import get_graph
 
 router = APIRouter(prefix="/api/todos", tags=["todos"])
@@ -45,6 +46,7 @@ def create_todo(body: TodoCreate):
     store = get_store()
     todo = store.create_todo(**body.model_dump())
     get_graph().sync_todo(todo)
+    get_operation_log().record("create", "todo", todo["id"], todo["title"], details={"priority": todo.get("priority")})
     return todo
 
 
@@ -56,13 +58,17 @@ def update_todo(todo_id: str, body: TodoUpdate):
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
     get_graph().sync_todo(todo)
+    get_operation_log().record("update", "todo", todo_id, todo["title"], details=kwargs)
     return todo
 
 
 @router.delete("/{todo_id}")
 def delete_todo(todo_id: str):
     store = get_store()
+    todo = store.get_todo(todo_id)
+    name = todo["title"] if todo else todo_id
     if not store.delete_todo(todo_id):
         raise HTTPException(status_code=404, detail="Todo not found")
     get_graph().delete_todo_node(todo_id)
+    get_operation_log().record("delete", "todo", todo_id, name)
     return {"deleted": True}
