@@ -41,6 +41,10 @@ Desktop AI personal assistant with:
 - Requires `GITHUB_PERSONAL_ACCESS_TOKEN` env var (stored in `config.yaml`)
 - WebSocket protocol: `token`/`tool_call`/`done`/`error` message types
 - Voice pipeline stubs: Mic → VAD → whisper → LLM → TTS → speakers (interruptible)
+- Notification system: scheduler fires reminders → in-memory list + queue → REST polling (`GET /api/notifications/fired`) + optional WebSocket
+- Frontend polls `/api/notifications/fired` every 3s — reliable, no WebSocket proxy dependency
+- In-app `ReminderDialog` modal (DOM-based, no browser permission needed) + `Toast` component
+- Browser `Notification` API used best-effort (permission requested on first user click)
 - Panels auto-refresh after LLM tool calls (todos + calendar update live)
 - Operation Log: per-month indexed file storage (`operations/YYYY-MM.json`), 5 in-memory indexes, `query_operations` LLM tool, auto-context injection for historical queries
 - Knowledge Graph "Brain" persists all todos, events, conversations, user preferences, and semantic relationships as typed nodes + edges in `memory_graph.json`
@@ -286,6 +290,7 @@ yellow:  '#eab308'
 - [x] **Per-day conversation files**: Conversations migrated from monolithic `data.json` to per-day files under `conversations/` with `index.json` for fast lookup, `?date=` filter on API, `get_conversations` LLM tool
 - [x] **Selenium MCP server**: Replaced disabled Playwright with `mcp-server-selenium` (18 browser tools). Patched `normal_chrome.py` for Windows Chrome path. Verified navigate + screenshot + page description works.
 - [x] **Screenshot management system**: ScreenshotStore (index.json CRUD), REST list/delete, 3 LLM tools (`list_screenshots`, `get_screenshot`, `delete_screenshot`), image rendering in chat tool bubbles via `image_url` field
+- [x] Notification system: scheduler + REST polling + in-app modals + toasts
 - [ ] Phase 7: Settings dialog (model selection, API config, voice settings)
 - [x] **Personality system**: Config-driven personality in `config.yaml` (`personality:` section with tone, traits, rules). LLM auto-learns user preferences via `remember("Mayday", "style_feedback", ...)` with `node_type="personality"`. System prompt injects personality + learning instructions on each turn.
 - [x] **Project tracking + context resume**: LLM stores ALL project conversations via `remember(relation="has_conversation", node_type="project")`. New `get_conversation_history` tool loads past conversations by ID. On resume, LLM recalls project → loads ALL linked conversations → presents full context.

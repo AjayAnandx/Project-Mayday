@@ -719,9 +719,9 @@ New session: remember("project:AGI Personal Assistant", ...)
 ## Tier 3 — Richer Daily Use (In Progress)
 
 ### Goal
-Make Mayday useful for real daily workflows with recurring tasks, cross-type search, and data portability.
+Make Mayday useful for real daily workflows with recurring tasks, cross-type search, notifications, and data portability.
 
-### Status — 3a COMPLETED, 3b COMPLETED, 3c PLANNED
+### Status — 3a COMPLETED, 3b COMPLETED, 3d COMPLETED, 3c PLANNED
 
 ---
 
@@ -801,6 +801,76 @@ Unified Search is the **single most impactful feature** for making Mayday feel i
 - 5 existing files modified with 1-3 lines each
 - All searches use existing store methods — no new indexing infrastructure required
 - The conversation text search is the only O(n) scan (over per-day files), but capped at recent days or a configured max
+
+---
+
+### 3d. Notification & Reminder System — COMPLETED (Jun 19)
+
+#### Goal
+Deliver reliable in-app reminder and event notifications to the user without browser permission dependency, WebSocket proxy issues, or silent scheduler crashes.
+
+#### Status — COMPLETED
+
+#### Problems Solved
+
+| Problem | Fix |
+|---------|-----|
+| Scheduler `_check_events` exception prevented `_check_reminders` from running | Individual `try/except` per check method at `scheduler.py:113-195` |
+| WebSocket proxy in Vite config intercepted `/api/notifications/ws` | Reordered proxy rules — `/api/notifications/ws` before `/api` catch-all in `vite.config.ts:9` |
+| Browser Notification API required user gesture but `useEffect` called it | Permission requested on first user click gesture in `useNotifications.ts` |
+| Reminders had `fired: true` but frontend never saw them | Added `_fired_notifications` in-memory list + `GET /api/notifications/fired` REST polling endpoint |
+| LLM passed local times without timezone context | System prompt now shows full datetime: `%A, %Y-%m-%d %H:%M:%S %Z (%z)` in `chat.py` |
+| Reminders stored in local time, scheduler compared in UTC | `add_reminder` converts to UTC using machine tz offset, `_check_reminders` compares UTC vs UTC in `scheduler.py:59-63` |
+| Auto-adjust bumped same-minute reminders +1 minute | Strict `<` with `microsecond=0` strip in `scheduler.py:65` |
+
+#### New Files
+
+| File | Purpose |
+|------|---------|
+| `frontend/src/components/ui/ReminderDialog.tsx` | In-app modal overlay — shows reminder title + message, dismiss button. DOM-based, no browser permission needed. |
+| `frontend/src/components/ui/Toast.tsx` | Toast notification component with green accent styling, auto-dismiss, slide-in animation |
+
+#### Modified Files
+
+| File | Changes |
+|------|---------|
+| `backend/core/scheduler.py` | UTC conversion in `add_reminder`, strict `<` with microsecond strip, individual try/except per check method, `_fired_notifications` list, `get_fired_notifications()` method |
+| `backend/api/chat.py` | System prompt uses `%A, %Y-%m-%d %H:%M:%S %Z (%z)` instead of `date.today().isoformat()` |
+| `backend/api/notifications.py` | Added `GET /api/notifications/fired` endpoint — returns and clears in-memory list |
+| `backend/functions/reminder_functions.py` | Returns stored UTC datetime with "UTC" label |
+| `frontend/vite.config.ts` | `/api/notifications/ws` proxy rule moved before `/api` catch-all |
+| `frontend/src/hooks/useNotifications.ts` | Rewritten: REST polling every 3s instead of WebSocket; permission request on click gesture; dispatches `reminder-fired` custom event |
+| `frontend/src/hooks/useChat.ts` | Listens for `reminder-fired` event, injects assistant message bubble into chat |
+| `frontend/src/App.tsx` | Mounts `ToastContainer` + `ReminderDialog` components |
+| `frontend/package.json` | Added `motion` dependency for animations |
+
+#### Notification Delivery Architecture
+
+```
+Scheduler fires reminder
+  → appends to _fired_notifications (in-memory)
+  → optional: sends via /api/notifications/ws WebSocket
+  → frontend polls GET /api/notifications/fired every 3s
+  → ReminderDialog opens (modal overlay)
+  → Toast notification slides in
+  → Best-effort: browser Notification API (if permitted)
+  → Custom 'reminder-fired' event → useChat adds assistant message bubble
+```
+
+#### Key Decisions
+
+- **REST polling over WebSocket**: The WebSocket proxy (Vite → FastAPI) caused unreliability. REST polling is stateless, works through any proxy, and is simple to implement. The WebSocket endpoint remains as an optional fast path.
+- **In-app modal over browser Notification**: Browser notifications require permission, which requires a user gesture. The `ReminderDialog` component (DOM modal) works 100% of the time regardless of browser permission state.
+- **In-memory queue (no persistence)**: `_fired_notifications` is in-memory only — restarted notifications are lost. Acceptable for a desktop app where restarts are rare. Could be persisted to `reminders.json` if needed later.
+- **`motion` for animations**: Toast and modal use the `motion` library (framer-motion successor) for `animatePresence` and spring-based transitions.
+
+#### Known Limitations
+
+- In-memory `_fired_notifications` lost on restart (acceptable for desktop app)
+- Seen-events/todos sets in scheduler are in-memory only (lost on restart)
+- No notification sound/audio cue yet
+- No notification history/replay if user misses one
+- No snooze/dismiss-from-notification action
 
 ---
 

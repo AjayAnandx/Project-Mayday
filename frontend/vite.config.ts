@@ -6,6 +6,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/api/notifications/ws': {
+        target: 'ws://localhost:8770',
+        ws: true,
+      },
       '/api': 'http://localhost:8770',
       '/ws': {
         target: 'ws://localhost:8770',

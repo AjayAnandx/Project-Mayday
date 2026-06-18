@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import re
-from datetime import date
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -30,7 +30,7 @@ You have git tools (git_log, git_status, git_diff, git_branch, git_commit, git_a
 You also have GitHub API tools — you can search repositories, list commits, read file contents, and get repo info on ANY public GitHub repo. Use owner/repo format (e.g. "facebook/react").
 Do not say you lack access. You have the tools.
 Be concise, helpful, and friendly. When you use a tool, explain what you did.
-Current date: {date}"""
+Current date and time (your local timezone): {date}"""
 
 PERSONALITY_INSTRUCTIONS = """
 ### Personality
@@ -88,6 +88,7 @@ CORE_TOOL_NAMES = {
     "list_screenshots", "get_screenshot", "delete_screenshot",
     "query_operations",
     "unified_search",
+    "create_reminder", "list_reminders", "delete_reminder",
 }
 
 GIT_KEYWORDS = re.compile(r"\b(git|commit|branch|diff|log|status|staged|unstaged|push|pull|clone)\b", re.I)
@@ -174,7 +175,9 @@ SKIP_SECOND_CALL = {
     "git_create_branch", "git_checkout",
     # GitHub actions (not reads)
     "create_branch", "create_or_update_file", "create_repository",
-    "delete_file", "fork_repository", "push_files",
+    "delete_file", "fork_repository",     "push_files",
+    # Reminder actions
+    "create_reminder", "delete_reminder",
 }
 
 CONNECTION_HINT = (
@@ -196,7 +199,10 @@ async def _run_engine(
     mcp: MCPManager | None,
     kg: KnowledgeGraph | None = None,
 ):
-    system = SYSTEM_PROMPT.format(date=date.today().isoformat())
+    now = datetime.now(timezone.utc).astimezone()
+    system = SYSTEM_PROMPT.format(
+        date=now.strftime("%A, %Y-%m-%d %H:%M:%S %Z (%z)")
+    )
 
     _personality = load_config().get("personality", {})
     if _personality:

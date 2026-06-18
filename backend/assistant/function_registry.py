@@ -5,6 +5,7 @@ from backend.core.data_store import get_store
 from backend.core.operation_log import get_operation_log
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
+from backend.functions.reminder_functions import create_reminder, list_reminders, delete_reminder
 from backend.memory.memory_tools import remember, recall, recall_entity, forget, delete_entity, set_status
 from backend.api.screenshots import list_screenshots, get_screenshot_info, delete_screenshot_file
 
@@ -485,6 +486,46 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_reminder",
+            "description": "Set a reminder that will fire as a desktop notification at the specified time. Use 24-hour format for the time.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "Reminder message"},
+                    "datetime": {"type": "string", "description": "ISO datetime string (YYYY-MM-DDTHH:MM) when the reminder should fire"},
+                },
+                "required": ["message", "datetime"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_reminders",
+            "description": "List all pending reminders that haven't fired yet.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_reminder",
+            "description": "Delete a pending reminder by its ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reminder_id": {"type": "string", "description": "Reminder ID to delete"},
+                },
+                "required": ["reminder_id"],
+            },
+        },
+    },
 ]
 
 FUNCTION_MAP = {
@@ -510,6 +551,9 @@ FUNCTION_MAP = {
     "delete_screenshot": delete_screenshot_file,
     "query_operations": query_operations_from_log,
     "unified_search": unified_search,
+    "create_reminder": create_reminder,
+    "list_reminders": list_reminders,
+    "delete_reminder": delete_reminder,
 }
 
 

@@ -6,11 +6,27 @@ import { TodoPanel } from './components/todos/TodoPanel'
 import { CalendarPanel } from './components/calendar/CalendarPanel'
 import { BrainPanel } from './components/brain/BrainPanel'
 import { SearchOverlay } from './components/search/SearchOverlay'
+import { ToastContainer } from './components/ui/Toast'
+import { ReminderDialog } from './components/ui/ReminderDialog'
+import { useNotifications } from './hooks/useNotifications'
 
 function AppContent() {
   const { connected, newConversation } = useChatContext()
   const [currentPage, setCurrentPage] = useState<Page>('chat')
   const [searchOpen, setSearchOpen] = useState(false)
+
+  useNotifications()
+
+  useEffect(() => {
+    const handleNavigate = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail === 'chat' || detail === 'todos' || detail === 'calendar' || detail === 'brain') {
+        setCurrentPage(detail)
+      }
+    }
+    window.addEventListener('navigate', handleNavigate)
+    return () => window.removeEventListener('navigate', handleNavigate)
+  }, [])
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -43,6 +59,8 @@ function AppContent() {
         onClose={() => setSearchOpen(false)}
         onNavigate={setCurrentPage}
       />
+      <ToastContainer />
+      <ReminderDialog />
     </div>
   )
 }

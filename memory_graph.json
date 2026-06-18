@@ -992,6 +992,193 @@
         "title": "what did I do with groceries",
         "message_count": 6
       }
+    },
+    {
+      "id": "54629b95ee78",
+      "type": "todo",
+      "label": "Pay bills",
+      "properties": {
+        "todo_id": "d289305397fd",
+        "description": "",
+        "due_date": "2026-06-17",
+        "priority": 1,
+        "completed": false,
+        "tags": [],
+        "recurrence": null
+      }
+    },
+    {
+      "id": "6a0a5d35a1a0",
+      "type": "conversation",
+      "label": "3bc42c4ebb62",
+      "properties": {
+        "conv_id": "3bc42c4ebb62",
+        "title": "Create a todo to pay bills due yesterday",
+        "message_count": 5
+      }
+    },
+    {
+      "id": "8965109648fb",
+      "type": "conversation",
+      "label": "d1a49d771b6a",
+      "properties": {
+        "conv_id": "d1a49d771b6a",
+        "title": "i have a meeting in 1 minute remind me",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "0d1dad19c48e",
+      "type": "conversation",
+      "label": "9985e0dcec2a",
+      "properties": {
+        "conv_id": "9985e0dcec2a",
+        "title": "i have a meeting in 1 minute remind me",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "0db42e5b3190",
+      "type": "conversation",
+      "label": "d23f749a3f85",
+      "properties": {
+        "conv_id": "d23f749a3f85",
+        "title": "i have a meeting in 2 minutes make a reminder",
+        "message_count": 18
+      }
+    },
+    {
+      "id": "a6d3d14b40c3",
+      "type": "conversation",
+      "label": "ebb9c5dbc6b3",
+      "properties": {
+        "conv_id": "ebb9c5dbc6b3",
+        "title": "i have a meeting in 2 minutes set a reminder",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "7e33ee1c0a65",
+      "type": "event",
+      "label": "Meeting",
+      "properties": {
+        "event_id": "56b293a06af1",
+        "description": "",
+        "start_time": "2026-06-18T23:48:03+05:30",
+        "end_time": "2026-06-18T23:58:03+05:30",
+        "all_day": false,
+        "recurrence": null
+      }
+    },
+    {
+      "id": "3a42387b8288",
+      "type": "conversation",
+      "label": "951354d5a4ea",
+      "properties": {
+        "conv_id": "951354d5a4ea",
+        "title": "Create a reminder at 11:24 IST",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "d35b58515587",
+      "type": "conversation",
+      "label": "0d0f3367f80b",
+      "properties": {
+        "conv_id": "0d0f3367f80b",
+        "title": "create a reminder at 11 : 26 pm",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "4996e71f1499",
+      "type": "conversation",
+      "label": "1afb405e9732",
+      "properties": {
+        "conv_id": "1afb405e9732",
+        "title": "created a reminder at 11;32 pm",
+        "message_count": 9
+      }
+    },
+    {
+      "id": "332ceb8e4c9b",
+      "type": "conversation",
+      "label": "ecf313b5e46f",
+      "properties": {
+        "conv_id": "ecf313b5e46f",
+        "title": "what are the reminder listed",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "81adfe328a25",
+      "type": "conversation",
+      "label": "3fd19945ddb6",
+      "properties": {
+        "conv_id": "3fd19945ddb6",
+        "title": "list the reminders",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "668ffe5a6102",
+      "type": "conversation",
+      "label": "02113fa700da",
+      "properties": {
+        "conv_id": "02113fa700da",
+        "title": "remind me in 1 minurte",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "5316cbc16654",
+      "type": "conversation",
+      "label": "80261bf19e30",
+      "properties": {
+        "conv_id": "80261bf19e30",
+        "title": "remind me in 1 minute",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "e702bbbc3a5f",
+      "type": "conversation",
+      "label": "73dabaa2d403",
+      "properties": {
+        "conv_id": "73dabaa2d403",
+        "title": "remind me in 1 minute",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "9ff27986aa1f",
+      "type": "conversation",
+      "label": "3bd83225f5a3",
+      "properties": {
+        "conv_id": "3bd83225f5a3",
+        "title": "remind me in 1 minute",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "e825ca929ccd",
+      "type": "conversation",
+      "label": "b219f8848ec0",
+      "properties": {
+        "conv_id": "b219f8848ec0",
+        "title": "remind me in 1 minute",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "d9777a7f4b5a",
+      "type": "conversation",
+      "label": "dbd32045b49a",
+      "properties": {
+        "conv_id": "dbd32045b49a",
+        "title": "remind me in 1 minute",
+        "message_count": 3
+      }
     }
   ],
   "edges": [

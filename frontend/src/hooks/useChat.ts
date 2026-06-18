@@ -25,6 +25,19 @@ export function useChat() {
     setMessages((prev) => [...prev, msg])
   }, [])
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      addMessage({
+        id: `reminder-${detail.id}`,
+        role: 'assistant',
+        content: `**${detail.title}** — ${detail.body}`,
+      })
+    }
+    window.addEventListener('reminder-fired', handler)
+    return () => window.removeEventListener('reminder-fired', handler)
+  }, [addMessage])
+
   const appendToAssistant = useCallback((text: string) => {
     setMessages((prev) => {
       const copy = [...prev]
