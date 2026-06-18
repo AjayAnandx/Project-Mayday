@@ -1,3 +1,7 @@
+import type { RecurrenceRule } from './todo'
+
+export type { RecurrenceRule }
+
 export interface Event {
   id: string
   title: string
@@ -7,6 +11,7 @@ export interface Event {
   all_day: boolean
   created_at: string
   updated_at: string
+  recurrence?: RecurrenceRule
 }
 
 export interface EventCreate {
@@ -15,6 +20,7 @@ export interface EventCreate {
   end_time: string
   description?: string
   all_day?: boolean
+  recurrence?: RecurrenceRule
 }
 
 export interface EventUpdate {
@@ -23,4 +29,5 @@ export interface EventUpdate {
   end_time?: string
   description?: string
   all_day?: boolean
+  recurrence?: RecurrenceRule
 }

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import type { Todo, TodoCreate, TodoUpdate } from '../types/todo'
 import { api } from '../services/api'
 
-export function useTodos() {
+export function useTodos(toolCallCount?: number) {
   const [todos, setTodos] = useState<Todo[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -23,6 +23,12 @@ export function useTodos() {
   useEffect(() => {
     fetchTodos()
   }, [fetchTodos])
+
+  useEffect(() => {
+    if (toolCallCount && toolCallCount > 0) {
+      fetchTodos()
+    }
+  }, [toolCallCount])
 
   const createTodo = async (data: TodoCreate) => {
     await api.createTodo(data)

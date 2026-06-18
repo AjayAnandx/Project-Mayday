@@ -210,6 +210,7 @@ class KnowledgeGraph:
                     "priority": todo.get("priority"),
                     "completed": todo.get("completed", False),
                     "tags": todo.get("tags", []),
+                    "recurrence": todo.get("recurrence"),
                 })
             else:
                 node_id = uuid.uuid4().hex[:12]
@@ -224,6 +225,7 @@ class KnowledgeGraph:
                         "priority": todo.get("priority"),
                         "completed": todo.get("completed", False),
                         "tags": todo.get("tags", []),
+                        "recurrence": todo.get("recurrence"),
                     },
                 }
                 for tag in todo.get("tags", []):
@@ -251,6 +253,7 @@ class KnowledgeGraph:
                     "start_time": event.get("start_time"),
                     "end_time": event.get("end_time"),
                     "all_day": event.get("all_day", False),
+                    "recurrence": event.get("recurrence"),
                 })
             else:
                 node_id = uuid.uuid4().hex[:12]
@@ -264,6 +267,7 @@ class KnowledgeGraph:
                         "start_time": event.get("start_time"),
                         "end_time": event.get("end_time"),
                         "all_day": event.get("all_day", False),
+                        "recurrence": event.get("recurrence"),
                     },
                 }
             self._save()

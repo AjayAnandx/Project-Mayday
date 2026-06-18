@@ -1,4 +1,4 @@
-import { Pencil, Trash2, Circle, CheckCircle2 } from 'lucide-react'
+import { Pencil, Trash2, Circle, CheckCircle2, Repeat } from 'lucide-react'
 import type { Todo } from '../../types/todo'
 import { Badge } from '../ui/Badge'
 
@@ -11,6 +11,14 @@ interface TodoItemProps {
 
 const priorityLabel = { 1: 'High', 2: 'Med', 3: 'Low' } as const
 const priorityVariant = { 1: 'high', 2: 'medium', 3: 'low' } as const
+
+const recLabel: Record<string, string> = {
+  daily: 'Daily',
+  weekly: 'Weekly',
+  biweekly: 'Biweekly',
+  monthly: 'Monthly',
+  yearly: 'Yearly',
+}
 
 export function TodoItem({ todo, onToggle, onEdit, onDelete }: TodoItemProps) {
   return (
@@ -48,6 +56,12 @@ export function TodoItem({ todo, onToggle, onEdit, onDelete }: TodoItemProps) {
         )}
 
         <div className="flex items-center gap-2 mt-1.5">
+          {todo.recurrence && (
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-green/15 text-green flex items-center gap-1">
+              <Repeat className="h-3 w-3" />
+              {recLabel[todo.recurrence.pattern] || todo.recurrence.pattern}
+            </span>
+          )}
           {todo.due_date && (
             <span className="text-[11px] text-subtext0 bg-surface0/50 px-2 py-0.5 rounded-full">
               Due {new Date(todo.due_date).toLocaleDateString()}

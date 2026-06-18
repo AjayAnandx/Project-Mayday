@@ -4,9 +4,11 @@ import { useTodos } from '../../hooks/useTodos'
 import { TodoItem } from './TodoItem'
 import { TodoDialog } from './TodoDialog'
 import { Button } from '../ui/Button'
+import { useChatContext } from '../../context/ChatContext'
 import type { Todo, TodoCreate, TodoUpdate } from '../../types/todo'
 
 export function TodoPanel() {
+  const { toolCallCount } = useChatContext()
   const {
     todos,
     loading,
@@ -18,7 +20,7 @@ export function TodoPanel() {
     updateTodo,
     deleteTodo,
     toggleTodo,
-  } = useTodos()
+  } = useTodos(toolCallCount)
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null)

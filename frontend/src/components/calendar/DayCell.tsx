@@ -1,3 +1,4 @@
+import { Repeat } from 'lucide-react'
 import type { Event } from '../../types/event'
 
 interface DayCellProps {
@@ -25,10 +26,11 @@ export function DayCell({ day, isToday, isCurrentMonth, events, onClick }: DayCe
         {events.slice(0, 2).map((ev) => (
           <div
             key={ev.id}
-            className="text-[8px] leading-tight truncate rounded-md px-1 py-0.5 bg-green/15 text-green font-medium"
+            className="text-[8px] leading-tight truncate rounded-md px-1 py-0.5 bg-green/15 text-green font-medium flex items-center gap-0.5"
             title={ev.title}
           >
-            {ev.title}
+            {ev.recurrence && <Repeat className="h-2.5 w-2.5 shrink-0" />}
+            <span className="truncate">{ev.title}</span>
           </div>
         ))}
         {events.length > 2 && (

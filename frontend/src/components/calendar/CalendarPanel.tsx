@@ -3,17 +3,20 @@ import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEvents } from '../../hooks/useEvents'
 import { MonthGrid } from './MonthGrid'
 import { EventDialog } from './EventDialog'
+import { useChatContext } from '../../context/ChatContext'
 import type { Event, EventCreate, EventUpdate } from '../../types/event'
 
 export function CalendarPanel() {
-  const { events, loading, createEvent, updateEvent, deleteEvent } = useEvents()
   const [currentDate, setCurrentDate] = useState(() => new Date())
+  const year = currentDate.getFullYear()
+  const month = currentDate.getMonth()
+  const monthStart = `${year}-${String(month + 1).padStart(2, '0')}-01`
+  const monthEnd = `${year}-${String(month + 1).padStart(2, '0')}-${new Date(year, month + 1, 0).getDate()}`
+  const { toolCallCount } = useChatContext()
+  const { events, loading, createEvent, updateEvent, deleteEvent } = useEvents(monthStart, monthEnd, toolCallCount)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingEvent, setEditingEvent] = useState<Event | null>(null)
   const [selectedDate, setSelectedDate] = useState('')
-
-  const year = currentDate.getFullYear()
-  const month = currentDate.getMonth()
 
   const monthName = useMemo(
     () =>

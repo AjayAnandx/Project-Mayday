@@ -1,3 +1,10 @@
+export interface RecurrenceRule {
+  pattern: 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'yearly'
+  interval?: number
+  end_date?: string
+  count?: number
+}
+
 export interface Todo {
   id: string
   title: string
@@ -8,6 +15,7 @@ export interface Todo {
   tags: string[]
   created_at: string
   updated_at: string
+  recurrence?: RecurrenceRule
 }
 
 export interface TodoCreate {
@@ -16,6 +24,7 @@ export interface TodoCreate {
   due_date?: string | null
   priority?: number
   tags?: string[]
+  recurrence?: RecurrenceRule
 }
 
 export interface TodoUpdate {
@@ -25,4 +34,5 @@ export interface TodoUpdate {
   priority?: number
   completed?: boolean
   tags?: string[]
+  recurrence?: RecurrenceRule
 }

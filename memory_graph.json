@@ -61,6 +61,22 @@
       "properties": {}
     },
     {
+      "id": "88eb925ac1c2",
+      "type": "concept",
+      "label": "Alex",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
+      "id": "a22726ec5677",
+      "type": "concept",
+      "label": "Alex",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
       "id": "5320c5abeee8",
       "type": "event",
       "label": "Meeting",
@@ -70,6 +86,14 @@
         "start_time": "2026-06-30T09:00:00",
         "end_time": "2026-06-30T10:00:00",
         "all_day": false
+      }
+    },
+    {
+      "id": "12de4103ee6f",
+      "type": "concept",
+      "label": "groceries",
+      "properties": {
+        "search_result": "true"
       }
     },
     {
@@ -157,6 +181,15 @@
       }
     },
     {
+      "id": "f5944567ad0d",
+      "type": "project",
+      "label": "project:AGI Personal Assistant",
+      "properties": {
+        "context": "",
+        "status": "scraped"
+      }
+    },
+    {
       "id": "d3663ac83128",
       "type": "concept",
       "label": "Define core architecture and feature set",
@@ -170,6 +203,14 @@
         "conv_id": "547106134bb5",
         "title": "hi , i need to create a project of AGI version of personal a",
         "message_count": 5
+      }
+    },
+    {
+      "id": "30ef9cb96c48",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
       }
     },
     {
@@ -190,6 +231,14 @@
         "conv_id": "dc1a6189c3af",
         "title": "get me the info of agi project",
         "message_count": 46
+      }
+    },
+    {
+      "id": "08b930f520c8",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
       }
     },
     {
@@ -215,6 +264,15 @@
       "type": "concept",
       "label": "Brainstormed AGI capabilities and gathered latest industry trends (Agentic AI, Multi-agent systems)",
       "properties": {}
+    },
+    {
+      "id": "44a49c998d38",
+      "type": "project",
+      "label": "project:Personal Development",
+      "properties": {
+        "context": "",
+        "status": "scraped"
+      }
     },
     {
       "id": "10c2c193757a",
@@ -247,6 +305,14 @@
       }
     },
     {
+      "id": "a4011bfab51a",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
       "id": "94aa209ff4bb",
       "type": "conversation",
       "label": "dc703e4ed6aa",
@@ -257,6 +323,14 @@
       }
     },
     {
+      "id": "2b628ffa4a24",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
       "id": "4ad600aca21f",
       "type": "conversation",
       "label": "14d8a5bc1eb2",
@@ -264,6 +338,22 @@
         "conv_id": "14d8a5bc1eb2",
         "title": "what are project we are working on",
         "message_count": 19
+      }
+    },
+    {
+      "id": "a6b668e78f4e",
+      "type": "concept",
+      "label": "AGI project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
+      "id": "d5b13173c809",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
       }
     },
     {
@@ -297,6 +387,14 @@
       }
     },
     {
+      "id": "7ac84d0a29d7",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
       "id": "7a7e8bac7a47",
       "type": "conversation",
       "label": "b509ad715a36",
@@ -307,10 +405,26 @@
       }
     },
     {
+      "id": "45edfd91db96",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
       "id": "75eab07f13a2",
       "type": "concept",
       "label": "User explicitly requested the deletion of 'AGI Personal Assistant' and 'Personal Development' projects. All associated project nodes have been cleared.",
       "properties": {}
+    },
+    {
+      "id": "91c774c80387",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
     },
     {
       "id": "ee12d28070d2",
@@ -320,6 +434,14 @@
         "conv_id": "c465f5e1f830",
         "title": "what was the project i was working",
         "message_count": 6
+      }
+    },
+    {
+      "id": "bdf86453013a",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
       }
     },
     {
@@ -333,6 +455,14 @@
       }
     },
     {
+      "id": "3baf6927f319",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
       "id": "58591a74af55",
       "type": "conversation",
       "label": "3dfef5f03dd3",
@@ -340,6 +470,14 @@
         "conv_id": "3dfef5f03dd3",
         "title": "what are project iam working on",
         "message_count": 8
+      }
+    },
+    {
+      "id": "bd56fca6f63b",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
       }
     },
     {
@@ -363,6 +501,14 @@
       }
     },
     {
+      "id": "c67ccc88e48f",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
       "id": "b3114e891e47",
       "type": "conversation",
       "label": "1cf6d690e959",
@@ -383,6 +529,14 @@
       }
     },
     {
+      "id": "ba3a192838eb",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
       "id": "214274690fb8",
       "type": "conversation",
       "label": "8761fb8ab5a5",
@@ -390,6 +544,14 @@
         "conv_id": "8761fb8ab5a5",
         "title": "what are the project we are owrking on",
         "message_count": 3
+      }
+    },
+    {
+      "id": "d9f4d94e459b",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
       }
     },
     {
@@ -437,7 +599,8 @@
       "type": "project",
       "label": "project:AGI Project",
       "properties": {
-        "context": ""
+        "context": "",
+        "status": "active"
       }
     },
     {
@@ -454,6 +617,370 @@
         "conv_id": "b82b2a67fc44",
         "title": "is there any project i had deleted recent",
         "message_count": 6
+      }
+    },
+    {
+      "id": "fc54c2250d18",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
+      "id": "1c5288dc963a",
+      "type": "conversation",
+      "label": "837e3680c7b5",
+      "properties": {
+        "conv_id": "837e3680c7b5",
+        "title": "is there any project we had working on",
+        "message_count": 14
+      }
+    },
+    {
+      "id": "874106cad824",
+      "type": "conversation",
+      "label": "28109614d35d",
+      "properties": {
+        "conv_id": "28109614d35d",
+        "title": "is the project is going",
+        "message_count": 10
+      }
+    },
+    {
+      "id": "cd34ffe2a3b8",
+      "type": "project",
+      "label": "project:bin agi",
+      "properties": {
+        "context": "",
+        "status": "scraped"
+      }
+    },
+    {
+      "id": "e06c4b246f23",
+      "type": "conversation",
+      "label": "454b61c0c2c0",
+      "properties": {
+        "conv_id": "454b61c0c2c0",
+        "title": "what are the current project goign",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "0120b0daf0ab",
+      "type": "concept",
+      "label": "project",
+      "properties": {
+        "search_result": "true"
+      }
+    },
+    {
+      "id": "f5404b49214e",
+      "type": "conversation",
+      "label": "898081679c26",
+      "properties": {
+        "conv_id": "898081679c26",
+        "title": "what are the current project goign",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "d72c193ec337",
+      "type": "conversation",
+      "label": "afe0702530a1",
+      "properties": {
+        "conv_id": "afe0702530a1",
+        "title": "hi",
+        "message_count": 8
+      }
+    },
+    {
+      "id": "0768982f4a98",
+      "type": "conversation",
+      "label": "d5cd3e1ddfa9",
+      "properties": {
+        "conv_id": "d5cd3e1ddfa9",
+        "title": "what was the project going on",
+        "message_count": 1
+      }
+    },
+    {
+      "id": "946ba0004bd7",
+      "type": "conversation",
+      "label": "755e6f488ad2",
+      "properties": {
+        "conv_id": "755e6f488ad2",
+        "title": "what was the project going on",
+        "message_count": 9
+      }
+    },
+    {
+      "id": "063538d4e3ed",
+      "type": "conversation",
+      "label": "d7da0076bc91",
+      "properties": {
+        "conv_id": "d7da0076bc91",
+        "title": "what are AGI Project ststus",
+        "message_count": 4
+      }
+    },
+    {
+      "id": "2f38c43d851f",
+      "type": "conversation",
+      "label": "69eaf7b48a61",
+      "properties": {
+        "conv_id": "69eaf7b48a61",
+        "title": "what was the project going",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "fc7b44d63633",
+      "type": "conversation",
+      "label": "7565c9d64a55",
+      "properties": {
+        "conv_id": "7565c9d64a55",
+        "title": "what was the project going on",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "f615766732a8",
+      "type": "conversation",
+      "label": "a22e7990b8aa",
+      "properties": {
+        "conv_id": "a22e7990b8aa",
+        "title": "what are the project was currently active",
+        "message_count": 12
+      }
+    },
+    {
+      "id": "873b46e103ae",
+      "type": "conversation",
+      "label": "6a42db0211ea",
+      "properties": {
+        "conv_id": "6a42db0211ea",
+        "title": "Test Conversation",
+        "message_count": 0
+      }
+    },
+    {
+      "id": "03a80bdc6108",
+      "type": "conversation",
+      "label": "87f47a64bf6d",
+      "properties": {
+        "conv_id": "87f47a64bf6d",
+        "title": "get me the yestarday convo",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "afab021b242f",
+      "type": "conversation",
+      "label": "47a561f914c2",
+      "properties": {
+        "conv_id": "47a561f914c2",
+        "title": "when did i scrap the persanal development",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "72c4823b24a8",
+      "type": "conversation",
+      "label": "fa6bf40a3298",
+      "properties": {
+        "conv_id": "fa6bf40a3298",
+        "title": "when did i scrap the persanal development",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "5782da9ee6b3",
+      "type": "conversation",
+      "label": "ff2917c673e4",
+      "properties": {
+        "conv_id": "ff2917c673e4",
+        "title": "what are the project is scraped",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "739fdd09b42d",
+      "type": "conversation",
+      "label": "a5896b1162a6",
+      "properties": {
+        "conv_id": "a5896b1162a6",
+        "title": "How many meetings did I cancel this month",
+        "message_count": 5
+      }
+    },
+    {
+      "id": "d29a468804c8",
+      "type": "conversation",
+      "label": "133b283ea5c1",
+      "properties": {
+        "conv_id": "133b283ea5c1",
+        "title": "how many meeting i cancled this month",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "400ae0db0850",
+      "type": "conversation",
+      "label": "c88c7a4c1d30",
+      "properties": {
+        "conv_id": "c88c7a4c1d30",
+        "title": "hi",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "632fa8d2f2af",
+      "type": "conversation",
+      "label": "46fc25b6d8bd",
+      "properties": {
+        "conv_id": "46fc25b6d8bd",
+        "title": "create a todo \"standup\" due 2026-06-22 recurring weekly",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "e505621ee077",
+      "type": "conversation",
+      "label": "ef1139bcf02d",
+      "properties": {
+        "conv_id": "ef1139bcf02d",
+        "title": "create a todo \"standup\" due 2026-06-22 recurring weekly",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "3ee078bd3e03",
+      "type": "conversation",
+      "label": "375c89315700",
+      "properties": {
+        "conv_id": "375c89315700",
+        "title": "list the todo",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "f0f8eb39133c",
+      "type": "event",
+      "label": "team sync",
+      "properties": {
+        "event_id": "a4fc29e3b254",
+        "description": "",
+        "start_time": "2026-06-22T10:00:00Z",
+        "end_time": "2026-06-22T11:00:00Z",
+        "all_day": false,
+        "recurrence": {
+          "interval": 1,
+          "pattern": "weekly"
+        }
+      }
+    },
+    {
+      "id": "45b9ebec7980",
+      "type": "event",
+      "label": "team sync",
+      "properties": {
+        "event_id": "17da8eeb2f2a",
+        "description": "",
+        "start_time": "2026-06-22T10:00:00Z",
+        "end_time": "2026-06-22T11:00:00Z",
+        "all_day": false,
+        "recurrence": {
+          "interval": 1,
+          "pattern": "weekly"
+        }
+      }
+    },
+    {
+      "id": "10df1a20df3e",
+      "type": "conversation",
+      "label": "5c27cb87f7ad",
+      "properties": {
+        "conv_id": "5c27cb87f7ad",
+        "title": "create an event \"team sync\" every monday at 10am starting 20",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "5317fa5101e5",
+      "type": "event",
+      "label": "team sync",
+      "properties": {
+        "event_id": "f27189a22d11",
+        "description": "",
+        "start_time": "2026-06-22T10:00:00Z",
+        "end_time": "2026-06-22T11:00:00Z",
+        "all_day": false,
+        "recurrence": {
+          "interval": 1,
+          "pattern": "weekly"
+        }
+      }
+    },
+    {
+      "id": "c8772df8daa3",
+      "type": "conversation",
+      "label": "603b8104d06d",
+      "properties": {
+        "conv_id": "603b8104d06d",
+        "title": "create an event \"team sync\" every monday at 10am starting 20",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "4e4dc21153b3",
+      "type": "todo",
+      "label": "Science task",
+      "properties": {
+        "todo_id": "ac4ac63e9a37",
+        "description": "",
+        "due_date": "2026-06-30",
+        "priority": 2,
+        "completed": false,
+        "tags": [],
+        "recurrence": null
+      }
+    },
+    {
+      "id": "20129e0ed96a",
+      "type": "conversation",
+      "label": "a5b935fa1b4e",
+      "properties": {
+        "conv_id": "a5b935fa1b4e",
+        "title": "create a science todo",
+        "message_count": 21
+      }
+    },
+    {
+      "id": "0ee89023aaea",
+      "type": "todo",
+      "label": "Buy groceries",
+      "properties": {
+        "todo_id": "1afcbedc90a8",
+        "description": "",
+        "due_date": "2026-06-18",
+        "priority": 1,
+        "completed": false,
+        "tags": [],
+        "recurrence": null
+      }
+    },
+    {
+      "id": "ce80470140a8",
+      "type": "event",
+      "label": "Buy groceries",
+      "properties": {
+        "event_id": "45c5fb68e82f",
+        "description": "",
+        "start_time": "2026-06-18T17:00:00Z",
+        "end_time": "2026-06-18T17:30:00Z",
+        "all_day": false,
+        "recurrence": null
       }
     }
   ],
@@ -493,15 +1020,5 @@
       "relation": "status_update",
       "properties": {}
     }
-  ],
-  "tombstones": {
-    "project:agi personal assistant": {
-      "original_name": "project:AGI Personal Assistant",
-      "deleted_on": "2026-06-17"
-    },
-    "project:personal development": {
-      "original_name": "project:Personal Development",
-      "deleted_on": "2026-06-17"
-    }
-  }
+  ]
 }

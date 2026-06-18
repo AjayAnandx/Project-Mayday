@@ -17,6 +17,7 @@ export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [connected, setConnected] = useState(false)
   const [streaming, setStreaming] = useState(false)
+  const [toolCallCount, setToolCallCount] = useState(0)
   const wsRef = useRef<ChatWebSocket | null>(null)
   const currentAssistantId = useRef<string | null>(null)
 
@@ -56,6 +57,7 @@ export function useChat() {
               tool_name: data.name,
               image_url: data.image_url,
             })
+            setToolCallCount((c) => c + 1)
             break
           case 'done':
             setStreaming(false)
@@ -107,5 +109,6 @@ export function useChat() {
     streaming,
     sendMessage,
     newConversation,
+    toolCallCount,
   }
 }

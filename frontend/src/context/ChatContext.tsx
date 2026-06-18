@@ -7,6 +7,7 @@ interface ChatContextValue {
   streaming: boolean
   sendMessage: (text: string) => void
   newConversation: () => void
+  toolCallCount: number
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null)

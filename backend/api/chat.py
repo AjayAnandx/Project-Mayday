@@ -346,9 +346,11 @@ async def _run_engine(
 
             await _send_json(ws, tool_msg)
 
-        skip = all(tc["function"]["name"] in SKIP_SECOND_CALL for tc in tool_calls)
-
-        if not skip:
+        skip_second = all(tc["function"]["name"] in SKIP_SECOND_CALL for tc in tool_calls)
+        needs_final = not content or not content.strip()
+        if skip_second and not needs_final:
+            pass
+        else:
             messages = [{"role": "system", "content": system}] + conv.get_context()
 
             try:
