@@ -16,7 +16,7 @@ Desktop AI personal assistant with:
 | Styling | Tailwind CSS (black + green custom palette) |
 | Desktop | Electron (BrowserWindow + FastAPI subprocess) |
 | Backend | FastAPI + uvicorn |
-| Data | Todos/events in `data.json`; conversations in per-day files under `conversations/` |
+| Data | Todos/events in `data.json`; conversations in per-day files under `conversations/`; operations in per-month files under `operations/` |
 | Chat streaming | WebSocket (`/ws/chat` — token-by-token) |
 | LLM | Ollama local — `gemma4:31b-cloud` |
 | STT | Web Speech API `SpeechRecognition` (frontend) / faster-whisper stub (backend) |
@@ -31,9 +31,9 @@ Desktop AI personal assistant with:
 ## Architecture
 - **Two-process**: FastAPI backend (uvicorn) + React frontend (Vite dev / Electron)
 - Vite proxies `/api` → `localhost:8771` and `/ws` → `ws://localhost:8771`
-- Local JSON-backed data store for todos, events, conversations
+- Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
-- 9 built-in function tools: `create_todo`, `update_todo`, `delete_todo`, `list_todos`, `create_event`, `update_event`, `delete_event`, `list_events`, `query_events`
+- 21 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status`
 - MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`)
 - `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
 - `mcp_server_git` — 12 tools for local git operations (status, log, diff, commit, branch)
@@ -42,6 +42,7 @@ Desktop AI personal assistant with:
 - WebSocket protocol: `token`/`tool_call`/`done`/`error` message types
 - Voice pipeline stubs: Mic → VAD → whisper → LLM → TTS → speakers (interruptible)
 - Panels auto-refresh after LLM tool calls (todos + calendar update live)
+- Operation Log: per-month indexed file storage (`operations/YYYY-MM.json`), 5 in-memory indexes, `query_operations` LLM tool, auto-context injection for historical queries
 - Knowledge Graph "Brain" persists all todos, events, conversations, user preferences, and semantic relationships as typed nodes + edges in `memory_graph.json`
 - Memory tools: `remember`, `recall`, `recall_entity`, `forget` — available to LLM alongside built-in tools
 - Auto-sync: todo/event CRUD → graph nodes; conversation CRUD → conversation nodes
@@ -66,7 +67,8 @@ mayday/
 │   │   └── chat.py                   # WebSocket endpoint (streaming)
 │   ├── core/
 │   │   ├── data_store.py             # JSON persistence (thread-safe)
-│   │   └── config.py                 # YAML config loader
+│   │   ├── config.py                 # YAML config loader
+│   │   └── operation_log.py          # Per-month operation log (indexed, thread-safe)
 │   ├── memory/
 │   │   ├── __init__.py
 │   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
@@ -148,6 +150,8 @@ mayday/
 │   ├── index.json                   # Fast lookup: id → date mapping
 │   └── YYYY-MM-DD.json              # All conversations from that day
 ├── screenshots/                     # Screenshot images + index.json
+├── operations/                      # Per-month operation log files
+│   └── YYYY-MM.json                 # All operations from that month
 ├── plan.md                          # MCP integration plan
 ├── main.py                          # Original PyQt6 entry (kept as reference)
 ├── ui/                              # Original PyQt6 widgets (kept as reference)
@@ -201,6 +205,16 @@ mayday/
 ← {"type":"tool_call","name":"create_todo","result":"Created todo: buy milk (id: abc)"}
 ...
 ← {"type":"done"}
+```
+
+### WebSocket Protocol (detailed)
+```
+→ {"type":"message","content":"..."}
+← {"type":"token","content":"..."}        # Streaming token
+← {"type":"tool_call","name":"fn","result":"..."}  # Tool result card
+← {"type":"tool_call","name":"fn","result":"...","image_url":"/screenshots/..."}  # With image
+← {"type":"error","content":"..."}         # Error message
+← {"type":"done"}                          # Stream complete
 ```
 
 ## Data Flow
@@ -276,7 +290,11 @@ yellow:  '#eab308'
 - [x] **Clean graph API filtering**: `GET /api/memory/graph` and auto-context injection filter out internal `search_result` junk nodes — Brain tab shows only real data
 - [x] **Label normalization**: `add_node()` auto-strips whitespace; `_find_exact_node()` handles `project:`/`tag:` prefixed lookups
 - [x] **LLM operation awareness**: System prompt instructs LLM to explicitly report what was created/updated/deleted after EVERY tool call
-- [x] **38 passing tests** covering dedup, tombstone, repair, clean graph, prefix matching, and end-to-end delete flows
+- [x] **Operation Log**: Per-month indexed file storage (`operations/YYYY-MM.json`) with 5 in-memory indexes for O(log n) + O(1) queries. Records all CRUD operations from both REST API and LLM tool dispatch paths. Auto-context injection for historical queries.
+- [x] **`query_operations` LLM tool**: Search operations by action (create/update/delete), entity type, date range, or full-text query. Available to LLM in all conversations.
+- [x] **Bug fix: operation recording in LLM tool path**: Recording was only in REST endpoints (`todos.py`, `events.py`) — LLM-created entities through `todo_functions.py` and `calendar_functions.py` were never logged. Fixed by adding `get_operation_log().record()` to both function files.
+- [x] **Bug fix: silent second LLM call**: Second call passed `tools=filtered_tools`, allowing LLM to call another tool instead of generating text. When LLM returned only tool_calls (no content), user saw tool_call bubble but no natural language response. Fixed by removing tools from second call (`tools=[]`).
+- [x] **70 passing tests** (30 operation log + 40 memory graph) covering record, query, stats, full-text, persistence, concurrency, dedup, tombstone, repair, clean graph, prefix matching
 
 ## How to Run
 
@@ -310,7 +328,6 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - Frontend WebSocket connects on mount — reconnection logic is basic (3s retry)
 - Electron dev mode requires FastAPI running separately; production mode serves built frontend from FastAPI
 - MCP playwright server disabled (npx EPERM on Windows npm cache). Enable in `config.yaml` when running on Linux/macOS or after fixing npm permissions
-- MCP `mcp_server_git` tools require `repo_path` — LLM may need explicit guidance to pass the correct path
 - MCP `mcp_server_git` tools require `repo_path` — LLM may need explicit guidance to pass the correct path
 - LLM model `gemma4:31b-cloud` is cloud-proxied — may have higher latency than local models. Set to any `ollama list` model for local inference
 - Chat engine uses non-streaming LLM calls despite streaming infrastructure existing in `LLMClient.stream_tokens()`
@@ -350,6 +367,7 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - `plan.md`: MCP integration architecture and implementation plan
 - `backend/api/screenshots.py`: ScreenshotStore + REST list/delete endpoints + 3 LLM tools
 - `backend/core/data_store.py`: JSON persistence (todos, events) + per-day conversation file storage
+- `backend/core/operation_log.py`: Per-month indexed operation log (record, query, stats, full-text search)
 - `backend/memory/knowledge_graph.py`: KnowledgeGraph singleton (JSON persistence, thread-safe)
 - `backend/memory/memory_tools.py`: 5 LLM functions for memory (remember, recall, recall_entity, forget, delete_entity)
 - `backend/api/memory.py`: REST API for graph visualization (GET/DELETE nodes)
