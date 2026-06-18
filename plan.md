@@ -711,7 +711,177 @@ forget("AGI Personal Assistant")
 New session: remember("project:AGI Personal Assistant", ...)
   → _check_tombstone() finds tombstone
   → Returns "was previously deleted on 2026-06-17. Not recreating it."
-  → LLM tells user: "That project was deleted previously."
+   → LLM tells user: "That project was deleted previously."
 ```
+
+---
+
+## Tier 3 — Richer Daily Use (In Progress)
+
+### Goal
+Make Mayday useful for real daily workflows with recurring tasks, cross-type search, and data portability.
+
+### Status — IN PROGRESS
+
+---
+
+### 3a. Recurring Tasks & Events
+
+#### Data Model
+Add `recurrence` field to both todos and events:
+
+```typescript
+recurrence?: {
+  pattern: 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'yearly'
+  interval?: number     // every N (default 1)
+  end_date?: string     // YYYY-MM-DD, optional
+  count?: number        // max occurrences, optional
+}
+```
+
+#### Backend Changes
+
+| File | Changes |
+|------|---------|
+| `backend/core/data_store.py` | Add `recurrence` to `create_todo`, `update_todo`, `create_event`, `update_event`; add `expand_recurring(entity, start, end)` that generates instances for a date range using simple date arithmetic |
+| `backend/functions/todo_functions.py` | Pass `recurrence` through in `create_todo`/`update_todo` |
+| `backend/functions/calendar_functions.py` | Pass `recurrence` through; `list_events` auto-expands recurring events into the requested date range |
+| `backend/api/events.py` | `GET /api/events?start_date&end_date` — expand recurring instances into the range on-the-fly (after initial fetch from store) |
+| `backend/api/todos.py` | No expansion needed (todos show as-is) |
+
+#### Frontend Changes
+
+| File | Changes |
+|------|---------|
+| `frontend/src/types/todo.ts` | Add `recurrence?: RecurrenceRule` interface |
+| `frontend/src/types/event.ts` | Same |
+| `frontend/src/components/todos/TodoDialog.tsx` | Add recurrence section: `<select>` for pattern (none/daily/weekly/biweekly/monthly/yearly) + optional interval/end-date inputs |
+| `frontend/src/components/todos/TodoItem.tsx` | Show recurrence badge (green pill: "weekly") |
+| `frontend/src/components/calendar/EventDialog.tsx` | Same recurrence section |
+| `frontend/src/components/calendar/DayCell.tsx` | Show recurring indicator (ring or dot badge) |
+| `frontend/src/components/calendar/MonthGrid.tsx` | Display expanded instances with `recurring` flag |
+
+#### Expansion Logic (`data_store.py`)
+
+```python
+def expand_recurring(self, entity: dict, start_date: str, end_date: str) -> list[dict]:
+    rec = entity.get("recurrence")
+    if not rec:
+        return [entity]
+    pattern = rec["pattern"]
+    interval = rec.get("interval", 1)
+    end = rec.get("end_date") or end_date
+    instances = []
+    # Generate instances within [start_date, end_date] using pattern
+    # For weekly: add 7*interval days
+    # For monthly: add interval months
+    # Each instance copies entity fields + adjusts start_time/end_time
+    return instances
+```
+
+---
+
+### 3b. Unified Search
+
+#### New Backend Endpoint
+
+```
+GET /api/search?q=<query>&limit=20
+```
+
+Response:
+```json
+{
+  "todos": [{"id", "title", "snippet", "matched_field"}],
+  "events": [...],
+  "conversations": [{"id", "title", "date", "snippet"}],
+  "graph_nodes": [{"id", "label", "type", "snippet"}],
+  "operations": [{"id", "action", "entity_type", "entity_name", "timestamp"}]
+}
+```
+
+#### Backend Changes
+
+| File | Changes |
+|------|---------|
+| `backend/api/search.py` | **CREATE** — New router; queries all 5 stores, merges results ranked by relevance, returns categorized JSON |
+| `backend/main.py` | Import + register search router |
+| `backend/assistant/function_registry.py` | Add `unified_search(query)` LLM tool definition + dispatch entry |
+| `backend/api/chat.py` | Add `"unified_search"` to `CORE_TOOL_NAMES` |
+
+#### Search Query Mapping
+
+| Data Source | What's searched | Method |
+|-------------|-----------------|--------|
+| Todos | title, description | `get_store().list_todos(query=q)` |
+| Events | title, description | `get_store().list_events(query=q)` |
+| Conversations | title (index) + message text | Scan daily files, search message contents |
+| Graph nodes | label, properties | `get_graph().search(q)` |
+| Operations | entity_name, user_message | `get_operation_log().query(query=q)` |
+
+#### Frontend Changes
+
+| File | Changes |
+|------|---------|
+| `frontend/src/services/api.ts` | Add `searchAll(query)` function |
+| `frontend/src/hooks/useSearch.ts` | **CREATE** — search hook with 300ms debounce, abort controller |
+| `frontend/src/components/search/SearchOverlay.tsx` | **CREATE** — modal overlay with search input + categorized results; click navigates to correct panel |
+| `frontend/src/components/layout/Sidebar.tsx` | Add search icon button; register Ctrl+K global listener |
+| `frontend/src/App.tsx` | Render `SearchOverlay` when active |
+
+#### LLM Tool
+
+```python
+{
+    "name": "unified_search",
+    "description": "Search across all Mayday data (todos, events, conversations, memories, operations). Use when the user asks a broad question like 'find that thing about the API' or 'what did I do with X'.",
+    "parameters": {
+        "query": {"type": "string", "description": "Search query"}
+    },
+    "required": ["query"]
+}
+```
+
+---
+
+### 3c. Data Export/Import
+
+#### New Backend Endpoints
+
+```
+GET  /api/export   →  JSON blob (download as mayday-backup-YYYY-MM-DD.json)
+POST /api/import   ←  Accept same JSON blob
+```
+
+#### Export Blob Structure
+
+```json
+{
+  "exported_at": "2026-06-18T12:00:00Z",
+  "version": "1.0",
+  "todos": [...],
+  "events": [...],
+  "conversations": { "index": [...], "days": {"YYYY-MM-DD.json": [...]} },
+  "operations": { "months": ["2026-06"], "files": {"2026-06.json": [...]} },
+  "memory_graph": { "nodes": [...], "edges": [...] },
+  "screenshots": { "index": [...] }
+}
+```
+
+#### Backend Changes
+
+| File | Changes |
+|------|---------|
+| `backend/api/export.py` | **CREATE** — `/api/export` collects from all stores + file system; `/api/import` validates and writes all data |
+| `backend/main.py` | Register export router |
+
+#### Frontend Changes
+
+| File | Changes |
+|------|---------|
+| `frontend/src/services/api.ts` | Add `exportData()`, `importData(json)` |
+| `frontend/src/components/settings/SettingsDialog.tsx` | **CREATE** — basic settings modal with Export/Import buttons and model/API config fields (reuses Phase 7 scope) |
+| `frontend/src/App.tsx` | Add settings button to sidebar or header |
+| `frontend/src/components/layout/Sidebar.tsx` | Add gear icon for settings |
 
 
