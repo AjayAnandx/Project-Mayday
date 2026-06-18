@@ -1,10 +1,12 @@
 from backend.core.data_store import get_store
+from backend.core.operation_log import get_operation_log
 
 
 def create_event(title: str, start_time: str, end_time: str,
                  description: str = "", all_day: bool = False) -> str:
     store = get_store()
     event = store.create_event(title, start_time, end_time, description, all_day)
+    get_operation_log().record("create", "event", event["id"], event["title"])
     return f"Created event: {event['title']} (id: {event['id']})"
 
 
@@ -12,13 +14,17 @@ def update_event(event_id: str, **kwargs) -> str:
     store = get_store()
     event = store.update_event(event_id, **kwargs)
     if event:
+        get_operation_log().record("update", "event", event_id, event["title"], details=kwargs)
         return f"Updated event: {event['title']} (id: {event['id']})"
     return f"Event {event_id} not found"
 
 
 def delete_event(event_id: str) -> str:
     store = get_store()
+    event = store.get_event(event_id)
+    name = event["title"] if event else event_id
     if store.delete_event(event_id):
+        get_operation_log().record("delete", "event", event_id, name)
         return f"Deleted event {event_id}"
     return f"Event {event_id} not found"
 
