@@ -2,6 +2,7 @@ import json
 import asyncio
 import logging
 import os
+import re
 from datetime import date
 
 import httpx
@@ -44,9 +45,10 @@ Rules: {rules}
 - Before creating a new todo, event, or entity, call recall() or recall_entity() first to check for existing data — this prevents duplicates
 - Conversations are also synced to the knowledge graph as nodes — use recall_entity() on a conversation ID to find linked projects
 ### Forgetting / Deleting
-- If the user asks to forget, delete, or remove a project, topic, or entity, call forget(entity="<name>") with ONLY the entity name (no relation/value needed). This will delete the entire entity and all its connections.
+- If the user asks to forget, delete, or remove a project, topic, or entity, call forget(entity="<name>") with ONLY the entity name (no relation/value needed). This will scrap the entire entity by setting its status to 'scraped'.
 - Do NOT guess relation/value for forget(). Just pass the entity name alone.
-- Deleted entities are permanently blocked from being recreated. If remember() returns "was previously deleted", tell the user that entity was deleted before and cannot be recreated.
+- Scraped entities stay in the knowledge graph with status 'scraped'. You can find them with recall() or recall_entity(). Tell the user the entity is now scraped but can be reactivated with set_status().
+- If the user wants to restore a scraped entity, call set_status(name="<entity>", status="active").
 - If forget(entity="<name>") returns "No entity found", the entity might be stored with a "project:" or "tag:" prefix. Try forget(entity="project:<name>") or search with recall("<name>") first to find the exact label.
 ### Querying the Knowledge Graph
 - When listing projects, call recall("project:") (with colon) - this finds only project-prefixed nodes and returns clean results.
@@ -60,7 +62,7 @@ Rules: {rules}
 - For deletes: state what was removed and confirm it's gone from both the data store and the knowledge graph.
 - Example: "Created todo 'Buy milk' (high priority, due tomorrow). I also synced it to the knowledge graph."
 - Example: "Updated todo 'Buy milk' - set priority from 1 to 2. Knowledge graph is also updated."
-- Example: "Deleted project 'AGI Personal Assistant' from the knowledge graph. It is tombstoned and cannot be recreated."""
+- Example: "Deleted project 'AGI Personal Assistant' — status set to 'scraped'. It can be reactivated with set_status() if needed."""
 
 PROJECT_INSTRUCTIONS = """
 ### Project Tracking
@@ -68,13 +70,109 @@ PROJECT_INSTRUCTIONS = """
     remember(entity="project:<name>", relation="status", value="started", node_type="project")
 - When RESUMING an existing project:
     1. recall_entity("project:<name>") to find the project and ALL linked conversations
-    2. If the entity does not exist (returns "No entity found"), it was previously deleted — tell the user: "The project '<name>' was deleted previously."
-    3. Otherwise, call get_conversation_history(<conv_id>) for EACH linked conversation by ID
-    4. Present a full summary: what was done, what was next, what to do now
+    2. If the entity exists with status 'scraped', tell the user: "The project '<name>' was scrapped previously. Use set_status('project:<name>', 'active') to reactivate it."
+    3. If the entity does not exist (returns "No entity found"), tell the user: "No project found with that name."
+    4. Otherwise, call get_conversation_history(<conv_id>) for EACH linked conversation by ID
+    5. Present a full summary: what was done, what was next, what to do now
 - Update progress:
     remember(entity="project:<name>", relation="last_task", value="<what_was_done>", node_type="project")
     remember(entity="project:<name>", relation="next_task", value="<what_is_next>", node_type="project")
-- To list all active projects, call recall("project:") (with colon) — this finds all project-prefixed nodes in the knowledge graph."""
+- To list all active projects, call recall("project:") (with colon) — this finds all project-prefixed nodes in the knowledge graph. Check each project's 'status' field to see if it's active, inactive, or scraped."""
+
+CORE_TOOL_NAMES = {
+    "create_todo", "update_todo", "delete_todo", "list_todos",
+    "create_event", "update_event", "delete_event", "list_events", "query_events",
+    "remember", "recall", "recall_entity", "forget", "delete_entity", "set_status",
+    "get_conversations", "get_conversation_history",
+    "list_screenshots", "get_screenshot", "delete_screenshot",
+}
+
+GIT_KEYWORDS = re.compile(r"\b(git|commit|branch|diff|log|status|staged|unstaged|push|pull|clone)\b", re.I)
+GITHUB_KEYWORDS = re.compile(r"\b(github|repo|repository|issue|pr|pull\s*request|release|fork|star)\b", re.I)
+BROWSER_KEYWORDS = re.compile(r"\b(browser|web|url|http|navigate|click|type|input|page|selenium|website|google)\b", re.I)
+FETCH_KEYWORDS = re.compile(r"\b(fetch|curl|api\s*request)\b", re.I)
+
+GIT_TOOL_NAMES = {
+    "git_status", "git_diff_unstaged", "git_diff_staged", "git_diff",
+    "git_commit", "git_add", "git_reset", "git_log",
+    "git_create_branch", "git_checkout", "git_show", "git_branch",
+}
+
+GITHUB_TOOL_NAMES = {
+    "create_branch", "create_or_update_file", "create_repository",
+    "delete_file", "fork_repository", "get_commit", "get_file_contents",
+    "get_latest_release", "get_me", "get_release_by_tag", "get_tag",
+    "list_branches", "list_commits", "list_releases",
+    "list_repository_collaborators", "list_tags", "push_files",
+    "search_code", "search_commits", "search_repositories",
+}
+
+FETCH_TOOL_NAMES = {"fetch"}
+
+SELENIUM_TOOL_NAMES = {
+    "navigate", "get_an_element", "get_direct_children", "get_elements",
+    "click_to_element", "set_value_to_input_element", "take_screenshot",
+    "run_javascript_in_console", "run_javascript_and_get_console_output",
+    "get_console_logs", "get_network_logs", "get_response",
+    "get_style_an_element", "check_page_ready", "local_storage_add",
+    "local_storage_read", "local_storage_remove", "local_storage_read_all",
+    "local_storage_remove_all",
+}
+
+
+def filter_tools(text: str, all_tools: list[dict]) -> list[dict]:
+    active_groups = {"core"}
+
+    if GIT_KEYWORDS.search(text):
+        active_groups.add("git")
+    if GITHUB_KEYWORDS.search(text):
+        active_groups.add("github")
+    if BROWSER_KEYWORDS.search(text):
+        active_groups.add("browser")
+    if FETCH_KEYWORDS.search(text):
+        active_groups.add("fetch")
+
+    allowed = dict.fromkeys(CORE_TOOL_NAMES)
+    if "git" in active_groups:
+        allowed.update(dict.fromkeys(GIT_TOOL_NAMES))
+    if "github" in active_groups:
+        allowed.update(dict.fromkeys(GITHUB_TOOL_NAMES))
+    if "browser" in active_groups:
+        allowed.update(dict.fromkeys(SELENIUM_TOOL_NAMES))
+    if "fetch" in active_groups:
+        allowed.update(dict.fromkeys(FETCH_TOOL_NAMES))
+
+    result = [t for t in all_tools if t["function"]["name"] in allowed]
+    if len(result) < len(all_tools):
+        filtered = len(all_tools) - len(result)
+        exclude = [t["function"]["name"] for t in all_tools if t["function"]["name"] not in allowed]
+        logger.debug("Filtered %d tools (excluded: %s)", filtered, exclude)
+    return result
+
+
+MAX_TOOL_RESULT_LENGTH = 3000
+
+SKIP_SECOND_CALL = {
+    # CRUD operations — result IS the answer
+    "create_todo", "update_todo", "delete_todo",
+    "create_event", "update_event", "delete_event",
+    # Memory management
+    "forget", "delete_entity", "set_status", "remember",
+    # Screenshot delete
+    "delete_screenshot",
+    # Browser actions (not reads)
+    "navigate", "click_to_element", "set_value_to_input_element",
+    "take_screenshot", "run_javascript_in_console",
+    "check_page_ready",
+    "local_storage_add", "local_storage_read", "local_storage_remove",
+    "local_storage_read_all", "local_storage_remove_all",
+    # Git actions (not reads)
+    "git_commit", "git_add", "git_reset",
+    "git_create_branch", "git_checkout",
+    # GitHub actions (not reads)
+    "create_branch", "create_or_update_file", "create_repository",
+    "delete_file", "fork_repository", "push_files",
+}
 
 CONNECTION_HINT = (
     "Make sure Ollama is running locally (`ollama serve`), "
@@ -136,10 +234,14 @@ async def _run_engine(
 
     loop = asyncio.get_running_loop()
 
+    filtered_tools = filter_tools(user_text, tools)
+    if len(filtered_tools) == 0:
+        filtered_tools = tools
+
     try:
         def first_call(msgs):
-            logger.info("Calling LLM with %d tools: %s", len(tools), [t["function"]["name"] for t in tools])
-            resp = llm.chat(msgs, stream=False, tools=tools)
+            logger.info("Calling LLM with %d tools (filtered from %d): %s", len(filtered_tools), len(tools), [t["function"]["name"] for t in filtered_tools])
+            resp = llm.chat(msgs, stream=False, tools=filtered_tools)
             resp.raise_for_status()
             data = resp.json()
             logger.info("LLM response choices: %d", len(data.get("choices", [])))
@@ -166,6 +268,8 @@ async def _run_engine(
             if isinstance(fn_args, str):
                 fn_args = json.loads(fn_args)
             result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
+            if len(result) > MAX_TOOL_RESULT_LENGTH:
+                result = result[:MAX_TOOL_RESULT_LENGTH] + "\n...[truncated]"
             conv.add_message("assistant", f"[Called {fn_name}] {result}")
 
             if kg and fn_name in ("create_todo", "update_todo", "delete_todo"):
@@ -174,7 +278,6 @@ async def _run_engine(
                 if fn_name == "delete_todo":
                     kg.delete_todo_node(fn_args.get("todo_id", ""))
                 elif fn_name == "create_todo":
-                    import re
                     m = re.search(r'\(id: ([a-f0-9]+)\)', result)
                     if m:
                         todo = store.get_todo(m.group(1))
@@ -193,7 +296,6 @@ async def _run_engine(
                 if fn_name == "delete_event":
                     kg.delete_event_node(fn_args.get("event_id", ""))
                 elif fn_name == "create_event":
-                    import re
                     m = re.search(r'\(id: ([a-f0-9]+)\)', result)
                     if m:
                         event = store.get_event(m.group(1))
@@ -228,18 +330,21 @@ async def _run_engine(
 
             await _send_json(ws, tool_msg)
 
-        messages = [{"role": "system", "content": system}] + conv.get_context()
+        skip = all(tc["function"]["name"] in SKIP_SECOND_CALL for tc in tool_calls)
 
-        try:
-            def second_call(msgs):
-                resp = llm.chat(msgs, stream=False, tools=tools)
-                resp.raise_for_status()
-                return llm.extract_response(resp)
+        if not skip:
+            messages = [{"role": "system", "content": system}] + conv.get_context()
 
-            content, _ = await loop.run_in_executor(None, second_call, messages)
-        except Exception as e:
-            logger.error(f"Second LLM call error: {e}")
-            content = None
+            try:
+                def second_call(msgs):
+                    resp = llm.chat(msgs, stream=False, tools=filtered_tools)
+                    resp.raise_for_status()
+                    return llm.extract_response(resp)
+
+                content, _ = await loop.run_in_executor(None, second_call, messages)
+            except Exception as e:
+                logger.error(f"Second LLM call error: {e}")
+                content = None
 
     if content:
         conv.add_message("assistant", content)

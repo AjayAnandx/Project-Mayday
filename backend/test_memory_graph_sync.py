@@ -172,7 +172,7 @@ class TestFix2RecallPollution:
 class TestDeleteEntity:
     """delete_entity removes a node + all edges from the knowledge graph."""
 
-    def test_delete_entity_removes_node(self):
+    def test_delete_entity_sets_status_scraped(self):
         store, kg = make_fresh()
         nid = kg.add_node("project", "TestProject", {"status": "active"})
         assert len(kg.get_full_graph()["nodes"]) == 1
@@ -181,11 +181,13 @@ class TestDeleteEntity:
             from backend.memory.memory_tools import delete_entity
             result = delete_entity("TestProject")
 
-        assert "Deleted entity" in result
+        assert "Scraped entity" in result
         assert "TestProject" in result
-        assert not any(n["label"] == "TestProject" for n in kg.get_full_graph()["nodes"])
+        node = kg.get_node(nid)
+        assert node is not None
+        assert node["properties"]["status"] == "scraped"
 
-    def test_delete_entity_removes_edges(self):
+    def test_delete_entity_keeps_node_and_edges(self):
         store, kg = make_fresh()
         a = kg.add_node("concept", "A", {})
         b = kg.add_node("concept", "B", {})
@@ -196,8 +198,12 @@ class TestDeleteEntity:
             from backend.memory.memory_tools import delete_entity
             delete_entity("A")
 
-        assert not any(n["label"] == "A" for n in kg.get_full_graph()["nodes"])
-        assert len(kg.get_full_graph()["edges"]) == 0
+        # Node A still exists but status is scraped
+        node_a = kg.get_node(a)
+        assert node_a is not None
+        assert node_a["properties"]["status"] == "scraped"
+        # Edges are preserved
+        assert len(kg.get_full_graph()["edges"]) == 1
 
     def test_delete_entity_not_found(self):
         store, kg = make_fresh()
@@ -210,14 +216,16 @@ class TestDeleteEntity:
 
     def test_delete_entity_case_sensitive(self):
         store, kg = make_fresh()
-        kg.add_node("project", "MyProject", {})
+        nid = kg.add_node("project", "MyProject", {})
 
         with mock.patch("backend.memory.memory_tools.get_graph", return_value=kg):
             from backend.memory.memory_tools import delete_entity
             result = delete_entity("myproject")
 
-        assert "Deleted entity" in result
-        assert len(kg.get_full_graph()["nodes"]) == 0
+        assert "Scraped entity" in result
+        node = kg.get_node(nid)
+        assert node is not None
+        assert node["properties"]["status"] == "scraped"
 
 
 class TestFix3AutoContext:
@@ -374,7 +382,7 @@ class TestUpdateReturnIds:
 class TestForgetEntityFallback:
     """forget(entity) without relation/value should delete the entire entity."""
 
-    def test_forget_entity_only_removes_node(self):
+    def test_forget_entity_only_sets_status_scraped(self):
         _, kg = make_fresh()
         kg.add_node("project", "AGI Personal Assistant", {"status": "active"})
         kg.add_node("project", "Personal Development", {"status": "started"})
@@ -384,11 +392,15 @@ class TestForgetEntityFallback:
             from backend.memory.memory_tools import forget
             result = forget("AGI Personal Assistant")
 
-        assert "Deleted entity" in result
+        assert "Scraped entity" in result
         assert "AGI Personal Assistant" in result
-        assert len(kg.get_full_graph()["nodes"]) == 1
+        # Node still exists but status changed
+        assert len(kg.get_full_graph()["nodes"]) == 2
+        for n in kg.get_full_graph()["nodes"]:
+            if n["label"] == "AGI Personal Assistant":
+                assert n["properties"]["status"] == "scraped"
 
-    def test_forget_entity_removes_connected_edges(self):
+    def test_forget_entity_keeps_connected_edges(self):
         _, kg = make_fresh()
         a = kg.add_node("project", "MyProject", {})
         b = kg.add_node("concept", "some idea", {})
@@ -399,8 +411,9 @@ class TestForgetEntityFallback:
             from backend.memory.memory_tools import forget
             forget("MyProject")
 
-        assert len(kg.get_full_graph()["nodes"]) == 1
-        assert len(kg.get_full_graph()["edges"]) == 0
+        # Node A still exists, edges are preserved
+        assert len(kg.get_full_graph()["nodes"]) == 2
+        assert len(kg.get_full_graph()["edges"]) == 1
 
     def test_forget_with_relation_value_still_works(self):
         _, kg = make_fresh()
@@ -427,30 +440,30 @@ class TestForgetEntityFallback:
         assert "No entity found" in result
 
 
-class TestTombstone:
-    """delete_entity records a tombstone; remember() respects it."""
+class TestStatusSystem:
+    """delete_entity sets status to 'scraped'; remember() warns and suggests set_status()."""
 
-    def test_delete_entity_creates_tombstone(self):
+    def test_delete_entity_sets_status_scraped(self):
         _, kg = make_fresh()
-        kg.add_node("project", "MyProject", {})
+        nid = kg.add_node("project", "MyProject", {})
         with mock.patch("backend.memory.memory_tools.get_graph", return_value=kg):
             from backend.memory.memory_tools import delete_entity
             delete_entity("MyProject")
 
-        assert kg.is_deleted("MyProject") is not None
-        assert kg.is_deleted("MyProject")["original_name"] == "MyProject"
+        node = kg.get_node(nid)
+        assert node is not None
+        assert node["properties"]["status"] == "scraped"
 
-    def test_remember_blocked_by_tombstone(self):
+    def test_remember_warns_on_scraped_node(self):
         _, kg = make_fresh()
-        kg.add_tombstone("DeletedProject")
+        kg.add_node("project", "ScrappedProject", {"status": "scraped"})
 
         with mock.patch("backend.memory.memory_tools.get_graph", return_value=kg):
             from backend.memory.memory_tools import remember
-            result = remember("DeletedProject", "status", "active", node_type="project")
+            result = remember("ScrappedProject", "status", "active", node_type="project")
 
-        assert "was previously deleted" in result
-        assert "Not recreating" in result
-        assert not any(n["label"] == "DeletedProject" for n in kg.get_full_graph()["nodes"])
+        assert "already exists with status 'scraped'" in result
+        assert "set_status()" in result
 
     def test_remember_normal_still_works(self):
         _, kg = make_fresh()
@@ -461,112 +474,140 @@ class TestTombstone:
         assert "Remembered" in result
         assert len(kg.get_full_graph()["nodes"]) == 2
 
-    def test_is_deleted_nonexistent(self):
+    def test_set_status_reactivates(self):
         _, kg = make_fresh()
-        assert kg.is_deleted("Nothing") is None
+        nid = kg.add_node("project", "MyProject", {"status": "scraped"})
 
-    def test_tombstone_persistence(self):
+        with mock.patch("backend.memory.memory_tools.get_graph", return_value=kg):
+            from backend.memory.memory_tools import set_status
+            result = set_status("MyProject", "active")
+
+        assert "Updated 'MyProject' status" in result
+        assert "scraped → active" in result
+        node = kg.get_node(nid)
+        assert node["properties"]["status"] == "active"
+
+    def test_set_status_nonexistent(self):
         _, kg = make_fresh()
-        kg.add_tombstone("PersistentTomb")
-        kg._save()
+        with mock.patch("backend.memory.memory_tools.get_graph", return_value=kg):
+            from backend.memory.memory_tools import set_status
+            result = set_status("Nonexistent", "active")
+        assert "No entity found" in result
 
-        kg2 = type(kg).__new__(type(kg))
-        kg2._path = kg._path
-        kg2._lock = threading.RLock()
-        kg2._nodes = {}
-        kg2._edges = []
-        kg2._tombstones = {}
-        kg2._load()
-
-        assert kg2.is_deleted("PersistentTomb") is not None
-        assert kg2.is_deleted("PersistentTomb")["original_name"] == "PersistentTomb"
-
-    def test_repair_removes_junk_and_projects(self):
+    def test_repair_scrapes_junk_and_projects(self):
         _, kg = make_fresh()
         kg._nodes["a"] = {"id": "a", "type": "concept", "label": "project", "properties": {"search_result": "true"}}
         kg._nodes["b"] = {"id": "b", "type": "concept", "label": "project", "properties": {"search_result": "true"}}
-        kg._nodes["c"] = {"id": "c", "type": "project", "label": "project:AGI Personal Assistant", "properties": {}}
-        kg._nodes["d"] = {"id": "d", "type": "project", "label": "project:Personal Development", "properties": {}}
-        kg._nodes["e"] = {"id": "e", "type": "concept", "label": "Alex", "properties": {}}
+        kg._nodes["c"] = {"id": "c", "type": "project", "label": "project:AGI Personal Assistant", "properties": {"status": "active"}}
+        kg._nodes["d"] = {"id": "d", "type": "project", "label": "project:Personal Development", "properties": {"status": "active"}}
+        kg._nodes["e"] = {"id": "e", "type": "concept", "label": "Alex", "properties": {"status": "active"}}
         kg._nodes["f"] = {"id": "f", "type": "project", "label": "project:RealProject", "properties": {"status": "active"}}
         kg._edges.append({"id": "e1", "source": "c", "target": "e", "relation": "relates_to", "properties": {}})
 
         report = kg.repair_graph()
 
-        assert report["junk_removed"] == 2
-        assert "project:AGI Personal Assistant" in report["projects_removed"]
-        assert "project:Personal Development" in report["projects_removed"]
-        assert report["total_removed"] == 4
-        remaining = [n["label"] for n in kg.get_full_graph()["nodes"]]
-        assert "Alex" in remaining
-        assert "project:RealProject" in remaining
-        assert "project" not in remaining
-        assert kg.is_deleted("project:AGI Personal Assistant") is not None
-        assert kg.is_deleted("project:Personal Development") is not None
+        assert report["junk_scraped"] == 2
+        assert "project:AGI Personal Assistant" in report["projects_scraped"]
+        assert "project:Personal Development" in report["projects_scraped"]
+        assert report["total_scraped"] == 4
+        # All nodes still exist
+        assert len(kg.get_full_graph()["nodes"]) == 6
+        # Scraped ones have status set
+        assert kg._nodes["a"]["properties"]["status"] == "scraped"
+        assert kg._nodes["c"]["properties"]["status"] == "scraped"
+        # Alex and RealProject remain active
+        assert kg._nodes["e"]["properties"]["status"] == "active"
+        assert kg._nodes["f"]["properties"]["status"] == "active"
 
-    def test_clean_graph_filters_junk(self):
+    def test_clean_graph_filters_junk_and_scraped(self):
         _, kg = make_fresh()
         kg._nodes["j1"] = {"id": "j1", "type": "concept", "label": "project", "properties": {"search_result": "true"}}
-        kg._nodes["g1"] = {"id": "g1", "type": "project", "label": "project:Real", "properties": {}}
-        kg._edges.append({"id": "e1", "source": "j1", "target": "g1", "relation": "x", "properties": {}})
+        kg._nodes["s1"] = {"id": "s1", "type": "project", "label": "project:Scrapped", "properties": {"status": "scraped"}}
+        kg._nodes["g1"] = {"id": "g1", "type": "project", "label": "project:Real", "properties": {"status": "active"}}
+        kg._edges.append({"id": "e1", "source": "s1", "target": "g1", "relation": "x", "properties": {}})
 
         clean = kg.get_clean_graph()
         assert len(clean["nodes"]) == 1
         assert clean["nodes"][0]["label"] == "project:Real"
         assert len(clean["edges"]) == 0
 
-    def test_add_node_strips_whitespace(self):
+    def test_clean_graph_includes_scraped_when_requested(self):
         _, kg = make_fresh()
-        kg.add_node("concept", "  Hello World  ", {})
-        assert kg._nodes[list(kg._nodes.keys())[0]]["label"] == "Hello World"
+        kg._nodes["s1"] = {"id": "s1", "type": "project", "label": "project:Scrapped", "properties": {"status": "scraped"}}
+        kg._nodes["g1"] = {"id": "g1", "type": "project", "label": "project:Real", "properties": {"status": "active"}}
+        kg._nodes["j1"] = {"id": "j1", "type": "concept", "label": "junk", "properties": {"search_result": "true"}}
+
+        clean = kg.get_clean_graph(include_scraped=True)
+        assert len(clean["nodes"]) == 2
+        labels = {n["label"] for n in clean["nodes"]}
+        assert labels == {"project:Scrapped", "project:Real"}
+
+    def test_add_node_has_default_status(self):
+        _, kg = make_fresh()
+        nid = kg.add_node("concept", "Hello World", {})
+        node = kg.get_node(nid)
+        assert node["properties"]["status"] == "active"
+
+    def test_add_node_custom_status(self):
+        _, kg = make_fresh()
+        nid = kg.add_node("concept", "Hello World", {"status": "inactive"})
+        node = kg.get_node(nid)
+        assert node["properties"]["status"] == "inactive"
 
     def test_repair_on_clean_graph_is_noop(self):
         _, kg = make_fresh()
         kg.add_node("project", "project:Real", {})
         report = kg.repair_graph()
-        assert report["junk_removed"] == 0
-        assert report["projects_removed"] == []
-        assert report["total_removed"] == 0
+        assert report["junk_scraped"] == 0
+        assert report["projects_scraped"] == []
+        assert report["total_scraped"] == 0
 
-    def test_remember_tombstoned_at_new_session(self):
-        """Simulate: project deleted (with tombstone), then new session tries to recreate via remember()."""
+    def test_remember_scraped_at_new_session(self):
+        """Simulate: project scrapped, then new session tries to recreate via remember()."""
         _, kg = make_fresh()
-        kg.add_tombstone("project:AGI Personal Assistant")
+        kg.add_node("project", "project:AGI Personal Assistant", {"status": "scraped"})
 
         with mock.patch("backend.memory.memory_tools.get_graph", return_value=kg):
             from backend.memory.memory_tools import remember
             result = remember("project:AGI Personal Assistant", "status", "started", node_type="project")
 
-        assert "was previously deleted" in result
-        assert not any("AGI Personal Assistant" in n["label"] for n in kg.get_full_graph()["nodes"])
+        assert "already exists with status 'scraped'" in result
+        # Node is still there
+        assert any("AGI Personal Assistant" in n["label"] for n in kg.get_full_graph()["nodes"])
 
-    def test_forget_then_remember_new_session(self):
-        """Full end-to-end: LLM forgets a project, then tries to create it in a new session."""
+    def test_forget_then_set_status_reactivates(self):
+        """Full end-to-end: LLM scraps a project, then reactivates it."""
         _, kg = make_fresh()
-        kg.add_node("project", "project:AGI Personal Assistant", {"status": "active"})
+        nid = kg.add_node("project", "project:AGI Personal Assistant", {"status": "active"})
 
         with mock.patch("backend.memory.memory_tools.get_graph", return_value=kg):
             from backend.memory.memory_tools import delete_entity
             result = delete_entity("AGI Personal Assistant")
 
-        assert "Deleted entity" in result
-        assert kg.is_deleted("project:AGI Personal Assistant") is not None
+        assert "Scraped entity" in result
+
+        node = kg.get_node(nid)
+        assert node is not None
+        assert node["properties"]["status"] == "scraped"
 
         with mock.patch("backend.memory.memory_tools.get_graph", return_value=kg):
-            from backend.memory.memory_tools import remember
-            result = remember("project:AGI Personal Assistant", "status", "started", node_type="project")
+            from backend.memory.memory_tools import set_status
+            result = set_status("project:AGI Personal Assistant", "active")
 
-        assert "was previously deleted" in result
-        assert not any("AGI Personal Assistant" in n["label"] for n in kg.get_full_graph()["nodes"])
+        assert "scraped → active" in result
+        node = kg.get_node(nid)
+        assert node["properties"]["status"] == "active"
 
     def test_delete_entity_finds_prefixed_node(self):
-        """delete_entity('AGI Personal Assistant') should find node stored as 'project:AGI Personal Assistant'."""
+        """delete_entity('MyProject') should find node stored as 'project:MyProject'."""
         _, kg = make_fresh()
-        kg.add_node("project", "project:MyProject", {})
+        nid = kg.add_node("project", "project:MyProject", {})
 
         with mock.patch("backend.memory.memory_tools.get_graph", return_value=kg):
             from backend.memory.memory_tools import delete_entity
             result = delete_entity("MyProject")
 
-        assert "Deleted entity" in result
-        assert not any("MyProject" in n["label"] for n in kg.get_full_graph()["nodes"])
+        assert "Scraped entity" in result
+        node = kg.get_node(nid)
+        assert node is not None
+        assert node["properties"]["status"] == "scraped"

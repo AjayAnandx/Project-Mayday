@@ -41,7 +41,6 @@ class KnowledgeGraph:
         self._lock = threading.RLock()
         self._nodes: dict[str, dict] = {}
         self._edges: list[dict] = []
-        self._tombstones: dict[str, dict] = {}
         self._load()
 
     def _load(self):
@@ -50,7 +49,6 @@ class KnowledgeGraph:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
                 self._nodes = {n["id"]: n for n in data.get("nodes", [])}
                 self._edges = data.get("edges", [])
-                self._tombstones = data.get("tombstones", {})
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -58,18 +56,20 @@ class KnowledgeGraph:
         data = {
             "nodes": list(self._nodes.values()),
             "edges": self._edges,
-            "tombstones": self._tombstones,
         }
         self._path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def add_node(self, type: str, label: str, properties: dict | None = None) -> str:
         with self._lock:
             node_id = uuid.uuid4().hex[:12]
+            props = properties or {}
+            if "status" not in props:
+                props["status"] = "active"
             self._nodes[node_id] = {
                 "id": node_id,
                 "type": type,
                 "label": label.strip(),
-                "properties": properties or {},
+                "properties": props,
             }
             self._save()
             return node_id
@@ -148,11 +148,14 @@ class KnowledgeGraph:
                 "edges": list(self._edges),
             }
 
-    def get_clean_graph(self) -> dict:
+    def get_clean_graph(self, include_scraped: bool = False) -> dict:
         with self._lock:
             junk_ids = set()
             for nid, n in self._nodes.items():
-                if n.get("properties", {}).get("search_result") == "true":
+                props = n.get("properties", {})
+                if props.get("search_result") == "true":
+                    junk_ids.add(nid)
+                if not include_scraped and props.get("status") == "scraped":
                     junk_ids.add(nid)
             nodes = [n for n in self._nodes.values() if n["id"] not in junk_ids]
             edges = [e for e in self._edges if e["source"] not in junk_ids and e["target"] not in junk_ids]
@@ -323,41 +326,32 @@ class KnowledgeGraph:
             for nid in to_remove:
                 self.remove_node(nid)
 
-    def add_tombstone(self, name: str):
+    def set_status(self, label: str, status: str) -> dict | None:
         with self._lock:
-            key = name.strip().lower()
-            self._tombstones[key] = {
-                "original_name": name,
-                "deleted_on": __import__("datetime").date.today().isoformat(),
-            }
-            self._save()
-
-    def is_deleted(self, name: str) -> dict | None:
-        with self._lock:
-            return self._tombstones.get(name.strip().lower())
+            for n in self._nodes.values():
+                if n["label"].strip().lower() == label.strip().lower():
+                    n["properties"]["status"] = status
+                    self._save()
+                    return n
+            return None
 
     def repair_graph(self) -> dict:
         with self._lock:
-            report = {"junk_removed": 0, "projects_removed": [], "errors": []}
-            # Remove concept nodes with search_result=true
-            to_remove = set()
+            report = {"junk_scraped": 0, "projects_scraped": [], "errors": []}
+            scraped_ids = set()
             for nid, n in self._nodes.items():
                 if n["type"] == "concept" and n.get("properties", {}).get("search_result") == "true":
-                    to_remove.add(nid)
-                    report["junk_removed"] += 1
-            # Remove known stale project nodes
+                    scraped_ids.add(nid)
+                    report["junk_scraped"] += 1
             project_labels = ["project:AGI Personal Assistant", "project:Personal Development"]
             for nid, n in self._nodes.items():
                 if n["type"] == "project" and n["label"] in project_labels:
-                    to_remove.add(nid)
-                    report["projects_removed"].append(n["label"])
-            # Remove and tombstone
-            for nid in to_remove:
-                node = self._nodes.get(nid)
-                if node and node["type"] == "project":
-                    self.add_tombstone(node["label"])
-                self.remove_node(nid)
-            report["total_removed"] = len(to_remove)
+                    scraped_ids.add(nid)
+                    report["projects_scraped"].append(n["label"])
+            for nid in scraped_ids:
+                self._nodes[nid]["properties"]["status"] = "scraped"
+            self._save()
+            report["total_scraped"] = len(scraped_ids)
             return report
 
 

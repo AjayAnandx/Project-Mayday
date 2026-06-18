@@ -4,7 +4,7 @@ import logging
 from backend.core.data_store import get_store
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
-from backend.memory.memory_tools import remember, recall, recall_entity, forget, delete_entity
+from backend.memory.memory_tools import remember, recall, recall_entity, forget, delete_entity, set_status
 from backend.api.screenshots import list_screenshots, get_screenshot_info, delete_screenshot_file
 
 logger = logging.getLogger(__name__)
@@ -22,20 +22,43 @@ def get_conversations_from_store(date: str) -> str:
     return "\n".join(lines)
 
 
-def get_conversation_history_from_store(conversation_id: str, limit: int = 20) -> str:
+TOOL_KEYWORDS = (
+    "create_todo", "update_todo", "delete_todo", "list_todos",
+    "create_event", "update_event", "delete_event", "list_events",
+    "remember", "recall", "recall_entity", "forget",
+    "get_conversations", "get_conversation_history",
+)
+
+
+def get_conversation_history_from_store(conversation_id: str, limit: int = 5) -> str:
     store = get_store()
     conv = store.get_conversation(conversation_id)
     if not conv:
         return f"Conversation not found: {conversation_id}"
     msgs = store.get_recent_messages(conversation_id, limit=limit)
-    lines = [f"=== Previous Session ==="]
-    lines.append(f"Title: {conv.get('title', 'Untitled')}")
-    lines.append(f"ID: {conversation_id}")
-    lines.append(f"Messages: {len(msgs)}")
-    lines.append("")
+    if not msgs:
+        return f"Conversation '{conv.get('title', 'Untitled')}' ({conversation_id}) has no messages."
+
+    tool_counts: dict[str, int] = {}
     for m in msgs:
-        lines.append(f"{m['role']}: {m['content']}")
-    return "\n".join(lines)
+        c = m.get("content", "")
+        for kw in TOOL_KEYWORDS:
+            if kw in c:
+                tool_counts[kw] = tool_counts.get(kw, 0) + 1
+
+    first = msgs[0]
+    last = msgs[-1]
+
+    parts = [f"=== Previous Session: \"{conv.get('title', 'Untitled')}\" ==="]
+    parts.append(f"ID: {conversation_id} — {len(msgs)} messages")
+    if tool_counts:
+        parts.append("Tools: " + ", ".join(f"{k} ({v}x)" for k, v in sorted(tool_counts.items())))
+    first_text = first.get("content", "")[:150]
+    parts.append(f"First: {first.get('role')}: {first_text}")
+    if last is not first:
+        last_text = last.get("content", "")[:150]
+        parts.append(f"Last:  {last.get('role')}: {last_text}")
+    return "\n".join(parts)
 
 
 LOCAL_TOOL_DEFINITIONS = [
@@ -249,13 +272,28 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "delete_entity",
-            "description": "Permanently delete an entity and all its connections from long-term memory. Use when the user wants to remove a project, concept, or any memory node entirely.",
+            "description": "Set an entity's status to 'scraped'. The entity stays in the knowledge graph and can be reactivated later with set_status(). Use when the user wants to remove, abandon, or scrap a project/concept.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Exact name of the entity to delete"},
+                    "name": {"type": "string", "description": "Exact name of the entity to scrap"},
                 },
                 "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_status",
+            "description": "Change an entity's status between 'active', 'inactive', and 'scraped'. Use 'scraped' to abandon an entity, 'inactive' to pause it, 'active' to reactivate it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Exact name of the entity"},
+                    "status": {"type": "string", "enum": ["active", "inactive", "scraped"], "description": "New status value"},
+                },
+                "required": ["name", "status"],
             },
         },
     },
@@ -277,7 +315,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_conversation_history",
-            "description": "Retrieve full conversation history by conversation ID to recall past discussions and context.",
+            "description": "Retrieve a summary of a past conversation by ID. Returns title, message count, tools used, and first/last messages.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -350,6 +388,7 @@ FUNCTION_MAP = {
     "recall_entity": recall_entity,
     "forget": forget,
     "delete_entity": delete_entity,
+    "set_status": set_status,
     "get_conversations": get_conversations_from_store,
     "get_conversation_history": get_conversation_history_from_store,
     "list_screenshots": list_screenshots,

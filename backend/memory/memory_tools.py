@@ -3,27 +3,6 @@ from backend.memory.knowledge_graph import get_graph
 _PREFIXES = ("project:", "tag:", "date:", "concept:")
 
 
-def _check_tombstone(kg, name: str) -> dict | None:
-    record = kg.is_deleted(name)
-    if record:
-        return record
-    stripped = name
-    for p in _PREFIXES:
-        if stripped.startswith(p):
-            stripped = stripped[len(p):]
-            break
-    if stripped != name:
-        record = kg.is_deleted(stripped)
-        if record:
-            return record
-    for p in _PREFIXES:
-        prefixed = p + name
-        record = kg.is_deleted(prefixed)
-        if record:
-            return record
-    return None
-
-
 def _find_exact_node(kg, name: str) -> dict | None:
     for r in kg.search(name):
         if r["label"].strip().lower() == name.strip().lower():
@@ -36,13 +15,20 @@ def _find_exact_node(kg, name: str) -> dict | None:
     return None
 
 
+def _get_status(kg, name: str) -> str | None:
+    node = _find_exact_node(kg, name)
+    if node:
+        return node.get("properties", {}).get("status")
+    return None
+
+
 def remember(entity: str, relation: str, value: str, context: str = "", node_type: str = "concept") -> str:
     kg = get_graph()
     entity = entity.strip()
     value = value.strip()
-    tombstone = _check_tombstone(kg, entity)
-    if tombstone:
-        return f"Entity '{entity}' was previously deleted on {tombstone['deleted_on']}. Not recreating it."
+    status = _get_status(kg, entity)
+    if status == "scraped":
+        return f"Entity '{entity}' already exists with status 'scraped'. Use set_status() to reactivate it first if needed."
     found = _find_exact_node(kg, entity)
     source_id = found["id"] if found else None
     if not source_id:
@@ -105,9 +91,8 @@ def delete_entity(name: str) -> str:
     exact = _find_exact_node(kg, name)
     if not exact:
         return f"No entity found: {name}"
-    kg.remove_node(exact["id"])
-    kg.add_tombstone(exact["label"])
-    return f"Deleted entity: {name} (type: {exact['type']})"
+    kg.set_status(exact["label"], "scraped")
+    return f"Scraped entity: {name} (type: {exact['type']}). It remains in the knowledge graph with status 'scraped' and can be reactivated with set_status()."
 
 
 def forget(entity: str, relation: str | None = None, value: str | None = None) -> str:
@@ -124,3 +109,13 @@ def forget(entity: str, relation: str | None = None, value: str | None = None) -
     if removed:
         return f"Forgot: {entity} --[{relation}]--> {value} ({removed} edge(s) removed)"
     return f"No matching memory found to forget: {entity} --[{relation}]--> {value}"
+
+
+def set_status(name: str, status: str) -> str:
+    kg = get_graph()
+    exact = _find_exact_node(kg, name)
+    if not exact:
+        return f"No entity found: {name}"
+    old = exact["properties"].get("status", "active")
+    kg.set_status(exact["label"], status)
+    return f"Updated '{name}' status: {old} → {status}"

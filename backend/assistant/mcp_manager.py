@@ -43,7 +43,10 @@ class MCPManager:
             await asyncio.wait_for(_connect(), timeout=timeout_value)
         except asyncio.TimeoutError:
             logger.error("MCP server '%s' connection timed out after %ss", name, timeout_value)
-            await exit_stack.aclose()
+            try:
+                await exit_stack.aclose()
+            except BaseException:
+                logger.debug("MCP server '%s' exit stack close error after timeout", name)
             raise
 
     def add_static_tools(self, name: str, tool_defs: list[dict]):
@@ -80,7 +83,10 @@ class MCPManager:
             await asyncio.wait_for(_connect(), timeout=timeout_value)
         except asyncio.TimeoutError:
             logger.error("Lazy MCP server '%s' connection timed out after %ss", name, timeout_value)
-            await exit_stack.aclose()
+            try:
+                await exit_stack.aclose()
+            except BaseException:
+                logger.debug("Lazy MCP server '%s' exit stack close error after timeout", name)
             raise
 
     async def discover_tools(self) -> list[dict]:
@@ -132,6 +138,10 @@ class MCPManager:
             try:
                 await exit_stack.aclose()
                 logger.info("MCP server '%s' disconnected", name)
+            except asyncio.CancelledError:
+                logger.debug("MCP server '%s' close cancelled", name)
+            except RuntimeError:
+                logger.debug("MCP server '%s' close cancel-scope mismatch (expected on disconnect)", name)
             except BaseException:
                 logger.warning("MCP server '%s' close error (suppressed)", name, exc_info=True)
         self._sessions.clear()
