@@ -28,8 +28,7 @@ app.include_router(memory.router)
 app.include_router(screenshots.router)
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "screenshots")
-if os.path.isdir(SCREENSHOTS_DIR) or True:
-    os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
+os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
     app.mount("/screenshots", StaticFiles(directory=SCREENSHOTS_DIR), name="screenshots")
 
 

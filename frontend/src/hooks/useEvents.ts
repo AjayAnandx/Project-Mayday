@@ -43,6 +43,5 @@ export function useEvents() {
     createEvent,
     updateEvent,
     deleteEvent,
-    refresh: fetchEvents,
   }
 }

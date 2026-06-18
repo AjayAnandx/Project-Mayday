@@ -1,6 +1,6 @@
 import type { WsMessage, WsResponse } from '../types/chat'
 
-export type WsCallback = (data: WsResponse) => void
+type WsCallback = (data: WsResponse) => void
 
 export class ChatWebSocket {
   private ws: WebSocket | null = null

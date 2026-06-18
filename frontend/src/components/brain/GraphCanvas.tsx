@@ -9,6 +9,8 @@ const typeColors: Record<string, string> = {
   conversation: '#737373',
   tag: '#f97316',
   date: '#525252',
+  project: '#f59e0b',
+  personality: '#ec4899',
 }
 
 const typeShapes: Record<string, string> = {
@@ -19,6 +21,8 @@ const typeShapes: Record<string, string> = {
   conversation: 'roundrectangle',
   tag: 'diamond',
   date: 'ellipse',
+  project: 'roundrectangle',
+  personality: 'ellipse',
 }
 
 interface GraphCanvasProps {
@@ -123,8 +127,6 @@ export function GraphCanvas({ nodes, edges, onNodeClick, selectedNodeId }: Graph
           ],
           wheelSensitivity: 0.3,
         });
-
-        (window as any).__cytoscape_graph = cy
 
         cy.nodes().forEach((node: any) => {
           const type = node.data('type')

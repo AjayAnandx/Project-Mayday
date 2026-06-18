@@ -55,6 +55,5 @@ export function useTodos() {
     updateTodo,
     deleteTodo,
     toggleTodo,
-    refresh: fetchTodos,
   }
 }

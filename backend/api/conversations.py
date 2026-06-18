@@ -1,6 +1,5 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
 
 from backend.core.data_store import get_store
 from backend.core.operation_log import get_operation_log

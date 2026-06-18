@@ -18,7 +18,6 @@ export default {
         text: '#e5e5e5',
         accent: '#22c55e',
         green: '#22c55e',
-        'accent-dim': '#16a34a',
         red: '#ef4444',
         yellow: '#eab308',
       },

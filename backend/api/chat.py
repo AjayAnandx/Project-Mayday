@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import re
-from datetime import date, timedelta, datetime
+from datetime import date
 
 import httpx
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect

@@ -447,7 +447,7 @@ def get_tool_definitions(mcp_tools: list[dict] | None = None) -> list[dict]:
 async def dispatch_call(name: str, arguments: dict, mcp_manager=None) -> str:
     if name in FUNCTION_MAP:
         fn = FUNCTION_MAP[name]
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             return await loop.run_in_executor(None, lambda: fn(**arguments))
         except Exception as e:
