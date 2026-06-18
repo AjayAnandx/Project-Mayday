@@ -353,7 +353,7 @@ async def _run_engine(
 
             try:
                 def second_call(msgs):
-                    resp = llm.chat(msgs, stream=False, tools=filtered_tools)
+                    resp = llm.chat(msgs, stream=False, tools=[])
                     resp.raise_for_status()
                     return llm.extract_response(resp)
 
