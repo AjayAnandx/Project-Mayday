@@ -884,4 +884,61 @@ POST /api/import   ←  Accept same JSON blob
 | `frontend/src/App.tsx` | Add settings button to sidebar or header |
 | `frontend/src/components/layout/Sidebar.tsx` | Add gear icon for settings |
 
+---
+
+## Duplicate Detection for Todos & Events — Implementation Complete
+
+### Goal
+Prevent Mayday from creating duplicate todos/events. When the LLM tries to create an item whose title already exists, the system warns the user and blocks creation. Optional `force=True` bypasses the check. Frontend dialogs show inline duplicate warnings as the user types.
+
+### Status — COMPLETED
+
+### Behavior
+
+| Entity | Dedup Key | Example |
+|--------|-----------|---------|
+| **Todo** | Title (case-insensitive) + same due_date (if both have one) | "Buy milk" duplicates "buy milk" → blocked. Different titles → allowed. |
+| **Event** | Title (case-insensitive) + same day | "Morning meeting" same day → blocked. Different days → allowed. |
+
+### What Changed
+
+#### `backend/core/data_store.py`
+- Added `find_duplicate_todos(title, due_date, exclude_id)` — exact title match, narrows by due_date if provided
+- Added `find_duplicate_events(title, start_time, exclude_id)` — exact title match on same day
+
+#### `backend/api/todos.py`
+- Added `GET /api/todos/check-duplicates?title=&due_date=&exclude_id=`
+
+#### `backend/api/events.py`
+- Added `GET /api/events/check-duplicates?title=&start_time=&exclude_id=`
+
+#### `backend/functions/todo_functions.py`
+- `create_todo()` checks duplicates before creating; returns warning message with existing item details
+- `force=True` bypasses duplicate check
+
+#### `backend/functions/calendar_functions.py`
+- `create_event()` checks duplicates before creating; returns warning message with existing item details
+- `force=True` bypasses duplicate check
+
+#### `backend/assistant/function_registry.py`
+- Added `force` parameter to `create_todo` and `create_event` tool definitions
+- Updated descriptions to explain duplicate detection behavior
+
+#### `frontend/src/services/api.ts`
+- Added `checkTodoDuplicates(title, dueDate?, excludeId?)` and `checkEventDuplicates(title, startTime, excludeId?)`
+
+#### `frontend/src/components/todos/TodoDialog.tsx`
+- Debounced (400ms) API call on title/dueDate change
+- Yellow warning banner shows existing duplicates with status and due dates
+
+#### `frontend/src/components/calendar/EventDialog.tsx`
+- Debounced (400ms) API call on title/startTime change
+- Yellow warning banner shows existing duplicates with time range
+
+### Design Decisions
+- **LLM path blocks** — `create_todo()` / `create_event()` in LLM tools refuse to create and return a warning with `force=True` override
+- **REST path warns** — `POST /api/todos` and `POST /api/events` do not block (frontend shows inline warning but user can still submit)
+- **exclude_id** — duplicate check skips the current item when editing
+- **No blocking on edit** — only blocks on creation, not when updating an existing entity
+
 

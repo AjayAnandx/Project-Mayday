@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 
 from backend.core.data_store import get_store
 from backend.core.operation_log import get_operation_log
@@ -9,12 +9,20 @@ from backend.memory.knowledge_graph import get_graph
 router = APIRouter(prefix="/api/todos", tags=["todos"])
 
 
+class RecurrenceRule(BaseModel):
+    pattern: str  # daily, weekly, biweekly, monthly, yearly
+    interval: Optional[int] = None
+    end_date: Optional[str] = None
+    count: Optional[int] = None
+
+
 class TodoCreate(BaseModel):
     title: str
     description: str = ""
     due_date: Optional[str] = None
     priority: int = 2
     tags: list[str] = []
+    recurrence: Optional[RecurrenceRule] = None
 
 
 class TodoUpdate(BaseModel):
@@ -24,12 +32,21 @@ class TodoUpdate(BaseModel):
     priority: Optional[int] = None
     completed: Optional[bool] = None
     tags: Optional[list[str]] = None
+    recurrence: Optional[Any] = None
 
 
 @router.get("")
 def list_todos(include_completed: bool = True, q: str = ""):
     store = get_store()
     return store.list_todos(include_completed=include_completed, query=q)
+
+
+@router.get("/check-duplicates")
+def check_todo_duplicates(title: str = "", due_date: str = None, exclude_id: str = None):
+    store = get_store()
+    if not title.strip():
+        return []
+    return store.find_duplicate_todos(title, due_date, exclude_id)
 
 
 @router.get("/{todo_id}")

@@ -21,6 +21,9 @@ export const api = {
   listTodos: (includeCompleted = true, q = '') =>
     request<Todo[]>(`/todos?include_completed=${includeCompleted}&q=${encodeURIComponent(q)}`),
 
+  checkTodoDuplicates: (title: string, dueDate?: string, excludeId?: string) =>
+    request<Todo[]>(`/todos/check-duplicates?title=${encodeURIComponent(title)}${dueDate ? `&due_date=${encodeURIComponent(dueDate)}` : ''}${excludeId ? `&exclude_id=${excludeId}` : ''}`),
+
   createTodo: (data: TodoCreate) =>
     request<Todo>('/todos', { method: 'POST', body: JSON.stringify(data) }),
 
@@ -33,6 +36,9 @@ export const api = {
   // Events
   listEvents: (startDate = '', endDate = '', q = '') =>
     request<Event[]>(`/events?start_date=${startDate}&end_date=${endDate}&q=${encodeURIComponent(q)}`),
+
+  checkEventDuplicates: (title: string, startTime: string, excludeId?: string) =>
+    request<Event[]>(`/events/check-duplicates?title=${encodeURIComponent(title)}&start_time=${encodeURIComponent(startTime)}${excludeId ? `&exclude_id=${excludeId}` : ''}`),
 
   createEvent: (data: EventCreate) =>
     request<Event>('/events', { method: 'POST', body: JSON.stringify(data) }),

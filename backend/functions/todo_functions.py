@@ -3,11 +3,22 @@ from backend.core.operation_log import get_operation_log
 
 
 def create_todo(title: str, description: str = "", due_date: str = None,
-                priority: int = 2, tags: list[str] = None) -> str:
+                priority: int = 2, tags: list[str] = None,
+                recurrence: dict = None, force: bool = False) -> str:
     store = get_store()
-    todo = store.create_todo(title, description, due_date, priority, tags)
+    if not force:
+        dups = store.find_duplicate_todos(title, due_date)
+        if dups:
+            dup_info = "; ".join(
+                f"'{d['title']}' (id: {d['id']}, due: {d.get('due_date', 'none')}, status: {'✓ done' if d['completed'] else '○ pending'})"
+                for d in dups[:3]
+            )
+            extra = f" and {len(dups) - 3} more" if len(dups) > 3 else ""
+            return (f"⚠️ Potential duplicate detected! The following similar todo(s) already exist: {dup_info}{extra}. "
+                    f"I did NOT create the new todo. Would you like to review the existing one(s) instead, or proceed with creating a new one?")
+    todo = store.create_todo(title, description, due_date, priority, tags, recurrence)
     get_operation_log().record("create", "todo", todo["id"], todo["title"],
-                                details={"priority": priority})
+                                details={"priority": priority, "recurrence": recurrence})
     return f"Created todo: {todo['title']} (id: {todo['id']})"
 
 

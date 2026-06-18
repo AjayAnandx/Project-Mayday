@@ -2,7 +2,8 @@ import json
 import os
 import uuid
 import threading
-from datetime import datetime, timezone
+import calendar
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from backend.core.config import load_config
@@ -134,7 +135,8 @@ class DataStore:
     # --- Todos ---
 
     def create_todo(self, title: str, description: str = "", due_date: str = None,
-                    priority: int = 2, tags: list[str] = None) -> dict:
+                    priority: int = 2, tags: list[str] = None,
+                    recurrence: dict = None) -> dict:
         with self._lock:
             todo = {
                 "id": uuid.uuid4().hex[:12],
@@ -147,6 +149,8 @@ class DataStore:
                 "created_at": _utcnow(),
                 "updated_at": _utcnow(),
             }
+            if recurrence:
+                todo["recurrence"] = recurrence
             self._todos.append(todo)
             self._save()
             return todo
@@ -156,8 +160,11 @@ class DataStore:
             for todo in self._todos:
                 if todo["id"] == todo_id:
                     for k, v in kwargs.items():
-                        if k in ("title", "description", "due_date", "priority", "completed", "tags"):
-                            todo[k] = v
+                        if k in ("title", "description", "due_date", "priority", "completed", "tags", "recurrence"):
+                            if v is None:
+                                todo.pop(k, None)
+                            else:
+                                todo[k] = v
                     todo["updated_at"] = _utcnow()
                     self._save()
                     return todo
@@ -171,6 +178,21 @@ class DataStore:
                 self._save()
                 return True
             return False
+
+    def find_duplicate_todos(self, title: str, due_date: str = None, exclude_id: str = None) -> list[dict]:
+        with self._lock:
+            q = title.strip().lower()
+            results = []
+            for t in self._todos:
+                if exclude_id and t["id"] == exclude_id:
+                    continue
+                if t["title"].strip().lower() != q:
+                    continue
+                if due_date and t.get("due_date"):
+                    if t["due_date"] != due_date:
+                        continue
+                results.append(dict(t))
+            return results
 
     def list_todos(self, include_completed: bool = True, query: str = "") -> list[dict]:
         with self._lock:
@@ -192,7 +214,8 @@ class DataStore:
     # --- Events ---
 
     def create_event(self, title: str, start_time: str, end_time: str,
-                     description: str = "", all_day: bool = False) -> dict:
+                     description: str = "", all_day: bool = False,
+                     recurrence: dict = None) -> dict:
         with self._lock:
             event = {
                 "id": uuid.uuid4().hex[:12],
@@ -204,6 +227,8 @@ class DataStore:
                 "created_at": _utcnow(),
                 "updated_at": _utcnow(),
             }
+            if recurrence:
+                event["recurrence"] = recurrence
             self._events.append(event)
             self._save()
             return event
@@ -213,8 +238,11 @@ class DataStore:
             for event in self._events:
                 if event["id"] == event_id:
                     for k, v in kwargs.items():
-                        if k in ("title", "description", "start_time", "end_time", "all_day"):
-                            event[k] = v
+                        if k in ("title", "description", "start_time", "end_time", "all_day", "recurrence"):
+                            if v is None:
+                                event.pop(k, None)
+                            else:
+                                event[k] = v
                     event["updated_at"] = _utcnow()
                     self._save()
                     return event
@@ -228,6 +256,21 @@ class DataStore:
                 self._save()
                 return True
             return False
+
+    def find_duplicate_events(self, title: str, start_time: str, exclude_id: str = None) -> list[dict]:
+        with self._lock:
+            q = title.strip().lower()
+            start_day = start_time[:10]
+            results = []
+            for e in self._events:
+                if exclude_id and e["id"] == exclude_id:
+                    continue
+                if e["title"].strip().lower() != q:
+                    continue
+                if e["start_time"][:10] != start_day:
+                    continue
+                results.append(dict(e))
+            return results
 
     def list_events(self, start_date: str = None, end_date: str = None, query: str = "") -> list[dict]:
         with self._lock:
@@ -247,6 +290,94 @@ class DataStore:
                 if event["id"] == event_id:
                     return event
             return None
+
+    # --- Recurrence Expansion ---
+
+    @staticmethod
+    def _add_months(dt: datetime, months: int) -> datetime:
+        total = dt.month - 1 + months
+        year = dt.year + total // 12
+        month = total % 12 + 1
+        day = min(dt.day, calendar.monthrange(year, month)[1])
+        return dt.replace(year=year, month=month, day=day,
+                          hour=dt.hour, minute=dt.minute, second=dt.second)
+
+    def expand_recurring(self, entity: dict, start_date: str, end_date: str) -> list[dict]:
+        rec = entity.get("recurrence")
+        if not rec:
+            return [entity]
+        pattern = rec["pattern"]
+        interval = rec.get("interval", 1)
+        max_end = rec.get("end_date") or end_date
+        max_count = rec.get("count")
+        if end_date < start_date:
+            return [entity]
+        if max_end and max_end < start_date:
+            return [entity]
+        if max_count is not None and max_count < 1:
+            return [entity]
+
+        if "start_time" in entity:
+            dt_field = "start_time"
+            end_dt_field = "end_time"
+        else:
+            dt_field = "due_date"
+            end_dt_field = None
+
+        try:
+            current = datetime.fromisoformat(entity[dt_field]).replace(tzinfo=None)
+            end_current = datetime.fromisoformat(entity[end_dt_field]).replace(tzinfo=None) if end_dt_field and entity.get(end_dt_field) else None
+        except (ValueError, KeyError):
+            return [entity]
+
+        start_dt = datetime.fromisoformat(start_date).replace(tzinfo=None) if start_date else current
+        end_dt = datetime.fromisoformat(end_date).replace(tzinfo=None) if end_date else current
+        max_end_dt = datetime.fromisoformat(max_end).replace(tzinfo=None) if max_end else None
+
+        instances = []
+        count = 0
+        max_recurrences = 500
+
+        while count < max_recurrences:
+            if dt_field == "due_date":
+                date_str = current.strftime("%Y-%m-%d")
+            else:
+                date_str = current.isoformat()
+
+            if current > end_dt:
+                break
+            if max_end_dt and current > max_end_dt:
+                break
+            if max_count is not None and count >= max_count:
+                break
+
+            if current >= start_dt:
+                instance = dict(entity)
+                instance[dt_field] = date_str
+                instance["_recurring"] = True
+                instance["_original_id"] = entity["id"]
+                if end_current and end_dt_field:
+                    delta = end_current - (datetime.fromisoformat(entity[dt_field]).replace(tzinfo=None) if dt_field != "due_date" else current)
+                    instance[end_dt_field] = (current + delta).isoformat()
+                instances.append(instance)
+                count += 1
+
+            if pattern == "daily":
+                current += timedelta(days=interval)
+            elif pattern == "weekly":
+                current += timedelta(weeks=interval)
+            elif pattern == "biweekly":
+                current += timedelta(weeks=2 * interval)
+            elif pattern == "monthly":
+                current = self._add_months(current, interval)
+            elif pattern == "yearly":
+                current = self._add_months(current, 12 * interval)
+            else:
+                break
+
+        if not instances:
+            instances.append(entity)
+        return instances
 
     # --- Conversations (per-day files) ---
 

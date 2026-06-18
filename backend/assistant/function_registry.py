@@ -88,7 +88,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_todo",
-            "description": "Create a new todo item",
+            "description": "Create a new todo item. If duplicate detection warns you, set force=True to bypass the check and create anyway.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -97,6 +97,17 @@ LOCAL_TOOL_DEFINITIONS = [
                     "due_date": {"type": "string", "description": "Due date in ISO format"},
                     "priority": {"type": "integer", "description": "1=high, 2=medium, 3=low"},
                     "tags": {"type": "array", "items": {"type": "string"}},
+                    "force": {"type": "boolean", "description": "Set to true to bypass duplicate detection and create anyway"},
+                    "recurrence": {
+                        "type": "object",
+                        "description": "Recurrence rule for repeating todos",
+                        "properties": {
+                            "pattern": {"type": "string", "enum": ["daily", "weekly", "biweekly", "monthly", "yearly"]},
+                            "interval": {"type": "integer", "description": "Every N units (default 1)"},
+                            "end_date": {"type": "string", "description": "End date in YYYY-MM-DD format"},
+                            "count": {"type": "integer", "description": "Maximum occurrences"},
+                        },
+                    },
                 },
                 "required": ["title"],
             },
@@ -117,6 +128,16 @@ LOCAL_TOOL_DEFINITIONS = [
                     "priority": {"type": "integer"},
                     "completed": {"type": "boolean"},
                     "tags": {"type": "array", "items": {"type": "string"}},
+                    "recurrence": {
+                        "type": "object",
+                        "description": "Recurrence rule. Set to null to remove recurrence.",
+                        "properties": {
+                            "pattern": {"type": "string", "enum": ["daily", "weekly", "biweekly", "monthly", "yearly"]},
+                            "interval": {"type": "integer"},
+                            "end_date": {"type": "string"},
+                            "count": {"type": "integer"},
+                        },
+                    },
                 },
                 "required": ["todo_id"],
             },
@@ -153,7 +174,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_event",
-            "description": "Create a new calendar event",
+            "description": "Create a new calendar event. If duplicate detection warns you, set force=True to bypass the check and create anyway.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -162,6 +183,17 @@ LOCAL_TOOL_DEFINITIONS = [
                     "end_time": {"type": "string", "description": "End time in ISO format"},
                     "description": {"type": "string", "description": "Optional description"},
                     "all_day": {"type": "boolean", "description": "All day event"},
+                    "force": {"type": "boolean", "description": "Set to true to bypass duplicate detection and create anyway"},
+                    "recurrence": {
+                        "type": "object",
+                        "description": "Recurrence rule for repeating events",
+                        "properties": {
+                            "pattern": {"type": "string", "enum": ["daily", "weekly", "biweekly", "monthly", "yearly"]},
+                            "interval": {"type": "integer", "description": "Every N units (default 1)"},
+                            "end_date": {"type": "string", "description": "End date in YYYY-MM-DD format"},
+                            "count": {"type": "integer", "description": "Maximum occurrences"},
+                        },
+                    },
                 },
                 "required": ["title", "start_time", "end_time"],
             },
@@ -181,6 +213,16 @@ LOCAL_TOOL_DEFINITIONS = [
                     "end_time": {"type": "string"},
                     "description": {"type": "string"},
                     "all_day": {"type": "boolean"},
+                    "recurrence": {
+                        "type": "object",
+                        "description": "Recurrence rule. Set to null to remove recurrence.",
+                        "properties": {
+                            "pattern": {"type": "string", "enum": ["daily", "weekly", "biweekly", "monthly", "yearly"]},
+                            "interval": {"type": "integer"},
+                            "end_date": {"type": "string"},
+                            "count": {"type": "integer"},
+                        },
+                    },
                 },
                 "required": ["event_id"],
             },

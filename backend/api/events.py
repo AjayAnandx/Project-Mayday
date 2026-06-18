@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 
 from backend.core.data_store import get_store
 from backend.core.operation_log import get_operation_log
@@ -9,12 +9,20 @@ from backend.memory.knowledge_graph import get_graph
 router = APIRouter(prefix="/api/events", tags=["events"])
 
 
+class RecurrenceRule(BaseModel):
+    pattern: str
+    interval: Optional[int] = None
+    end_date: Optional[str] = None
+    count: Optional[int] = None
+
+
 class EventCreate(BaseModel):
     title: str
     start_time: str
     end_time: str
     description: str = ""
     all_day: bool = False
+    recurrence: Optional[RecurrenceRule] = None
 
 
 class EventUpdate(BaseModel):
@@ -23,16 +31,33 @@ class EventUpdate(BaseModel):
     end_time: Optional[str] = None
     description: Optional[str] = None
     all_day: Optional[bool] = None
+    recurrence: Optional[Any] = None
 
 
 @router.get("")
 def list_events(start_date: str = "", end_date: str = "", q: str = ""):
     store = get_store()
-    return store.list_events(
+    raw = store.list_events(
         start_date=start_date or None,
         end_date=end_date or None,
         query=q,
     )
+    if start_date or end_date:
+        start = start_date or end_date
+        end = end_date or start_date
+        expanded = []
+        for ev in raw:
+            expanded.extend(store.expand_recurring(ev, start, end))
+        return expanded
+    return raw
+
+
+@router.get("/check-duplicates")
+def check_event_duplicates(title: str = "", start_time: str = "", exclude_id: str = None):
+    store = get_store()
+    if not title.strip():
+        return []
+    return store.find_duplicate_events(title, start_time, exclude_id)
 
 
 @router.get("/{event_id}")

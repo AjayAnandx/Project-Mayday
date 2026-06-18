@@ -165,15 +165,17 @@ mayday/
 
 ## API Endpoints (22 total)
 
-### REST (21 total)
+### REST (23 total)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/todos` | List todos `?include_completed&q=` |
+| `GET` | `/api/todos/check-duplicates` | Check for duplicate todos `?title=&due_date=&exclude_id=` |
 | `POST` | `/api/todos` | Create todo |
 | `PUT` | `/api/todos/:id` | Update todo |
 | `DELETE` | `/api/todos/:id` | Delete todo |
 | `GET` | `/api/events` | List events `?start_date&end_date&q=` |
+| `GET` | `/api/events/check-duplicates` | Check for duplicate events `?title=&start_time=&exclude_id=` |
 | `POST` | `/api/events` | Create event |
 | `PUT` | `/api/events/:id` | Update event |
 | `DELETE` | `/api/events/:id` | Delete event |
@@ -295,6 +297,7 @@ yellow:  '#eab308'
 - [x] **Bug fix: operation recording in LLM tool path**: Recording was only in REST endpoints (`todos.py`, `events.py`) — LLM-created entities through `todo_functions.py` and `calendar_functions.py` were never logged. Fixed by adding `get_operation_log().record()` to both function files.
 - [x] **Bug fix: silent second LLM call**: Second call passed `tools=filtered_tools`, allowing LLM to call another tool instead of generating text. When LLM returned only tool_calls (no content), user saw tool_call bubble but no natural language response. Fixed by removing tools from second call (`tools=[]`).
 - [x] **70 passing tests** (30 operation log + 40 memory graph) covering record, query, stats, full-text, persistence, concurrency, dedup, tombstone, repair, clean graph, prefix matching
+- [x] **Duplicate detection for todos & events**: LLM create_todo/create_event checks for existing items with same title (case-insensitive) before creating. Todo dedup narrows by due_date; event dedup narrows by same day. `force=True` bypasses. Frontend dialogs show inline yellow warning banner with debounced API check. `GET /api/todos/check-duplicates` and `GET /api/events/check-duplicates` endpoints.
 
 ## How to Run
 
