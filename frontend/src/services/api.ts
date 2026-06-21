@@ -63,4 +63,15 @@ export const api = {
   // Search
   searchAll: (q: string) =>
     request<SearchResults>(`/search?q=${encodeURIComponent(q)}&limit=20`),
+
+  // Voice
+  getVoiceStatus: () =>
+    request<{ enabled: boolean; vad_loaded: boolean; stt_loaded: boolean; tts_loaded: boolean }>('/voice/status'),
+
+  transcribeAudio: async (audio: Blob): Promise<{ text?: string; error?: string }> => {
+    const form = new FormData()
+    form.append('file', audio, 'audio.webm')
+    const res = await fetch(`${BASE}/voice/transcribe`, { method: 'POST', body: form })
+    return res.json()
+  },
 }

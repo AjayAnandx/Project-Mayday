@@ -4,11 +4,3 @@ pyyaml>=6.0
 httpx>=0.27.0
 mcp>=1.0.0
 numpy>=1.26.0
-sounddevice>=0.5.0
-soundfile>=0.12.0
-
-# Voice pipeline (optional)
-# faster-whisper>=1.0.0
-# silero-vad>=4.0.0
-# TTS>=0.22.0
-# torch>=2.1.0

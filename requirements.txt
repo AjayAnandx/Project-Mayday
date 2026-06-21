@@ -7,7 +7,7 @@ numpy>=1.26.0
 sounddevice>=0.5.0
 soundfile>=0.12.0
 
-# Voice pipeline (optional)
+# Voice pipeline (optional — uncomment to enable backend STT/TTS/VAD)
 # faster-whisper>=1.0.0
 # silero-vad>=4.0.0
 # TTS>=0.22.0

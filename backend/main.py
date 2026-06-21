@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications
+from backend.voice import router as voice_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ app.include_router(memory.router)
 app.include_router(screenshots.router)
 app.include_router(search.router)
 app.include_router(notifications.router)
+app.include_router(voice_router)
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)

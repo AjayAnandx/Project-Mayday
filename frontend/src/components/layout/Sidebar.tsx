@@ -1,7 +1,7 @@
-import { MessageSquare, ListTodo, CalendarDays, BrainCircuit, Plus, Search } from 'lucide-react'
+import { MessageSquare, ListTodo, CalendarDays, BrainCircuit, Headphones, Plus, Search } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
-export type Page = 'chat' | 'todos' | 'calendar' | 'brain'
+export type Page = 'chat' | 'todos' | 'calendar' | 'brain' | 'voice'
 
 interface SidebarProps {
   currentPage: Page
@@ -13,6 +13,7 @@ interface SidebarProps {
 
 const navItems: { page: Page; icon: typeof MessageSquare; label: string }[] = [
   { page: 'chat', icon: MessageSquare, label: 'Chat' },
+  { page: 'voice', icon: Headphones, label: 'Voice' },
   { page: 'todos', icon: ListTodo, label: 'Todos' },
   { page: 'calendar', icon: CalendarDays, label: 'Calendar' },
   { page: 'brain', icon: BrainCircuit, label: 'Brain' },

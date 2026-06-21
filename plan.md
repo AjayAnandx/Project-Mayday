@@ -971,4 +971,157 @@ Prevent Mayday from creating duplicate todos/events. When the LLM tries to creat
 - **exclude_id** — duplicate check skips the current item when editing
 - **No blocking on edit** — only blocks on creation, not when updating an existing entity
 
+---
+
+## 5c. Proactive Suggestions — Implementation Plan
+
+### Goal
+When the chat page is empty or idle, Mayday shows clickable suggestion chips — upcoming events, overdue todos, recent activity, and general prompts — so the user discovers features without being asked. No personality gating; suggestions are always active.
+
+### Architecture
+
+```
+SuggestionChips (frontend component)
+    │ polls GET /api/suggestions every 60s
+    ▼
+Backend: /api/suggestions
+    ├── list_events(start_time=now, end_time=now+60min) → "Standup in 15 min"
+    ├── list_todos(include_completed=False, check overdue) → "Buy milk is overdue"
+    ├── operation_log.query(date_from=today) → "3 items created today"
+    └── general prompts (rotated) → "Ask me about your schedule"
+```
+
+### New Files (3)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `backend/api/suggestions.py` | ~60 | `GET /api/suggestions` endpoint — on-demand computation from event/todo store + operation log + knowledge graph |
+| `frontend/src/hooks/useSuggestions.ts` | ~40 | Polling hook (60s interval), returns `Suggestion[]` |
+| `frontend/src/components/chat/SuggestionChips.tsx` | ~80 | Green pill-shaped buttons below empty chat state |
+
+### Modified Files (2)
+
+| File | Change |
+|------|--------|
+| `backend/main.py` | Register `suggestions.py` router |
+| `frontend/src/components/chat/ChatPanel.tsx` | Import `<SuggestionChips>` — render when `messages.length === 0` |
+
+### Backend: `GET /api/suggestions`
+
+Returns JSON array capped at 5 suggestions, computed on-the-fly:
+
+```json
+[
+  {"id": "evt_abc", "type": "event_upcoming", "label": "Standup in 15 min", "action": {"page": "calendar"}},
+  {"id": "todo_xyz", "type": "todo_overdue", "label": "Buy milk is overdue", "action": {"page": "todos"}},
+  {"id": "recent_3", "type": "recent_activity", "label": "3 items created today", "message": "What did I do today?"},
+  {"id": "general_1", "type": "general", "label": "Ask me about your schedule", "message": "What's on my calendar?"}
+]
+```
+
+Generation order (high to low priority):
+1. **Upcoming events** — `get_store().list_events(start_date=now, end_date=now+60min)` → max 2 chips with `action.page: "calendar"`
+2. **Overdue todos** — `get_store().list_todos(include_completed=False)`, filter past `due_date` → max 2 chips with `action.page: "todos"`
+3. **Recent activity** — `get_operation_log().query(date_from=today)` → 1 chip with `message` for LLM
+4. **General prompts** — rotated static list: "Ask me about your schedule", "Try creating a todo", "Search for anything" → max 2 with `message`
+
+Each suggestion has:
+- `id` — unique string for dedup on frontend
+- `type` — `event_upcoming` | `todo_overdue` | `recent_activity` | `general`
+- `label` — short display text (e.g. "Standup in 15 min")
+- `message` (optional) — text to send as chat message on click
+- `action` (optional) — `{page: "calendar"|"todos"|"brain"}` for navigation on click
+
+### Frontend: SuggestionChips Component
+
+- Rendered inside `ChatPanel.tsx` when `messages.length === 0`
+- Horizontal row of rounded-full pill buttons, horizontally scrollable on overflow
+- Styling: `bg-green/10 text-green border border-green/20` pills with hover `bg-green/20`
+- Click behavior:
+  - If `message` is present → `sendMessage(chip.message)` — sends as user message, triggers LLM
+  - If `action.page` is present → `onNavigate(chip.action.page)` — switches tab
+- Poll every 60s via `useSuggestions()` hook
+- No UI shown while loading (instant local render, no loading state)
+
+### Suggestion Object TypeScript Interface
+
+```typescript
+interface Suggestion {
+  id: string
+  type: 'event_upcoming' | 'todo_overdue' | 'recent_activity' | 'general'
+  label: string
+  message?: string
+  action?: { page: 'chat' | 'todos' | 'calendar' | 'brain' }
+}
+```
+
+### What Is NOT Changed
+
+- **Scheduler** — suggestions are computed on-demand per REST call, not pushed
+- **Notification system** — suggestions are a separate concern (UI chips vs modal/toast popups)
+- **Sidebar / App.tsx** — ChatPanel owns the chips internally
+- **useChat.ts / ChatContext** — no changes needed; ChatPanel already has `sendMessage` and `messages`
+
+### No Personality Gating
+
+Removed from the original 5c spec. Suggestions are always computed and shown regardless of user preferences. If a future settings dialog wants to expose a toggle, it would just stop the polling interval.
+
+---
+
+## Voice System Rewrite — Implementation Complete (Jun 21)
+
+### Goal
+Replace unreliable Puter.js cloud STT with browser's built-in SpeechRecognition API, fix echo feedback loop, and make TTS reliable with proper error handling and fallbacks.
+
+### Problems Solved
+
+| Problem | Fix |
+|---------|------|
+| Puter.js `speech2txt` cloud API silently failed | Switched STT to browser `SpeechRecognition` (Chrome/Edge built-in, on-device, no network) |
+| Puter TTS returned Blob but code called `.toString()` → `[object Blob]` unplayable | Detect Blob return type → `URL.createObjectURL()` |
+| `el.play()` rejection (autoplay policy) was unhandled → Promise hung forever | `.catch(reject)` on play() + 15s timeout |
+| TTS audio from speakers was picked up by mic → echo feedback loop | `stopRecognition()` during TTS (mic OFF). After TTS: `startRecognition()` + 1500ms cooldown discards residual echo |
+| SpeechSynthesis `onend` might not fire → TTS hung forever | 15s safety timeout on both Puter and SpeechSynthesis paths |
+| LLM responded without text → state stuck at `processing` | `flushTtsBuffer` transitions to `listening` when no remaining text |
+
+### Architecture
+
+```
+STT (frontend): Mic → SpeechRecognition (browser) → 1.2s silence → submitTranscript → WebSocket → LLM
+TTS (frontend): LLM → feedTokens (streaming) → Puter txt2speech (ElevenLabs) → Audio element → Speakers
+                 ↕ fallback → SpeechSynthesis
+Echo prevention: stopRecognition() during TTS → startRecognition() after TTS + 1500ms cooldown
+```
+
+### Echo Prevention Flow
+
+```
+User speaks → onResult (state=listening, cooldown passed) → accumulate → 1.2s silence
+→ submitTranscript() → state=processing → message sent via WS
+→ LLM responds → feedTokens → processTtsTokens → stopRecognition() (mic OFF)
+→ state=speaking → TTS plays (no echo possible)
+→ TTS finishes → startRecognition() → lastTtsEnd=now → state=listening (mic ON)
+→ Residual room echo → onResult → cooldown (<1500ms) → DISCARDED
+→ After 1500ms → user speaks → processed normally
+```
+
+### Files Modified/Created
+
+| File | Changes |
+|------|---------|
+| `frontend/src/hooks/useBackendVoice.ts` | **REWRITE** — Uses SpeechRecognition for STT (removed MediaRecorder+VAD+Puter STT). Puter kept only for TTS with Blob/URL handling, 15s timeout, play rejection catch. SpeechSynthesis fallback. Echo prevention via stopRecognition during TTS + 1500ms cooldown after. |
+| `frontend/src/components/voice/VoiceMode.tsx` | Engine badge ("Live"), "No voice engine" error screen for non-Chrome/Edge, "Speak now..." hint, better error states |
+| `backend/voice/router.py` | Updated to single `GET /status` + `POST /transcribe` stub. Removed `/load` endpoint. |
+| `backend/voice/__init__.py` | Removed VAD/STT/TTS imports (stubs deleted) |
+| `backend/voice/stt.py` | **DELETED** — backend STT stub (replaced by frontend SpeechRecognition) |
+| `backend/voice/tts.py` | **DELETED** — backend TTS stub (replaced by frontend Puter + SpeechSynthesis) |
+| `backend/voice/vad.py` | **DELETED** — backend VAD stub (replaced by browser built-in) |
+| `frontend/src/services/api.ts` | Added `getVoiceStatus()` and `transcribeAudio()` |
+
+### Remaining Considerations
+
+- SpeechRecognition requires Chrome or Edge (no Firefox/Safari support)
+- Puter.js TTS needs internet; falls back to SpeechSynthesis
+- No backend VAD/whisper pipeline — all processing is frontend
+
 

@@ -5,7 +5,7 @@ Desktop AI personal assistant with:
 - **Todo app** (visual panel with CRUD, search, filter)
 - **Calendar app** (visual month grid, click-to-add events)
 - **LLM chat** (Ollama with tool calling via OpenAI-compatible API)
-- **Real-time voice** (speech-in/speech-out, interruptible — stubs ready)
+- **Real-time voice** (speech-in/speech-out, interruptible — functional, browser SpeechRecognition + Puter/SpeechSynthesis TTS)
 
 ## Tech Decisions
 
@@ -19,9 +19,9 @@ Desktop AI personal assistant with:
 | Data | Todos/events in `data.json`; conversations in per-day files under `conversations/`; operations in per-month files under `operations/` |
 | Chat streaming | WebSocket (`/ws/chat` — token-by-token) |
 | LLM | Ollama local — `gemma4:31b-cloud` |
-| STT | Web Speech API `SpeechRecognition` (frontend) / faster-whisper stub (backend) |
-| TTS | Web Speech API `SpeechSynthesis` (frontend) / Coqui stub (backend) |
-| VAD | Silero VAD — load-on-demand stub |
+| STT | Web Speech API `SpeechRecognition` (frontend, on-device, primary) |
+| TTS | Puter.js (ElevenLabs) → browser `SpeechSynthesis` (fallback) |
+| VAD | Browser built-in (SpeechRecognition handles VAD internally) |
 | Conv memory | Per-day files in `conversations/YYYY-MM-DD.json` + `index.json` for fast lookup |
 | Icons | `lucide-react` |
 | Animations | `motion` (framer-motion) |
@@ -40,7 +40,7 @@ Desktop AI personal assistant with:
 - `github-mcp-server` — GitHub API tools (search repos, list commits, read files, repo info on any public repo)
 - Requires `GITHUB_PERSONAL_ACCESS_TOKEN` env var (stored in `config.yaml`)
 - WebSocket protocol: `token`/`tool_call`/`done`/`error` message types
-- Voice pipeline stubs: Mic → VAD → whisper → LLM → TTS → speakers (interruptible)
+- Voice pipeline: Mic → SpeechRecognition → LLM → Puter/SpeechSynthesis → Speakers (mic OFF during TTS, 1500ms echo cooldown after)
 - Notification system: scheduler fires reminders → in-memory list + queue → REST polling (`GET /api/notifications/fired`) + optional WebSocket
 - Frontend polls `/api/notifications/fired` every 3s — reliable, no WebSocket proxy dependency
 - In-app `ReminderDialog` modal (DOM-based, no browser permission needed) + `Toast` component
@@ -87,7 +87,7 @@ mayday/
 │   ├── functions/
 │   │   ├── todo_functions.py         # Todo CRUD implementations
 │   │   └── calendar_functions.py     # Event CRUD + search implementations
-│   └── voice/                        # Stubs (vad.py, stt.py, tts.py)
+│   └── voice/                        # router.py (status + transcribe stubs)
 │
 ├── frontend/                         # React + Vite + TypeScript
 │   ├── index.html
@@ -137,6 +137,8 @@ mayday/
 │       │   ├── useEvents.ts         # REST CRUD
 │       │   ├── useGraph.ts          # Memory graph data fetching
 │       │   ├── useSearch.ts         # Debounced unified search hook
+│       │   ├── useVoice.ts          # Browser SpeechRecognition + SpeechSynthesis hook
+│       │   ├── useBackendVoice.ts   # Voice mode hook (SpeechRecognition STT + Puter/SpeechSynthesis TTS)
 │       │   └── use-auto-resize-textarea.ts
 │       ├── services/
 │       │   ├── api.ts               # Typed REST client
@@ -172,9 +174,9 @@ mayday/
 └── CLAUDE.md                        # This file
 ```
 
-## API Endpoints (23 total)
+## API Endpoints (27 total)
 
-### REST (24 total)
+### REST (27 total)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Health check |
@@ -202,6 +204,8 @@ mayday/
 | `GET` | `/api/memory/stats` | Node/edge counts |
 | `POST` | `/api/memory/repair` | One-time cleanup of junk nodes + stale projects |
 | `GET` | `/api/search` | Unified search across todos, events, conversations, graph, operations `?q=&limit=` |
+| `GET` | `/api/voice/status` | Backend voice status (STT/TTS engine info) |
+| `POST` | `/api/voice/transcribe` | Upload audio blob for transcription (stub) |
 
 ### WebSocket
 | Path | Description |
@@ -310,6 +314,12 @@ yellow:  '#eab308'
 - [x] **70 passing tests** (30 operation log + 40 memory graph) covering record, query, stats, full-text, persistence, concurrency, dedup, tombstone, repair, clean graph, prefix matching
 - [x] **Duplicate detection for todos & events**: LLM create_todo/create_event checks for existing items with same title (case-insensitive) before creating. Todo dedup narrows by due_date; event dedup narrows by same day. `force=True` bypasses. Frontend dialogs show inline yellow warning banner with debounced API check. `GET /api/todos/check-duplicates` and `GET /api/events/check-duplicates` endpoints.
 - [x] **Unified Search**: `GET /api/search?q=&limit=` endpoint searches all 5 stores (todos, events, conversations, graph nodes, operations) simultaneously. LLM tool `unified_search(query)` replaces 2-4 guessing game tool calls with one. Frontend Ctrl+K modal overlay with categorized results and click-to-navigate.
+- [x] **Voice system rewrite**: Replaced Puter.js speech2txt with browser SpeechRecognition for STT (on-device, reliable). Puter kept only for TTS (ElevenLabs) with SpeechSynthesis fallback. Removed fragile MediaRecorder + VAD code path.
+- [x] **Echo prevention**: Mic is OFF during TTS playback (stopRecognition). After TTS ends, mic restarts with 1500ms cooldown that discards residual room echo. User can interrupt TTS by speaking.
+- [x] **TTS reliability**: Puter txt2speech now handles Blob return type (URL.createObjectURL). `el.play()` rejection caught. 15s timeout on both Puter and SpeechSynthesis paths. Falls back gracefully on any error.
+- [x] **Voice tab reliability**: Added `instanceId` mount counter so voice-start effect re-runs on tab switch; added `hasMicPermission === null` loading state; added "Start Listening" fallback button when state idle
+- [x] **Backend voice router**: `router.py` with `GET /api/voice/status` and `POST /api/voice/transcribe` (stub)
+- [x] **Frontend voice API**: `getVoiceStatus()` and `transcribeAudio()` in `api.ts`
 
 ## How to Run
 
@@ -338,7 +348,8 @@ Set `model` in `config.yaml` to any model available in your local Ollama (`ollam
 Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MCP tools.
 
 ## Known Issues
-- Voice pipeline stubs need `pip install` of heavy deps (faster-whisper, TTS, torch) — uncomment in requirements.txt when ready
+- Voice mode requires Chrome or Edge (SpeechRecognition not supported in Firefox/Safari)
+- Puter.js TTS requires internet access (ElevenLabs); falls back to browser SpeechSynthesis if unavailable
 - No settings dialog yet (model/mic/speaker config via yaml only)
 - Frontend WebSocket connects on mount — reconnection logic is basic (3s retry)
 - Electron dev mode requires FastAPI running separately; production mode serves built frontend from FastAPI
@@ -393,3 +404,9 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - `frontend/src/components/search/SearchOverlay.tsx`: Ctrl+K search modal with categorized results
 - `frontend/src/hooks/useSearch.ts`: Debounced unified search hook with abort controller
 - `frontend/src/types/search.ts`: TypeScript interfaces for search results
+- `backend/voice/router.py`: Backend voice REST endpoints (status, transcribe)
+- `frontend/src/hooks/useVoice.ts`: Browser SpeechRecognition + SpeechSynthesis hook with echo prevention
+- `frontend/src/hooks/useBackendVoice.ts`: Voice mode hook (SpeechRecognition STT + Puter/SpeechSynthesis TTS)
+- `frontend/src/components/voice/VoiceMode.tsx`: Full-page voice UI with auto-speak, tab-switch recovery
+- `frontend/src/components/voice/VoiceIndicator.tsx`: Animated voice state indicator
+- `frontend/src/components/voice/VoiceTranscript.tsx`: Live interim transcript display
