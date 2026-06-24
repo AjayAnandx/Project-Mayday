@@ -15,6 +15,7 @@ from backend.assistant.llm_client import LLMClient
 from backend.assistant.function_registry import dispatch_call, get_tool_definitions
 from backend.assistant.mcp_manager import MCPManager
 from backend.assistant.selenium_tools import SELENIUM_TOOL_DEFINITIONS
+from backend.assistant.exa_tools import EXA_TOOL_DEFINITIONS
 from backend.assistant.fetch_tools import FETCH_TOOL_DEFINITIONS
 from backend.assistant.memory.conversation_manager import ConversationManager
 from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
@@ -28,6 +29,11 @@ SYSTEM_PROMPT = """You are Mayday, an AI personal assistant running on the user'
 You help manage todos, calendar events, and answer questions conversationally.
 You have git tools (git_log, git_status, git_diff, git_branch, git_commit, git_add, git_checkout) that call the local git CLI. ALWAYS pass "repo_path": "." for those.
 You also have GitHub API tools — you can search repositories, list commits, read file contents, and get repo info on ANY public GitHub repo. Use owner/repo format (e.g. "facebook/react").
+You also have web search tools available:
+- web_search_exa and web_search_advanced_exa: ALWAYS AVAILABLE. Use these for complex research, news, finding information on the web, company research, academic papers, etc.
+- web_fetch_exa (Exa): ALWAYS AVAILABLE. Use for fetching full article content, documentation pages, or any URL where you need rich/extracted content.
+- fetch (simple): Available when user mentions "fetch" or "curl". Use this for simple URL-to-markdown fetches. For complex content extraction, use web_fetch_exa instead.
+Rule of thumb: complex → Exa tools, simple URL fetch → fetch tool.
 Do not say you lack access. You have the tools.
 Be concise, helpful, and friendly. When you use a tool, explain what you did.
 Current date and time (your local timezone): {date}"""
@@ -89,6 +95,7 @@ CORE_TOOL_NAMES = {
     "query_operations",
     "unified_search",
     "create_reminder", "list_reminders", "delete_reminder",
+    "web_search_exa", "web_fetch_exa", "web_search_advanced_exa",
 }
 
 GIT_KEYWORDS = re.compile(r"\b(git|commit|branch|diff|log|status|staged|unstaged|push|pull|clone)\b", re.I)
@@ -111,6 +118,7 @@ GITHUB_TOOL_NAMES = {
     "search_code", "search_commits", "search_repositories",
 }
 
+EXA_TOOL_NAMES = {"web_search_exa", "web_fetch_exa", "web_search_advanced_exa"}
 FETCH_TOOL_NAMES = {"fetch"}
 
 SELENIUM_TOOL_NAMES = {
@@ -423,6 +431,8 @@ async def chat_websocket(websocket: WebSocket):
             if cfg.get("lazy"):
                 if name == "selenium":
                     mcp.add_static_tools(name, SELENIUM_TOOL_DEFINITIONS)
+                elif name == "exa":
+                    mcp.add_static_tools(name, EXA_TOOL_DEFINITIONS)
                 elif name == "fetch":
                     mcp.add_static_tools(name, FETCH_TOOL_DEFINITIONS)
     mcp_tools = []

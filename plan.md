@@ -1124,4 +1124,418 @@ User speaks → onResult (state=listening, cooldown passed) → accumulate → 1
 - Puter.js TTS needs internet; falls back to SpeechSynthesis
 - No backend VAD/whisper pipeline — all processing is frontend
 
+---
 
+## Exa MCP Search Server — Implementation Complete (Jun 22)
+
+### Goal
+Add web search and advanced content fetching to Mayday via the Exa AI Search API MCP server, replacing `mcp-server-fetch` as the primary web tool. Provides web search (basic + advanced) and URL content extraction.
+
+### Status — COMPLETED
+
+### Tools Available (3)
+
+| Tool | Availability | Description |
+|------|-------------|-------------|
+| `web_search_exa` | Always (core) | General web search — query + numResults + type. Returns structured results with titles, URLs, highlights. |
+| `web_fetch_exa` | Always (core) | Fetch full content from known URLs — takes `urls` array, returns clean text with highlights. |
+| `web_search_advanced_exa` | Always (core) | Advanced search with full control: category (company/news/people/research/financial/personal), domain filters, date ranges, summaries, highlights. |
+
+### Tool Filtering
+- `web_search_exa`, `web_fetch_exa`, `web_search_advanced_exa` are in `CORE_TOOL_NAMES` — always available in every LLM turn
+- Old `fetch` tool (`mcp-server-fetch`) remains as keyword-triggered fallback for simple URL-to-markdown fetching
+- System prompt tells LLM: complex → Exa tools, simple URL fetch → `fetch` tool
+
+### Config Entry
+
+```yaml
+mcp:
+  servers:
+    exa:
+      command: npx
+      args: ["-y", "exa-mcp-server"]
+      env:
+        EXA_API_KEY: "your_api_key"
+      lazy: true
+```
+
+`EXA_API_KEY` from Exa dashboard (https://dashboard.exa.ai/api-keys). Server is lazy — connects on first tool call via npx.
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `backend/assistant/exa_tools.py` | Static tool definitions for 3 Exa tools (required for lazy MCP registration) |
+
+### Modified Files
+
+| File | Changes |
+|------|---------|
+| `config.yaml` | Added `exa` server entry under `mcp.servers`; kept `fetch` server alongside |
+| `backend/api/chat.py` | Import `EXA_TOOL_DEFINITIONS`; add 3 Exa tool names to `CORE_TOOL_NAMES`; register static tools for lazy `exa` server; add web search guidance to `SYSTEM_PROMPT`; keep `FETCH_KEYWORDS`/`FETCH_TOOL_NAMES` for old fetch tool |
+
+### Tests Performed (all passing)
+
+| Tool | Input | Result |
+|------|-------|--------|
+| `web_search_exa` | `query: "Python programming", numResults: 2` | 3699 chars — 2 results with titles, URLs, highlights |
+| `web_fetch_exa` | `urls: ["https://example.com"], textMaxCharacters: 500` | 178 chars — clean page content |
+| `fetch` (simple) | `url: "https://example.com", max_length: 300` | 188 chars — markdown output |
+
+### Parameter Note
+`web_fetch_exa` expects `urls` (array of strings), not `url` (single string). The static tool definition matches Exa's actual API schema. The LLM should pass `urls: ["https://..."]`.
+
+### Key Decisions
+- **Lazy connection**: Exa subprocess only spawns when first Exa tool is called — no startup overhead
+- **Always in core**: Web search is broadly useful, so Exa tools are never filtered out
+- **Both servers coexist**: Exa for complex search/fetch, `mcp-server-fetch` for simple URL fetching
+- **Static tool defs**: Required because lazy MCP servers can't be discovered at startup
+
+---
+
+## Deepgram Voice Replacement — PLANNED (Jun 23)
+
+### Goal
+Completely remove Puter.js (STT + TTS) and replace with Deepgram STT + TTS. Deepgram API key stays server-side in `config.yaml`. Backend proxies audio/text to Deepgram APIs.
+
+### Architecture
+
+```
+[STT flow]
+Frontend mic → getUserMedia + AudioContext + ScriptProcessorNode (16kHz PCM Int16)
+  → WebSocket binary chunks (/api/voice/stt)
+  → Backend relays to Deepgram WebSocket (wss://api.deepgram.com/v1/listen)
+  → Deepgram sends JSON transcripts back → Backend forwards to Frontend
+  → Frontend silence-detects (1.2s) → submitTranscript → /ws/chat → LLM
+
+[TTS flow]
+LLM stream tokens → sentence-split on [.!?] → sentence queue
+  → POST /api/voice/tts {text}
+  → Backend calls Deepgram REST TTS (POST https://api.deepgram.com/v1/speak)
+  → Returns MP3 bytes → Frontend Audio element plays
+  → On Deepgram failure → fallback to browser SpeechSynthesis
+
+[Echo prevention]
+stopRecognition() during TTS → 1500ms cooldown after TTS → discards room echo
+User can interrupt TTS at any time → state → listening → re-captures mic
+```
+
+### New Backend Files
+
+#### CREATE: `backend/voice/deepgram_stt.py`
+- No FastAPI decorators — async relay function
+- `async def relay_stt(ws: WebSocket)`:
+  - Accept frontend WebSocket connection
+  - Open client WebSocket to `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&model=nova-2&interim_results=true&endpointing=200`
+  - Two concurrent tasks via `asyncio.gather`:
+    - **Task A**: `ws.receive_bytes()` → Deepgram `ws.send()` (audio relay)
+    - **Task B**: Deepgram `ws.receive()` → extract transcript → `ws.send_json()` to frontend
+      - Deepgram sends: `{type: "Results", channel: {alternatives: [{transcript, confidence}]}, is_final}`
+      - Frontend receives: `{type: "transcript", text, is_final}`
+  - On any disconnect: close Deepgram WS, close frontend WS
+
+#### CREATE: `backend/voice/deepgram_tts.py`
+- `async def synthesize(text: str) -> bytes`:
+  - `httpx.AsyncClient.post("https://api.deepgram.com/v1/speak", json={"text": text}, headers={"Authorization": f"Token {key}"})`
+  - Returns `response.content` (MP3 bytes)
+  - Voice: `aura-asteria-en` (configurable), `model: "aura-2.0"`
+
+### New Frontend File
+
+#### CREATE: `frontend/src/hooks/useDeepgramVoice.ts`
+- Replace `useBackendVoice.ts` with Deepgram-based implementation
+- **Same interface** as `useBackendVoice`:
+  ```typescript
+  return { state, interimText, start, stop, feedTokens, flushTts, isSupported }
+  ```
+- **STT capture**:
+  - `getUserMedia({ audio: true })` → `AudioContext` → `ScriptProcessorNode(4096, 1, 1)`
+  - `onaudioprocess`: convert `Float32` → `Int16` PCM → `ws.send(pcm.buffer)`
+  - Connect to `ws://localhost:5173/api/voice/stt` (proxied to backend)
+  - Receive `{type: "transcript", text, is_final}` — accumulate on `is_final`, show interim
+  - 1.2s silence → `submitTranscript(text)`
+- **TTS capture**:
+  - Same sentence-level streaming as current `processTtsTokens` (split on `[.!?]`)
+  - Per sentence: `POST /api/voice/tts` → blob → `Audio(url).play()` → resolve
+  - Fallback to `SpeechSynthesisUtterance` on Deepgram failure
+  - 15s timeout on both paths
+  - Same `genRef` generation counter for interrupt invalidation
+- **Echo prevention**:
+  - `stopRecognition()` during TTS (`state === 'speaking'`)
+  - `lastTtsEndRef = Date.now()` + 1500ms cooldown after TTS
+  - `onResult` discards results within cooldown window
+
+### Modified Files
+
+| File | Change |
+|------|--------|
+| `config.yaml` | Add `deepgram_api_key`, `stt_model: nova-2`, `tts_voice: aura-asteria-en` under `voice:` |
+| `backend/voice/router.py` | **REWRITE** — `GET /status` returns deepgram; new `WS /api/voice/stt` relays to Deepgram; new `POST /api/voice/tts` calls `synthesize()`, returns `Response(audio_bytes, media_type="audio/mpeg")`. Remove old `POST /transcribe` stub. |
+| `backend/requirements.txt` | Add `websockets>=12.0` (Python WebSocket client for Deepgram relay) |
+| `frontend/index.html` | Remove `<script src="https://js.puter.com/v2/">` (line 10) |
+| `frontend/src/hooks/useBackendVoice.ts` | **REWRITE** — Replace Puter TTS with Deepgram TTS REST calls; replace SpeechRecognition with PCM audio capture + STT WebSocket. Same interface. |
+| `frontend/src/services/api.ts` | Add `synthesizeSpeech(text: string): Promise<Blob>` calling `POST /api/voice/tts`. Fix `getVoiceStatus` return type. |
+| `frontend/src/components/voice/VoiceMode.tsx` | Minor import update if hook is renamed. (Optional: update engine badge from "Live" to "Deepgram".) |
+
+### Files to Keep
+
+| File | Reason |
+|------|--------|
+| `frontend/src/hooks/useVoice.ts` | `VoiceState` type is imported by `VoiceIndicator.tsx` and the new Deepgram hook |
+
+### Files with Puter References (verify removal)
+
+| File | Action |
+|------|--------|
+| `backend/voice/router.py:19` | `"stt": "puter"` → `"stt": "deepgram"` |
+| `frontend/index.html:10` | Remove CDN script tag |
+| `frontend/src/hooks/useBackendVoice.ts:133` | Remove `window.puter` access |
+
+### STT WebSocket Message Protocol
+
+**Frontend → Backend:**
+| Type | Format | Description |
+|------|--------|-------------|
+| Binary | `ArrayBuffer` (Int16 PCM, 16kHz, mono, 4096 samples/chunk) | Audio chunk |
+| Text | `{"type":"stop"}` | Signal end of utterance |
+
+**Backend → Frontend:**
+| Type | Format | Description |
+|------|--------|-------------|
+| Text | `{"type":"transcript","text":"...","is_final":true}` | Final transcript (submit on silence) |
+| Text | `{"type":"transcript","text":"...","is_final":false}` | Interim transcript (show in UI) |
+| Text | `{"type":"error","message":"..."}` | Error occurred |
+
+### Deepgram API Reference
+
+**STT WebSocket:**
+```
+wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&model=nova-2&interim_results=true&endpointing=200&language=en
+```
+- Encoding: `linear16` (raw PCM Int16)
+- `interim_results=true` — get partial transcripts for live display
+- `endpointing=200` — deepgram auto-detects speech end after 200ms silence
+- Auth header: `Authorization: Token DEEPGRAM_API_KEY`
+
+**TTS REST:**
+```
+POST https://api.deepgram.com/v1/speak
+Content-Type: application/json
+Authorization: Token DEEPGRAM_API_KEY
+
+{"text": "Hello world"}
+```
+- Response: binary audio (default MP3)
+- Query params: `?model=aura-asteria-en&encoding=mp3` (or use `Accept: audio/mpeg` header)
+- Voices: `aura-asteria-en`, `aura-luna-en`, `aura-stella-en`, `aura-athena-en`, `aura-hera-en`, `aura-orion-en`, `aura-arcas-en`, `aura-perseus-en`, `aura-angus-en`, `aura-orpheus-en`, `aura-helios-en`, `aura-zeus-en`
+
+### Dependencies
+
+| Package | Version | Why |
+|---------|---------|-----|
+| `websockets` (Python) | `>=12.0` | Client WebSocket connection to Deepgram STT API |
+| None (new npm) | — | All browser APIs (WebSocket, AudioContext, getUserMedia, Audio) |
+
+### Config Structure (updated `voice:` section)
+
+```yaml
+voice:
+  enabled: true
+  deepgram_api_key: ""       # Required. Get from https://console.deepgram.com/
+  stt_model: nova-2          # nova-2, nova, whisper, base
+  tts_voice: aura-asteria-en # See Deepgram voice list above
+  tts_speed: 1.0
+  sample_rate: 16000
+```
+
+### Error Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| `deepgram_api_key` is empty | `GET /status` returns `enabled: false`; STT/TTS endpoints return 400 |
+| Deepgram STT connection fails | Backend WS sends `{type: "error", message: "STT unavailable"}`; frontend transitions to `idle` |
+| Deepgram TTS request fails (5xx/network) | Frontend falls back to browser `SpeechSynthesisUtterance` (same sentence, 15s timeout) |
+| Deepgram TTS request returns 4xx (bad text) | Fallback to SpeechSynthesis |
+| Audio capture fails (mic denied) | Same as current — `hasMicPermission=false` state in VoiceMode |
+
+### Steps (implementation order)
+
+1. Add `deepgram_api_key` to `config.yaml`; add `websockets>=12.0` to `requirements.txt`
+2. Create `backend/voice/deepgram_stt.py` — Deepgram STT WebSocket relay
+3. Create `backend/voice/deepgram_tts.py` — Deepgram TTS REST client
+4. Rewrite `backend/voice/router.py` — new STT WS, TTS POST, updated status
+5. Remove Puter CDN from `frontend/index.html`
+6. Rewrite `frontend/src/hooks/useBackendVoice.ts` → Deepgram-based (same interface)
+7. Update `frontend/src/services/api.ts` — add TTS call, fix status type
+8. Verify: `grep -r "puter"` returns 0 results; Voice tab works end-to-end
+
+---
+
+## AI-Aware Voice/UI Response Split — PLANNED (Jun 23)
+
+### Goal
+When the LLM returns a long answer with markdown, tables, code blocks, the TTS engine reads everything verbatim — slow, awkward, hits voice output limits. Fix by having the LLM output **two texts** every turn:
+- `ui_display_text` — full detailed response for the chat bubble (unchanged)
+- `voice_spoken_text` — short 1-3 sentence spoken summary for TTS
+
+### How It Works
+
+```
+LLM returns JSON → {"ui_display_text": "## Analysis\n\nLong markdown...", "voice_spoken_text": "I found 3 key results. Check the chat."}
+  → Backend parses JSON
+  → WS: {type:"token", content:(long), voice_content:(short)}
+  → useChat stores both on ChatMessage{content, voiceContent}
+  → MessageBubble renders content (long markdown) ← unchanged
+  → VoiceMode feeds voiceContent to TTS ← short, fast, natural
+  ↘ Fallback: if JSON parse fails, voiceContent = content (graceful)
+```
+
+### Why This Is Easy
+
+The backend already calls the LLM **non-streaming** (`stream=False` in `chat.py`). The full response arrives at once as a single `{"type": "token", "content": full_text}` WS message. No token-by-token streaming to work around — the complete text is available for JSON parsing immediately.
+
+### Modified Files
+
+#### 1. `backend/api/chat.py` — System prompt + response parsing
+
+Add system prompt block:
+```python
+VOICE_OUTPUT_INSTRUCTION = """
+### Response Format
+You MUST respond with a JSON object containing exactly two fields:
+- "ui_display_text": The full, detailed, formatted response shown in the chat. Can use markdown, lists, code blocks, tables, etc.
+- "voice_spoken_text": A concise 1-3 sentence summary spoken aloud by TTS. Natural speech only — NO markdown, NO special characters, NO code. Reads like "I found 3 search results about AGI. Let me show you what I discovered."
+Example: {"ui_display_text": "# Results\\n\\nHere are the details...", "voice_spoken_text": "I found 3 results about AGI."}
+If the response is very short (1-2 sentences), both fields can be identical.
+ALWAYS wrap in this JSON structure. No code fences."""
+```
+
+Add parse function:
+```python
+def _parse_voice_response(content: str) -> tuple[str, str]:
+    """Returns (ui_text, voice_text). Falls back to content for both on parse failure."""
+    if not content:
+        return "", ""
+    try:
+        parsed = json.loads(content)
+        ui = parsed.get("ui_display_text", content)
+        voice = parsed.get("voice_spoken_text", content)
+        return ui, voice
+    except (json.JSONDecodeError, TypeError):
+        return content, content
+```
+
+Replace token sends:
+```python
+# Before:
+await _send_json(ws, {"type": "token", "content": content})
+
+# After:
+ui_text, voice_text = _parse_voice_response(content)
+await _send_json(ws, {"type": "token", "content": ui_text, "voice_content": voice_text})
+```
+
+Apply to both 1st call (line ~384) and 2nd call (line ~384 — the second `token` send in the second-call path).
+
+#### 2. `backend/assistant/llm_client.py` — Optional `response_format`
+
+Add `"response_format": {"type": "json_object"}` to the chat body in `chat()` method (line ~26). Tells Ollama/API to enforce valid JSON output. If endpoint doesn't support it, the parameter is silently ignored. Backend post-processing already handles non-JSON fallback.
+
+#### 3. `frontend/src/types/chat.ts` — Extend `WsResponse`
+
+```typescript
+export interface WsResponse {
+  type: 'token' | 'tool_call' | 'done' | 'error' | 'conversation_loaded'
+  content?: string
+  voice_content?: string  // NEW — short voice summary
+  name?: string
+  result?: string
+  image_url?: string
+  conversation?: Conversation
+}
+```
+
+#### 4. `frontend/src/hooks/useChat.ts` — Store `voiceContent` on message
+
+```typescript
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant' | 'tool'
+  content: string
+  voice_content?: string  // NEW
+  tool_name?: string
+  image_url?: string
+}
+```
+
+Update `appendToAssistant` to accept `voiceContent` parameter. Update `token` case to pass `data.voice_content` through.
+
+#### 5. `frontend/src/components/voice/VoiceMode.tsx` — Use `voice_content` for TTS
+
+Replace the content-diff effect:
+- When `last?.voice_content` exists and this is a new message (`last.id !== prevAssistantId`) → `feedTokens(last.voice_content)` directly (single short text, no diff needed)
+- When `voice_content` is absent → fall back to current content-diff behavior (graceful)
+- Keep `flushTts` on streaming end unchanged
+
+```typescript
+useEffect(() => {
+    const last = messages[messages.length - 1]
+
+    if (last?.role === 'user') {
+      prevAssistantId.current = ''
+      prevAssistantLen.current = 0
+    } else if (last?.role === 'assistant') {
+      if (last.id !== prevAssistantId.current) {
+        prevAssistantId.current = last.id
+        prevAssistantLen.current = 0
+        if (last.voice_content) {
+          feedTokensRef.current(last.voice_content)
+          prevAssistantLen.current = -1  // mark as TTS-fed
+        }
+      }
+      if (!last.voice_content && prevAssistantLen.current >= 0) {
+        const prevLen = prevAssistantLen.current
+        const currLen = last.content.length
+        if (currLen > prevLen) {
+          feedTokensRef.current(last.content.slice(prevLen))
+          prevAssistantLen.current = currLen
+        }
+      }
+    }
+
+    if (prevStreaming.current && !streaming) {
+      flushTtsRef.current()
+    }
+    prevStreaming.current = streaming
+  }, [messages, streaming])
+```
+
+### Files Summary
+
+| File | Change | Lines |
+|------|--------|-------|
+| `backend/api/chat.py` | Add system prompt block + `_parse_voice_response()` + dual-field WS send | ~10 |
+| `backend/assistant/llm_client.py` | Add `response_format: {"type": "json_object"}` to body | 1 |
+| `frontend/src/types/chat.ts` | Add `voice_content?: string` to `WsResponse` | 1 |
+| `frontend/src/hooks/useChat.ts` | Add `voice_content` to `ChatMessage` + pass through in `appendToAssistant` | ~5 |
+| `frontend/src/components/voice/VoiceMode.tsx` | Use `voice_content` for TTS when available | ~10 |
+
+### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| LLM returns non-JSON | `_parse_voice_response` falls back: `voice_text = content`. TTS reads full text (current behavior, no regression) |
+| LLM returns JSON with only one field | Missing field falls back to `content` |
+| `voice_spoken_text` is empty string | Falls back to `content` |
+| Voice mode not active | `voice_content` ignored entirely. Chat bubble renders `content` as always |
+| `response_format` not supported by endpoint | Parameter silently ignored; post-processing fallback handles it |
+| Tool calls with no content | `_parse_voice_response("")` returns `("", "")` — nothing sent |
+
+### Why This Approach
+
+| Alternative | Verdict | Reason |
+|------------|---------|--------|
+| Truncate long text on frontend | ❌ | No context — would cut mid-meaning |
+| Second LLM call to summarize | ❌ | Double latency, double tokens |
+| Key-point extraction via regex | ❌ | Fragile, misses nuance |
+| Streaming split | ❌ Unneeded | Response is already non-streaming (full text at once) |

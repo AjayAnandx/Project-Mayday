@@ -10,6 +10,10 @@ export default defineConfig({
         target: 'ws://localhost:8771',
         ws: true,
       },
+      '/api/voice/stt': {
+        target: 'ws://localhost:8771',
+        ws: true,
+      },
       '/api': 'http://localhost:8771',
       '/ws': {
         target: 'ws://localhost:8771',

@@ -66,12 +66,15 @@ export const api = {
 
   // Voice
   getVoiceStatus: () =>
-    request<{ enabled: boolean; vad_loaded: boolean; stt_loaded: boolean; tts_loaded: boolean }>('/voice/status'),
+    request<{ enabled: boolean; stt: string; tts: string; note: string }>('/voice/status'),
 
-  transcribeAudio: async (audio: Blob): Promise<{ text?: string; error?: string }> => {
-    const form = new FormData()
-    form.append('file', audio, 'audio.webm')
-    const res = await fetch(`${BASE}/voice/transcribe`, { method: 'POST', body: form })
-    return res.json()
+  synthesizeSpeech: async (text: string): Promise<Blob> => {
+    const res = await fetch(`${BASE}/voice/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    if (!res.ok) throw new Error(`TTS HTTP ${res.status}`)
+    return res.blob()
   },
 }

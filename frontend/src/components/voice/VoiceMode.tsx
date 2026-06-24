@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { ArrowLeft, Mic, Radio, AlertCircle } from 'lucide-react'
 import { useChatContext } from '../../context/ChatContext'
 import { useBackendVoice } from '../../hooks/useBackendVoice'
@@ -14,7 +14,7 @@ const speechSupported = (): boolean =>
   !!(navigator.mediaDevices?.getUserMedia)
 
 function getEngineLabel(): string {
-  return 'Live'
+  return 'Deepgram'
 }
 
 export function VoiceMode({ onExit }: VoiceModeProps) {
@@ -32,13 +32,6 @@ export function VoiceMode({ onExit }: VoiceModeProps) {
   const stopVoiceRef = useRef(voice.stop)
   startVoiceRef.current = voice.start
   stopVoiceRef.current = voice.stop
-
-  const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null)
-  const [instanceId, setInstanceId] = useState(0)
-
-  useEffect(() => {
-    setInstanceId(i => i + 1)
-  }, [])
 
   // Pipe streaming assistant tokens to TTS progressively
   useEffect(() => {
@@ -71,20 +64,13 @@ export function VoiceMode({ onExit }: VoiceModeProps) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Start voice on mount (instanceId forces re-run after tab switch)
+  // Start voice on mount — hook handles mic access internally
   useEffect(() => {
-    if (connected) {
-      navigator.mediaDevices?.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
-        .then(() => {
-          setHasMicPermission(true)
-          startVoiceRef.current()
-        })
-        .catch(() => {
-          setHasMicPermission(false)
-        })
+    if (connected && voice.state === 'idle') {
+      startVoiceRef.current()
     }
     return () => stopVoiceRef.current()
-  }, [connected, instanceId])
+  }, [connected])
 
   const recentMessages = messages.slice(-4)
   const engine = getEngineLabel()
@@ -106,8 +92,8 @@ export function VoiceMode({ onExit }: VoiceModeProps) {
       <div className="flex flex-col h-full bg-crust items-center justify-center gap-4 px-6">
         <AlertCircle className="w-8 h-8 text-overlay0" />
         <p className="text-overlay0 text-sm text-center">
-          Voice mode requires Chrome or Edge.<br />
-          Your browser doesn't support SpeechRecognition.
+          Voice mode requires microphone + audio context support.<br />
+          Please use Chrome, Edge, or a modern browser.
         </p>
         <button onClick={onExit} className="text-green text-sm underline">Go back</button>
       </div>
@@ -123,7 +109,7 @@ export function VoiceMode({ onExit }: VoiceModeProps) {
     )
   }
 
-  if (hasMicPermission === null) {
+  if (voice.micPermission === 'unknown') {
     return (
       <div className="flex flex-col h-full bg-crust items-center justify-center gap-4 px-6">
         <div className="w-3 h-3 rounded-full bg-green animate-pulse" />
@@ -132,7 +118,7 @@ export function VoiceMode({ onExit }: VoiceModeProps) {
     )
   }
 
-  if (hasMicPermission === false) {
+  if (voice.micPermission === 'denied') {
     return (
       <div className="flex flex-col h-full bg-crust items-center justify-center gap-4 px-6">
         <p className="text-overlay0 text-sm text-center">
@@ -163,7 +149,7 @@ export function VoiceMode({ onExit }: VoiceModeProps) {
       </div>
 
       <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
-        {voice.state === 'idle' && hasMicPermission === true ? (
+        {voice.state === 'idle' && voice.micPermission === 'granted' ? (
           <div className="flex flex-col items-center gap-4">
             <p className="text-overlay0 text-sm">Microphone ready</p>
             <button

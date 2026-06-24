@@ -186,7 +186,7 @@
       "label": "project:AGI Personal Assistant",
       "properties": {
         "context": "",
-        "status": "scraped"
+        "status": "active"
       }
     },
     {
@@ -994,20 +994,6 @@
       }
     },
     {
-      "id": "54629b95ee78",
-      "type": "todo",
-      "label": "Pay bills",
-      "properties": {
-        "todo_id": "d289305397fd",
-        "description": "",
-        "due_date": "2026-06-17",
-        "priority": 1,
-        "completed": false,
-        "tags": [],
-        "recurrence": null
-      }
-    },
-    {
       "id": "6a0a5d35a1a0",
       "type": "conversation",
       "label": "3bc42c4ebb62",
@@ -1179,6 +1165,436 @@
         "title": "remind me in 1 minute",
         "message_count": 3
       }
+    },
+    {
+      "id": "1938f8357bc3",
+      "type": "conversation",
+      "label": "21c9af93dc14",
+      "properties": {
+        "conv_id": "21c9af93dc14",
+        "title": "clear all the todo",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "49c838c2b5d4",
+      "type": "conversation",
+      "label": "c2f997e86a12",
+      "properties": {
+        "conv_id": "c2f997e86a12",
+        "title": "is gthe any workk today",
+        "message_count": 12
+      }
+    },
+    {
+      "id": "1c095e3714bd",
+      "type": "conversation",
+      "label": "be6a25db8f1f",
+      "properties": {
+        "conv_id": "be6a25db8f1f",
+        "title": "check evet i had attend yestarday",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "3a26725adba3",
+      "type": "conversation",
+      "label": "47e76f00e996",
+      "properties": {
+        "conv_id": "47e76f00e996",
+        "title": "Uh.",
+        "message_count": 16
+      }
+    },
+    {
+      "id": "d484bb52b25c",
+      "type": "conversation",
+      "label": "50698e4d956d",
+      "properties": {
+        "conv_id": "50698e4d956d",
+        "title": "Hey, can you hear me?",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "d738a6a7248b",
+      "type": "conversation",
+      "label": "ee124caa960d",
+      "properties": {
+        "conv_id": "ee124caa960d",
+        "title": "hey hi",
+        "message_count": 4
+      }
+    },
+    {
+      "id": "c6e588ca147d",
+      "type": "conversation",
+      "label": "98d86f8535c7",
+      "properties": {
+        "conv_id": "98d86f8535c7",
+        "title": "Hello, Mary, can you hear me?",
+        "message_count": 33
+      }
+    },
+    {
+      "id": "5d2c99673c99",
+      "type": "tag",
+      "label": "shopping list",
+      "properties": {}
+    },
+    {
+      "id": "0347471afc01",
+      "type": "conversation",
+      "label": "387125469392",
+      "properties": {
+        "conv_id": "387125469392",
+        "title": "Hey Maeda, can you hear me?",
+        "message_count": 4
+      }
+    },
+    {
+      "id": "200294eb8f21",
+      "type": "conversation",
+      "label": "ea4b96cd6062",
+      "properties": {
+        "conv_id": "ea4b96cd6062",
+        "title": "hi",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "90d2d034ad05",
+      "type": "conversation",
+      "label": "3cfda808cd7d",
+      "properties": {
+        "conv_id": "3cfda808cd7d",
+        "title": "Okay, ready.  Can you hear me?",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "1b25b8fc05c3",
+      "type": "conversation",
+      "label": "65a94689f28d",
+      "properties": {
+        "conv_id": "65a94689f28d",
+        "title": "Hey mate, can you hear me?",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "8d59709f1db3",
+      "type": "conversation",
+      "label": "6deb72278c34",
+      "properties": {
+        "conv_id": "6deb72278c34",
+        "title": "KMD, can you hear me?",
+        "message_count": 24
+      }
+    },
+    {
+      "id": "a82a4a88dbaf",
+      "type": "conversation",
+      "label": "2781b17a06d1",
+      "properties": {
+        "conv_id": "2781b17a06d1",
+        "title": "Okay, I'm ready.",
+        "message_count": 42
+      }
+    },
+    {
+      "id": "c73de1a62042",
+      "type": "conversation",
+      "label": "92c784b2b1b8",
+      "properties": {
+        "conv_id": "92c784b2b1b8",
+        "title": "They made it, can you hear me?",
+        "message_count": 4
+      }
+    },
+    {
+      "id": "c433aabd6d37",
+      "type": "conversation",
+      "label": "e17ddc3caa8a",
+      "properties": {
+        "conv_id": "e17ddc3caa8a",
+        "title": "hi",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "d8b4bbbac6ec",
+      "type": "conversation",
+      "label": "e566ad5e12f4",
+      "properties": {
+        "conv_id": "e566ad5e12f4",
+        "title": "hi",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "76e44c68bc43",
+      "type": "conversation",
+      "label": "bc56578ea42a",
+      "properties": {
+        "conv_id": "bc56578ea42a",
+        "title": "He made it.",
+        "message_count": 20
+      }
+    },
+    {
+      "id": "42102705a721",
+      "type": "conversation",
+      "label": "642d682392b0",
+      "properties": {
+        "conv_id": "642d682392b0",
+        "title": "Hey MIDI.",
+        "message_count": 12
+      }
+    },
+    {
+      "id": "73b0b8af0b68",
+      "type": "conversation",
+      "label": "b5556527268c",
+      "properties": {
+        "conv_id": "b5556527268c",
+        "title": "Hey, Mary.",
+        "message_count": 8
+      }
+    },
+    {
+      "id": "c5e65aba5592",
+      "type": "conversation",
+      "label": "39bfd2c39969",
+      "properties": {
+        "conv_id": "39bfd2c39969",
+        "title": "Hey, Maddy.",
+        "message_count": 10
+      }
+    },
+    {
+      "id": "92b653837084",
+      "type": "conversation",
+      "label": "1e001015dbf0",
+      "properties": {
+        "conv_id": "1e001015dbf0",
+        "title": "Hey Maddy, can you hear me?",
+        "message_count": 23
+      }
+    },
+    {
+      "id": "e4f45b677ad5",
+      "type": "conversation",
+      "label": "dd48a6b0af28",
+      "properties": {
+        "conv_id": "dd48a6b0af28",
+        "title": "Hey, hi.",
+        "message_count": 10
+      }
+    },
+    {
+      "id": "a9d5b811c7ab",
+      "type": "conversation",
+      "label": "4bd990282e1c",
+      "properties": {
+        "conv_id": "4bd990282e1c",
+        "title": "Hey, can you hear me?",
+        "message_count": 21
+      }
+    },
+    {
+      "id": "aef4a1059e32",
+      "type": "conversation",
+      "label": "8ec8f634d823",
+      "properties": {
+        "conv_id": "8ec8f634d823",
+        "title": "Hey, Maddie.",
+        "message_count": 4
+      }
+    },
+    {
+      "id": "c43c8827adf3",
+      "type": "conversation",
+      "label": "04a18d14ed2e",
+      "properties": {
+        "conv_id": "04a18d14ed2e",
+        "title": "Hey, Mary, can you hear me?",
+        "message_count": 29
+      }
+    },
+    {
+      "id": "96c80ef462e6",
+      "type": "todo",
+      "label": "Follow up on missed events from June 18th (Groceries & Meeting)",
+      "properties": {
+        "todo_id": "569f70ac5408",
+        "description": "",
+        "due_date": null,
+        "priority": 2,
+        "completed": false,
+        "tags": [
+          "follow-up"
+        ],
+        "recurrence": null
+      }
+    },
+    {
+      "id": "ee22cca02beb",
+      "type": "tag",
+      "label": "follow-up",
+      "properties": {}
+    },
+    {
+      "id": "c14947e7706a",
+      "type": "conversation",
+      "label": "0d59c7415b79",
+      "properties": {
+        "conv_id": "0d59c7415b79",
+        "title": "hi",
+        "message_count": 14
+      }
+    },
+    {
+      "id": "9ee0598a490b",
+      "type": "project",
+      "label": "project:AGI Research",
+      "properties": {
+        "context": "",
+        "status": "active"
+      }
+    },
+    {
+      "id": "1d17ade3ec36",
+      "type": "conversation",
+      "label": "5a6422c2b8e6",
+      "properties": {
+        "conv_id": "5a6422c2b8e6",
+        "title": "Say hello in 3 words",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "50541950c3d7",
+      "type": "conversation",
+      "label": "4354aea2a649",
+      "properties": {
+        "conv_id": "4354aea2a649",
+        "title": "hi",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "c49825bf6818",
+      "type": "conversation",
+      "label": "5ad30153b4f7",
+      "properties": {
+        "conv_id": "5ad30153b4f7",
+        "title": "hey wendy",
+        "message_count": 2
+      }
+    },
+    {
+      "id": "bccb58507a4b",
+      "type": "conversation",
+      "label": "d9ad0514ed37",
+      "properties": {
+        "conv_id": "d9ad0514ed37",
+        "title": "hey wendy",
+        "message_count": 16
+      }
+    },
+    {
+      "id": "7b39ae43336a",
+      "type": "conversation",
+      "label": "15df6b37de3c",
+      "properties": {
+        "conv_id": "15df6b37de3c",
+        "title": "in your calendar managing your to dos or looking something o",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "e5df1fadcd75",
+      "type": "conversation",
+      "label": "524a7529815a",
+      "properties": {
+        "conv_id": "524a7529815a",
+        "title": "hey can hey can",
+        "message_count": 43
+      }
+    },
+    {
+      "id": "523244c69832",
+      "type": "conversation",
+      "label": "5238df6c9ccf",
+      "properties": {
+        "conv_id": "5238df6c9ccf",
+        "title": "hello",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "d469a9faafdc",
+      "type": "conversation",
+      "label": "6fe09aaf6871",
+      "properties": {
+        "conv_id": "6fe09aaf6871",
+        "title": "hey hi",
+        "message_count": 14
+      }
+    },
+    {
+      "id": "569f213b174b",
+      "type": "conversation",
+      "label": "e7058522d1a0",
+      "properties": {
+        "conv_id": "e7058522d1a0",
+        "title": "hey can you hear me hey can you hear me",
+        "message_count": 10
+      }
+    },
+    {
+      "id": "0c94df5b889d",
+      "type": "conversation",
+      "label": "2b71ea9ab76d",
+      "properties": {
+        "conv_id": "2b71ea9ab76d",
+        "title": "hey",
+        "message_count": 6
+      }
+    },
+    {
+      "id": "657431d58eca",
+      "type": "conversation",
+      "label": "8501a9b73a78",
+      "properties": {
+        "conv_id": "8501a9b73a78",
+        "title": "Kaipayan DM is a bit ambiguous. It sounds like you're asking",
+        "message_count": 14
+      }
+    },
+    {
+      "id": "6a2deb605bd7",
+      "type": "event",
+      "label": "Product Discovery Meeting",
+      "properties": {
+        "event_id": "cee8067902b4",
+        "description": "",
+        "start_time": "2026-06-25T11:30:00",
+        "end_time": "2026-06-25T13:30:00",
+        "all_day": false,
+        "recurrence": null
+      }
+    },
+    {
+      "id": "4c9c09372f84",
+      "type": "conversation",
+      "label": "7631de678d43",
+      "properties": {
+        "conv_id": "7631de678d43",
+        "title": "Hey Maddy, can you hear me?",
+        "message_count": 7
+      }
     }
   ],
   "edges": [
@@ -1215,6 +1631,20 @@
       "source": "bf0302fe19f3",
       "target": "75eab07f13a2",
       "relation": "status_update",
+      "properties": {}
+    },
+    {
+      "id": "5b5af407ba7c",
+      "source": "96c80ef462e6",
+      "target": "ee22cca02beb",
+      "relation": "has_tag",
+      "properties": {}
+    },
+    {
+      "id": "3cc98b2a218f",
+      "source": "9ee0598a490b",
+      "target": "bbc7a7804491",
+      "relation": "status",
       "properties": {}
     }
   ]

@@ -34,11 +34,13 @@ Desktop AI personal assistant with:
 - Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
 - 22 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status` + `unified_search`
-- MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`)
+- MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`)
 - `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
 - `mcp_server_git` — 12 tools for local git operations (status, log, diff, commit, branch)
 - `github-mcp-server` — GitHub API tools (search repos, list commits, read files, repo info on any public repo)
+- `exa-mcp-server` — 3 web search tools: `web_search_exa` (basic), `web_fetch_exa` (URL content), `web_search_advanced_exa` (filters, domains, dates, categories)
 - Requires `GITHUB_PERSONAL_ACCESS_TOKEN` env var (stored in `config.yaml`)
+- Requires `EXA_API_KEY` env var (stored in `config.yaml`) for Exa MCP server (get from https://dashboard.exa.ai/api-keys)
 - WebSocket protocol: `token`/`tool_call`/`done`/`error` message types
 - Voice pipeline: Mic → SpeechRecognition → LLM → Puter/SpeechSynthesis → Speakers (mic OFF during TTS, 1500ms echo cooldown after)
 - Notification system: scheduler fires reminders → in-memory list + queue → REST polling (`GET /api/notifications/fired`) + optional WebSocket
@@ -82,6 +84,7 @@ mayday/
 │   │   ├── llm_client.py             # Ollama HTTP client (streaming, tool calling)
 │   │   ├── function_registry.py      # 13 tool definitions + dispatch (9 local + 4 memory)
 │   │   ├── mcp_manager.py            # MCP stdio connection, tool discovery, dispatch
+│   │   ├── exa_tools.py              # Static tool defs for 3 Exa search/fetch tools
 │   │   └── memory/
 │   │       └── conversation_manager.py  # Context window (last 20 messages)
 │   ├── functions/
@@ -320,6 +323,7 @@ yellow:  '#eab308'
 - [x] **Voice tab reliability**: Added `instanceId` mount counter so voice-start effect re-runs on tab switch; added `hasMicPermission === null` loading state; added "Start Listening" fallback button when state idle
 - [x] **Backend voice router**: `router.py` with `GET /api/voice/status` and `POST /api/voice/transcribe` (stub)
 - [x] **Frontend voice API**: `getVoiceStatus()` and `transcribeAudio()` in `api.ts`
+- [x] **Exa MCP search server**: 3 web search tools (`web_search_exa`, `web_fetch_exa`, `web_search_advanced_exa`) always available in core. Replaces `mcp-server-fetch` for complex search needs. Simple `fetch` tool kept as keyword-triggered fallback. Requires `EXA_API_KEY` in `config.yaml`.
 
 ## How to Run
 
@@ -346,6 +350,8 @@ npx electron .        # Launch Electron (spawns backend + loads frontend)
 Set `model` in `config.yaml` to any model available in your local Ollama (`ollama list`).
 
 Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MCP tools.
+
+Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 
 ## Known Issues
 - Voice mode requires Chrome or Edge (SpeechRecognition not supported in Firefox/Safari)
@@ -389,6 +395,7 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MC
 - `backend/api/chat.py`: WebSocket endpoint with LLM streaming + tool dispatch
 - `backend/assistant/llm_client.py`: Ollama HTTP client
 - `backend/assistant/function_registry.py`: 14 tool definitions + dispatch (9 local + 5 memory)
+- `backend/assistant/exa_tools.py`: Static tool definitions for 3 Exa search/fetch tools
 - `config.yaml`: Shared config (Ollama, voice, server)
 - `plan.md`: MCP integration architecture and implementation plan
 - `backend/api/screenshots.py`: ScreenshotStore + REST list/delete endpoints + 3 LLM tools

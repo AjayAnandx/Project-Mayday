@@ -1,10 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import type { VoiceState } from './useVoice'
 
-const SUBMIT_SILENCE_MS = 1200
-const TTS_ECHO_COOLDOWN_MS = 1500
-const SENTENCE_RE = /^.*?[.!?](?:\s|$)/
-
+// Web Speech API types
 interface SpeechRecognition extends EventTarget {
   continuous: boolean
   interimResults: boolean
@@ -12,29 +9,34 @@ interface SpeechRecognition extends EventTarget {
   onresult: ((event: SpeechRecognitionEvent) => void) | null
   onend: (() => void) | null
   onerror: ((event: SpeechRecognitionErrorEvent) => void) | null
+  onstart: (() => void) | null
   start(): void
   stop(): void
 }
-
 interface SpeechRecognitionEvent extends Event {
   resultIndex: number
   results: SpeechRecognitionResultList
 }
-
 interface SpeechRecognitionErrorEvent extends Event {
   error: string
 }
+
+const SUBMIT_SILENCE_MS = 1200
+const TTS_ECHO_COOLDOWN_MS = 1500
+const SENTENCE_RE = /^.*?[.!?](?:\s|$)/
 
 interface UseVoiceOptions {
   sendMessage: (text: string) => void
 }
 
+export type MicPermission = 'unknown' | 'granted' | 'denied'
+
 export function useBackendVoice({ sendMessage }: UseVoiceOptions) {
   const [state, setState] = useState<VoiceState>('idle')
   const [interimText, setInterimText] = useState('')
+  const [micPermission, setMicPermission] = useState<MicPermission>('unknown')
 
-  const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-  const isSupported = !!SR
+  const isSupported = !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
 
   const stateRef = useRef(state)
   stateRef.current = state
@@ -51,6 +53,8 @@ export function useBackendVoice({ sendMessage }: UseVoiceOptions) {
   const transcriptRef = useRef('')
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastTtsEndRef = useRef(0)
+  const lastSentTextRef = useRef('')
+  const isSendingRef = useRef(false)
 
   const clearTimers = useCallback(() => {
     if (silenceTimerRef.current) {
@@ -62,109 +66,151 @@ export function useBackendVoice({ sendMessage }: UseVoiceOptions) {
   const stopRecognition = useCallback(() => {
     if (recognitionRef.current) {
       recognitionRef.current.onend = null
+      recognitionRef.current.onerror = null
       try { recognitionRef.current.stop() } catch {}
       recognitionRef.current = null
     }
   }, [])
 
   const submitTranscript = useCallback(() => {
+    if (isSendingRef.current) return
     const text = transcriptRef.current.trim()
-    if (text) {
-      transcriptRef.current = ''
-      setInterimText('')
-      sendMessage(text)
-      setState('processing')
-    }
-  }, [sendMessage])
+    if (!text) return
+    if (text === lastSentTextRef.current) return
 
-  const onResult = useCallback((event: SpeechRecognitionEvent) => {
-    let interim = ''
-    let final = ''
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const r = event.results[i]
-      if (r.isFinal) final += r[0].transcript
-      else interim += r[0].transcript
-    }
-    if (!interim && !final) return
-
-    const cur = stateRef.current
-    if (cur === 'idle' || cur === 'processing' || cur === 'speaking') return
-
-    // Echo cooldown: discard speech within 1500ms after TTS ends
-    if (cur === 'listening' && Date.now() - lastTtsEndRef.current < TTS_ECHO_COOLDOWN_MS) {
-      return
-    }
-
-    setInterimText(interim || transcriptRef.current + final)
-    if (final) transcriptRef.current += final
-
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current)
-    silenceTimerRef.current = setTimeout(() => submitTranscript(), SUBMIT_SILENCE_MS)
-  }, [submitTranscript])
+    lastSentTextRef.current = text
+    isSendingRef.current = true
+    transcriptRef.current = ''
+    setInterimText('')
+    clearTimers()
+    stopRecognition()
+    sendMessage(text)
+    setState('processing')
+  }, [sendMessage, clearTimers, stopRecognition])
 
   const startRecognition = useCallback(() => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     if (!SR) return
-    stopRecognition()
 
     const recognition = new SR()
     recognition.continuous = true
     recognition.interimResults = true
     recognition.lang = 'en-US'
-    recognition.onresult = onResult
+
+    recognition.onstart = () => {
+      setMicPermission('granted')
+    }
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      if (recognitionRef.current !== recognition) return
+      const now = Date.now()
+      if (now - lastTtsEndRef.current < TTS_ECHO_COOLDOWN_MS) return
+
+      let interim = ''
+      let final = ''
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const r = event.results[i]
+        if (r.isFinal) final += r[0].transcript
+        else interim += r[0].transcript
+      }
+      if (!interim && !final) return
+
+      const cur = stateRef.current
+      if (cur === 'idle' || cur === 'processing') return
+
+      // User spoke while TTS was playing — interrupt
+      if (cur === 'speaking') {
+        genRef.current++
+        if (currentAudioRef.current) {
+          currentAudioRef.current.pause()
+          currentAudioRef.current.src = ''
+          currentAudioRef.current = null
+        }
+        speechSynthesis.cancel()
+        ttsTextRef.current = ''
+        ttsQueueRef.current = []
+        utteranceCountRef.current = 0
+        transcriptRef.current = ''
+        setInterimText('')
+        stateRef.current = 'listening'
+        setState('listening')
+        // Re-start recognition (may have stopped during TTS)
+        startRecognition()
+        return
+      }
+
+      setInterimText(interim || transcriptRef.current + final)
+      if (final) transcriptRef.current += final
+
+      clearTimers()
+      silenceTimerRef.current = setTimeout(() => submitTranscript(), SUBMIT_SILENCE_MS)
+    }
+
     recognition.onend = () => {
-      if (stateRef.current !== 'idle') {
+      if (recognitionRef.current !== recognition) return
+      if (stateRef.current === 'listening') {
         try { recognition.start() } catch {}
       }
     }
+
     recognition.onerror = (e: SpeechRecognitionErrorEvent) => {
-      if (e.error === 'not-allowed' || e.error === 'aborted' || e.error === 'audio-capture') {
+      if (e.error === 'not-allowed') {
+        setMicPermission('denied')
         setState('idle')
       }
     }
 
     recognitionRef.current = recognition
-    recognition.start()
-  }, [SR, onResult])
+    try { recognition.start() } catch {}
+  }, [submitTranscript, clearTimers])
 
   const speakSentence = useCallback(async (text: string): Promise<void> => {
     const gen = genRef.current
 
-    // Try Puter TTS
-    const p = (window as any).puter
-    if (p?.ai?.txt2speech) {
-      try {
-        const audioResult = await p.ai.txt2speech(text, {
-          provider: "elevenlabs",
-          voice: "21m00Tcm4TlvDq8ikWAM",
-          model: "eleven_flash_v2_5",
-        })
-        if (gen !== genRef.current) return
+    // Cancel any prior TTS before starting
+    speechSynthesis.cancel()
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause()
+      currentAudioRef.current.src = ''
+      currentAudioRef.current = null
+    }
 
-        const url = audioResult instanceof Blob
-          ? URL.createObjectURL(audioResult)
-          : String(audioResult)
+    // Try Deepgram TTS
+    try {
+      const resp = await fetch('/api/voice/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      if (!resp.ok) throw new Error(`TTS HTTP ${resp.status}`)
+      if (gen !== genRef.current) return
 
-        const result = await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error('TTS timeout')), 15000)
-          const el = new Audio(url)
-          currentAudioRef.current = el
-          el.onended = () => { clearTimeout(timeout); currentAudioRef.current = null; resolve() }
-          el.onerror = () => { clearTimeout(timeout); currentAudioRef.current = null; reject(new Error('Audio playback error')) }
-          el.play().catch(reject)
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+
+      await new Promise<void>((resolve, reject) => {
+        const el = new Audio(url)
+        currentAudioRef.current = el
+        el.onended = () => { URL.revokeObjectURL(url); currentAudioRef.current = null; resolve() }
+        el.onerror = () => { URL.revokeObjectURL(url); currentAudioRef.current = null; reject(new Error('Audio playback error')) }
+        el.play().catch((err) => {
+          URL.revokeObjectURL(url)
+          currentAudioRef.current = null
+          reject(err)
         })
-        return
-      } catch (e) {
-        console.warn('Puter TTS failed, using fallback:', e)
-      }
+      })
+      return
+    } catch (e) {
+      console.warn('Deepgram TTS failed, using fallback:', e)
     }
 
     // Fallback to browser SpeechSynthesis
-    return new Promise<void>((resolve) => {
+    speechSynthesis.cancel()
+    await new Promise<void>((resolve) => {
       const u = new SpeechSynthesisUtterance(text)
       u.rate = 1.1
-      const timeout = setTimeout(() => resolve(), 15000)
-      u.onend = () => { clearTimeout(timeout); resolve() }
-      u.onerror = () => { clearTimeout(timeout); resolve() }
+      u.onend = () => { resolve() }
+      u.onerror = () => { resolve() }
       speechSynthesis.speak(u)
     })
   }, [])
@@ -184,6 +230,7 @@ export function useBackendVoice({ sendMessage }: UseVoiceOptions) {
       }
     }
     if (utteranceCountRef.current <= 0 && stateRef.current !== 'idle') {
+      isSendingRef.current = false
       lastTtsEndRef.current = Date.now()
       stateRef.current = 'listening'
       setState('listening')
@@ -222,6 +269,7 @@ export function useBackendVoice({ sendMessage }: UseVoiceOptions) {
         speakNextSentence()
       }
     } else if (stateRef.current !== 'idle') {
+      isSendingRef.current = false
       lastTtsEndRef.current = Date.now()
       stateRef.current = 'listening'
       setState('listening')
@@ -257,6 +305,8 @@ export function useBackendVoice({ sendMessage }: UseVoiceOptions) {
     stopRecognition()
     transcriptRef.current = ''
     setInterimText('')
+    lastSentTextRef.current = ''
+    isSendingRef.current = false
     setState('idle')
   }, [clearTimers, cancelTts, stopRecognition])
 
@@ -277,5 +327,5 @@ export function useBackendVoice({ sendMessage }: UseVoiceOptions) {
     }
   }, [clearTimers, cancelTts, stopRecognition])
 
-  return { state, interimText, start, stop, feedTokens, flushTts, isSupported }
+  return { state, interimText, start, stop, feedTokens, flushTts, isSupported, micPermission }
 }
