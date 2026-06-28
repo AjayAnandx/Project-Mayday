@@ -30,6 +30,7 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
     store = get_store()
     kg = get_graph()
     olog = get_operation_log()
+    q_lower = q.lower()
 
     todos = store.list_todos(query=q)
     
@@ -37,30 +38,39 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
     
     convs_raw = store.list_conversations()
     conversations = []
-    for c in convs_raw:
+    max_conv_scan = min(len(convs_raw), limit * 5)
+    conv_limit = limit
+    for c in convs_raw[:max_conv_scan]:
+        if len(conversations) >= conv_limit:
+            break
         conv = store.get_conversation(c["id"])
         if not conv:
             continue
-        title_match = q.lower() in conv.get("title", "").lower()
-        msg_match = any(q.lower() in m.get("content", "").lower() for m in conv.get("messages", []))
-        if not title_match and not msg_match:
-            continue
-        snippet = ""
-        for m in conv.get("messages", []):
-            if q.lower() in m.get("content", "").lower():
-                snippet = _snippet(m["content"], q)
-                break
-        if not snippet:
+        title_match = q_lower in conv.get("title", "").lower()
+        if title_match:
             snippet = _snippet(conv.get("title", ""), q)
-        conversations.append({
-            "id": conv["id"],
-            "title": conv.get("title", "Untitled"),
-            "date": c.get("created_at", "")[:10],
-            "snippet": snippet,
-        })
+            conversations.append({
+                "id": conv["id"],
+                "title": conv.get("title", "Untitled"),
+                "date": c.get("created_at", "")[:10],
+                "snippet": snippet,
+            })
+            continue
+        for m in conv.get("messages", []):
+            if q_lower in m.get("content", "").lower():
+                snippet = _snippet(m["content"], q)
+                conversations.append({
+                    "id": conv["id"],
+                    "title": conv.get("title", "Untitled"),
+                    "date": c.get("created_at", "")[:10],
+                    "snippet": snippet,
+                })
+                break
     
     graph_nodes = []
     for node in kg.search(q):
+        if len(graph_nodes) >= limit:
+            break
         graph_nodes.append({
             "id": node["id"],
             "label": node["label"],

@@ -5,14 +5,14 @@ _PREFIXES = ("project:", "tag:", "date:", "concept:")
 
 
 def _find_exact_node(kg, name: str) -> dict | None:
-    for r in kg.search(name):
-        if r["label"].strip().lower() == name.strip().lower():
-            return r
+    stripped = name.strip()
+    node = kg.get_node_by_label(stripped)
+    if node:
+        return node
     for p in _PREFIXES:
-        prefixed = p + name
-        for r in kg.search(prefixed):
-            if r["label"].strip().lower() == prefixed.strip().lower():
-                return r
+        node = kg.get_node_by_label(p + stripped)
+        if node:
+            return node
     return None
 
 
@@ -34,11 +34,8 @@ def remember(entity: str, relation: str, value: str, context: str = "", node_typ
     source_id = found["id"] if found else None
     if not source_id:
         source_id = kg.add_node(node_type, entity, {"context": context})
-    target_id = None
-    for r in kg.search(value):
-        if r["label"].strip().lower() == value.lower():
-            target_id = r["id"]
-            break
+    target_node = kg.get_node_by_label(value.strip())
+    target_id = target_node["id"] if target_node else None
     if not target_id:
         target_id = kg.add_node("concept", value, {})
     edge_id = kg.add_edge_if_missing(source_id, target_id, relation)

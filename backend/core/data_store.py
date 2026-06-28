@@ -28,6 +28,7 @@ class DataStore:
         self._lock = threading.Lock()
         self._todos: list[dict] = []
         self._events: list[dict] = []
+        self._conv_idx: dict[str, dict] = {}
         self._load()
         self._init_conv_dir()
 
@@ -105,12 +106,16 @@ class DataStore:
         p = self._index_path()
         if p.exists():
             try:
-                return json.loads(p.read_text(encoding="utf-8"))
+                entries: list[dict] = json.loads(p.read_text(encoding="utf-8"))
+                self._conv_idx = {e["id"]: e for e in entries}
+                return entries
             except (json.JSONDecodeError, OSError):
                 pass
+        self._conv_idx = {}
         return []
 
     def _save_index(self, index: list[dict]):
+        self._conv_idx = {e["id"]: e for e in index}
         self._index_path().write_text(
             json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8"
         )
@@ -130,6 +135,7 @@ class DataStore:
                         })
                 except (json.JSONDecodeError, OSError):
                     pass
+        self._conv_idx = {e["id"]: e for e in index}
         self._save_index(index)
 
     # --- Todos ---
@@ -395,19 +401,20 @@ class DataStore:
             day["conversations"].append(conv)
             self._save_day(date_str, day)
             index = self._load_index()
-            index.append({
+            entry = {
                 "id": conv["id"],
                 "date": date_str,
                 "title": title,
                 "message_count": 0,
-            })
+            }
+            index.append(entry)
+            self._conv_idx[conv["id"]] = entry
             self._save_index(index)
             return conv
 
     def add_message(self, conversation_id: str, role: str, content: str) -> dict | None:
         with self._lock:
-            index = self._load_index()
-            entry = next((e for e in index if e["id"] == conversation_id), None)
+            entry = self._conv_idx.get(conversation_id)
             if not entry:
                 return None
             day = self._load_day(entry["date"])
@@ -425,14 +432,13 @@ class DataStore:
                         entry["title"] = conv["title"]
                     entry["message_count"] = len(conv["messages"])
                     self._save_day(entry["date"], day)
-                    self._save_index(index)
+                    self._save_index(list(self._conv_idx.values()))
                     return msg
             return None
 
     def get_conversation(self, conversation_id: str) -> dict | None:
         with self._lock:
-            index = self._load_index()
-            entry = next((e for e in index if e["id"] == conversation_id), None)
+            entry = self._conv_idx.get(conversation_id)
             if not entry:
                 return None
             day = self._load_day(entry["date"])
@@ -443,13 +449,19 @@ class DataStore:
 
     def list_conversations(self, date: str | None = None) -> list[dict]:
         with self._lock:
-            index = self._load_index()
+            self._load_index()
+            entries = list(self._conv_idx.values())
             if date:
-                index = [e for e in index if e["date"] == date]
-            sorted_index = sorted(index, key=lambda e: e.get("date", ""), reverse=True)
+                entries = [e for e in entries if e["date"] == date]
+            sorted_entries = sorted(entries, key=lambda e: e.get("date", ""), reverse=True)
+
+            day_cache: dict[str, dict] = {}
             result = []
-            for entry in sorted_index:
-                day = self._load_day(entry["date"])
+            for entry in sorted_entries:
+                day = day_cache.get(entry["date"])
+                if day is None:
+                    day = self._load_day(entry["date"])
+                    day_cache[entry["date"]] = day
                 for conv in day["conversations"]:
                     if conv["id"] == entry["id"]:
                         conv_slim = {
@@ -465,8 +477,7 @@ class DataStore:
 
     def delete_conversation(self, conversation_id: str) -> bool:
         with self._lock:
-            index = self._load_index()
-            entry = next((e for e in index if e["id"] == conversation_id), None)
+            entry = self._conv_idx.get(conversation_id)
             if not entry:
                 return False
             day = self._load_day(entry["date"])
@@ -478,8 +489,8 @@ class DataStore:
                 self._save_day(entry["date"], day)
             else:
                 self._daily_path(entry["date"]).unlink(missing_ok=True)
-            index = [e for e in index if e["id"] != conversation_id]
-            self._save_index(index)
+            self._conv_idx.pop(conversation_id, None)
+            self._save_index(list(self._conv_idx.values()))
             return True
 
     def get_recent_messages(self, conversation_id: str, limit: int = 20) -> list[dict]:

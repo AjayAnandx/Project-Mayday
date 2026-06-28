@@ -2,7 +2,7 @@ import json
 import re
 import uuid
 import threading
-from bisect import bisect_left, bisect_right
+from bisect import insort, bisect_left, bisect_right
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,17 +19,11 @@ def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", text.lower()))
 
 
+def _tokenize_with_pos(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
 class OperationLog:
-    """Append-only log of all CRUD operations with per-month files + in-memory indexes.
-
-    Indexes (built on load, O(n) one-time):
-      _by_id:      id -> operation dict                                        O(1) lookup
-      _by_action:  action -> set[id]                                           O(1) filter
-      _by_type:    entity_type -> set[id]                                      O(1) filter
-      _by_date:    sorted list of (timestamp, id) per month                    O(log n) date range
-      _text_idx:   token -> set[id]                                            O(1) full-text
-    """
-
     def __init__(self):
         self._dir = Path(__file__).resolve().parent.parent.parent / "operations"
         self._dir.mkdir(parents=True, exist_ok=True)
@@ -39,7 +33,7 @@ class OperationLog:
         self._by_action: dict[str, set[str]] = {}
         self._by_type: dict[str, set[str]] = {}
         self._by_date: dict[str, list[tuple[str, str]]] = {}
-        self._text_idx: dict[str, set[str]] = {}
+        self._text_idx: dict[str, dict[str, int]] = {}
         self._loaded_months: set[str] = set()
 
         self._load_index()
@@ -72,7 +66,11 @@ class OperationLog:
         p = self._month_path(month)
         if p.exists():
             try:
-                ops = json.loads(p.read_text(encoding="utf-8"))
+                raw = p.read_text(encoding="utf-8")
+                if raw.startswith("["):
+                    ops = json.loads(raw)
+                else:
+                    ops = [json.loads(line) for line in raw.strip().split("\n") if line.strip()]
                 for op in ops:
                     self._index_op(op)
             except (json.JSONDecodeError, OSError):
@@ -94,11 +92,23 @@ class OperationLog:
         self._by_type.setdefault(etype, set()).add(oid)
 
         month = _month_key(op.get("timestamp", "")[:10])
-        self._by_date.setdefault(month, []).append((op.get("timestamp", ""), oid))
+        ts_entry = (op.get("timestamp", ""), oid)
+        date_list = self._by_date.get(month)
+        if date_list is None:
+            self._by_date[month] = [ts_entry]
+        else:
+            insort(date_list, ts_entry, key=lambda x: x[0])
 
         text = f"{op.get('entity_name', '')} {op.get('description', '')} {op.get('user_message', '')}"
-        for token in _tokenize(text):
-            self._text_idx.setdefault(token, set()).add(oid)
+        for token in _tokenize_with_pos(text):
+            self._text_idx.setdefault(token, {}).setdefault(oid, 0)
+            self._text_idx[token][oid] += 1
+
+    def _write_month(self, month: str):
+        ids = [oid for _, oid in self._by_date.get(month, [])]
+        ops = [self._by_id[oid] for oid in ids if oid in self._by_id]
+        lines = "\n".join(json.dumps(op, ensure_ascii=False) for op in ops)
+        self._month_path(month).write_text(lines + "\n", encoding="utf-8")
 
     def record(self, action: str, entity_type: str, entity_id: str,
                entity_name: str, details: dict | None = None, user_message: str = ""):
@@ -118,13 +128,8 @@ class OperationLog:
             self._ensure_months_loaded({month})
             self._index_op(op)
 
-            month_path = self._month_path(month)
-            if month_path.exists():
-                existing = json.loads(month_path.read_text(encoding="utf-8"))
-                existing.append(op)
-            else:
-                existing = [op]
-            month_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+            with self._month_path(month).open("a", encoding="utf-8") as f:
+                f.write(json.dumps(op, ensure_ascii=False) + "\n")
 
             self._save_index()
             return op
@@ -156,7 +161,6 @@ class OperationLog:
             if date_from or date_to:
                 matching = set()
                 for month, entries in self._by_date.items():
-                    entries.sort(key=lambda x: x[0])
                     lo = 0
                     hi = len(entries)
                     if date_from:
@@ -169,14 +173,38 @@ class OperationLog:
 
             if query:
                 tokens = _tokenize(query)
-                matching = set.intersection(*[self._text_idx.get(t, set()) for t in tokens]) if tokens else set()
-                ids = matching if ids is None else ids & matching
+                if tokens:
+                    matching: set[str] | None = None
+                    for t in tokens:
+                        s = set(self._text_idx.get(t, {}).keys())
+                        if matching is None:
+                            matching = s
+                        else:
+                            matching &= s
+                        if not matching:
+                            matching = set()
+                            break
+                    ids = matching if ids is None else ids & matching
+                else:
+                    ids = set() if ids is None else ids
 
             if ids is None:
                 ids = set(self._by_id.keys())
 
             results = [self._by_id[oid] for oid in ids if oid in self._by_id]
-            results.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+            if query and results:
+                tokens = _tokenize(query)
+                def _score(op: dict) -> int:
+                    total = 0
+                    text = f"{op.get('entity_name', '')} {op.get('description', '')} {op.get('user_message', '')}"
+                    for t in tokens:
+                        if t in text.lower():
+                            total += 1
+                    return total
+                results.sort(key=lambda x: (_score(x), x.get("timestamp", "")), reverse=True)
+            else:
+                results.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
             return results[:limit]
 
     def get_stats(self, action: str | None = None, entity_type: str | None = None) -> str:

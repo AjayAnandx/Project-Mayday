@@ -31,6 +31,10 @@ def extract_keywords(text: str) -> list[str]:
     return [t for t in tokens if len(t) > 2 and t not in _STOP_WORDS]
 
 
+def _tokenize(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9_]+", text.lower()))
+
+
 class KnowledgeGraph:
     def __init__(self):
         cfg = load_config()
@@ -41,7 +45,90 @@ class KnowledgeGraph:
         self._lock = threading.RLock()
         self._nodes: dict[str, dict] = {}
         self._edges: list[dict] = []
+
+        self._label_idx: dict[str, str] = {}
+        self._type_idx: dict[str, set[str]] = {}
+        self._adj_idx: dict[str, dict[str, list[dict]]] = {}
+        self._edge_fp: set[tuple[str, str, str]] = set()
+        self._prop_idx: dict[tuple[str, str, str], str] = {}
+        self._text_idx: dict[str, set[str]] = {}
+
         self._load()
+
+    def _rebuild_indexes(self):
+        self._label_idx.clear()
+        self._type_idx.clear()
+        self._adj_idx.clear()
+        self._edge_fp.clear()
+        self._prop_idx.clear()
+        self._text_idx.clear()
+
+        for node in self._nodes.values():
+            self._index_node(node)
+        for edge in self._edges:
+            self._index_edge(edge)
+
+    def _index_node(self, node: dict):
+        nid = node["id"]
+        label_lower = node["label"].strip().lower()
+        self._label_idx[label_lower] = nid
+
+        self._type_idx.setdefault(node["type"], set()).add(nid)
+
+        text_parts = [node["label"], node["type"]]
+        for v in node.get("properties", {}).values():
+            if isinstance(v, str):
+                text_parts.append(v)
+        for token in _tokenize(" ".join(text_parts)):
+            self._text_idx.setdefault(token, set()).add(nid)
+
+        if node["type"] in ("todo", "event", "conversation"):
+            props = node.get("properties", {})
+            for key in ("todo_id", "event_id", "conv_id"):
+                val = props.get(key)
+                if val:
+                    self._prop_idx[(node["type"], key, val)] = nid
+
+    def _unindex_node(self, node: dict):
+        nid = node["id"]
+        label_lower = node["label"].strip().lower()
+        self._label_idx.pop(label_lower, None)
+
+        type_set = self._type_idx.get(node["type"])
+        if type_set:
+            type_set.discard(nid)
+
+        text_parts = [node["label"], node["type"]]
+        for v in node.get("properties", {}).values():
+            if isinstance(v, str):
+                text_parts.append(v)
+        for token in _tokenize(" ".join(text_parts)):
+            token_set = self._text_idx.get(token)
+            if token_set:
+                token_set.discard(nid)
+
+        if node["type"] in ("todo", "event", "conversation"):
+            props = node.get("properties", {})
+            for key in ("todo_id", "event_id", "conv_id"):
+                val = props.get(key)
+                if val:
+                    self._prop_idx.pop((node["type"], key, val), None)
+
+    def _index_edge(self, edge: dict):
+        self._adj_idx.setdefault(edge["source"], {"out": [], "in": []})
+        self._adj_idx.setdefault(edge["target"], {"out": [], "in": []})
+        self._adj_idx[edge["source"]]["out"].append(edge)
+        self._adj_idx[edge["target"]]["in"].append(edge)
+        self._edge_fp.add((edge["source"], edge["target"], edge["relation"]))
+
+    def _unindex_edge(self, edge: dict):
+        out_list = self._adj_idx.get(edge["source"], {}).get("out")
+        if out_list:
+            out_list[:] = [e for e in out_list if e["id"] != edge["id"]]
+        in_list = self._adj_idx.get(edge["target"], {}).get("in")
+        if in_list:
+            in_list[:] = [e for e in in_list if e["id"] != edge["id"]]
+        self._edge_fp.discard((edge["source"], edge["target"], edge["relation"]))
 
     def _load(self):
         if self._path.exists():
@@ -49,6 +136,7 @@ class KnowledgeGraph:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
                 self._nodes = {n["id"]: n for n in data.get("nodes", [])}
                 self._edges = data.get("edges", [])
+                self._rebuild_indexes()
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -65,57 +153,91 @@ class KnowledgeGraph:
             props = properties or {}
             if "status" not in props:
                 props["status"] = "active"
-            self._nodes[node_id] = {
+            node = {
                 "id": node_id,
                 "type": type,
                 "label": label.strip(),
                 "properties": props,
             }
+            self._nodes[node_id] = node
+            self._index_node(node)
             self._save()
             return node_id
 
     def add_edge(self, source: str, target: str, relation: str, properties: dict | None = None) -> str:
         with self._lock:
             edge_id = uuid.uuid4().hex[:12]
-            self._edges.append({
+            edge = {
                 "id": edge_id,
                 "source": source,
                 "target": target,
                 "relation": relation,
                 "properties": properties or {},
-            })
+            }
+            self._edges.append(edge)
+            self._index_edge(edge)
             self._save()
             return edge_id
 
     def add_edge_if_missing(self, source: str, target: str, relation: str, properties: dict | None = None) -> str | None:
         with self._lock:
-            for e in self._edges:
-                if e["source"] == source and e["target"] == target and e["relation"] == relation:
-                    return None
+            if (source, target, relation) in self._edge_fp:
+                return None
             edge_id = uuid.uuid4().hex[:12]
-            self._edges.append({
+            edge = {
                 "id": edge_id,
                 "source": source,
                 "target": target,
                 "relation": relation,
                 "properties": properties or {},
-            })
+            }
+            self._edges.append(edge)
+            self._index_edge(edge)
             self._save()
             return edge_id
 
     def search(self, query: str) -> list[dict]:
         with self._lock:
             q = query.lower()
-            results = []
+            tokens = _tokenize(q)
+            matching_ids: set[str] | None = None
+
+            if tokens:
+                for t in tokens:
+                    s = self._text_idx.get(t, set())
+                    if matching_ids is None:
+                        matching_ids = set(s)
+                    else:
+                        matching_ids &= s
+                        if not matching_ids:
+                            break
+
+            if matching_ids is None:
+                matching_ids = set()
+
+            results = [self._nodes[nid] for nid in matching_ids if nid in self._nodes]
+
+            seen = set(matching_ids)
             for node in self._nodes.values():
+                if node["id"] in seen:
+                    continue
                 if q in node["label"].lower():
                     results.append(node)
+                    seen.add(node["id"])
                     continue
                 for v in node.get("properties", {}).values():
                     if isinstance(v, str) and q in v.lower():
                         results.append(node)
+                        seen.add(node["id"])
                         break
+
             return results
+
+    def get_node_by_label(self, label: str) -> dict | None:
+        nid = self._label_idx.get(label.strip().lower())
+        if nid:
+            return self._nodes.get(nid)
+        return None
 
     def get_subgraph(self, node_id: str, depth: int = 2) -> dict:
         with self._lock:
@@ -130,15 +252,18 @@ class KnowledgeGraph:
                 sub_nodes.append(self._nodes[nid])
                 if d >= depth:
                     continue
-                for edge in self._edges:
-                    if edge["source"] == nid and edge["target"] not in visited:
-                        visited.add(edge["target"])
-                        queue.append((edge["target"], d + 1))
-                        sub_edges.append(edge)
-                    elif edge["target"] == nid and edge["source"] not in visited:
-                        visited.add(edge["source"])
-                        queue.append((edge["source"], d + 1))
-                        sub_edges.append(edge)
+                adj = self._adj_idx.get(nid)
+                if adj:
+                    for edge in adj["out"]:
+                        if edge["target"] not in visited:
+                            visited.add(edge["target"])
+                            queue.append((edge["target"], d + 1))
+                            sub_edges.append(edge)
+                    for edge in adj["in"]:
+                        if edge["source"] not in visited:
+                            visited.add(edge["source"])
+                            queue.append((edge["source"], d + 1))
+                            sub_edges.append(edge)
             return {"nodes": sub_nodes, "edges": sub_edges}
 
     def get_full_graph(self) -> dict:
@@ -165,16 +290,27 @@ class KnowledgeGraph:
         with self._lock:
             if node_id not in self._nodes:
                 return False
-            del self._nodes[node_id]
-            self._edges = [e for e in self._edges if e["source"] != node_id and e["target"] != node_id]
+            node = self._nodes.pop(node_id)
+            self._unindex_node(node)
+
+            remaining_edges = []
+            for edge in self._edges:
+                if edge["source"] == node_id or edge["target"] == node_id:
+                    self._unindex_edge(edge)
+                else:
+                    remaining_edges.append(edge)
+            self._edges = remaining_edges
             self._save()
             return True
 
     def remove_edge(self, source: str, target: str, relation: str) -> bool:
         with self._lock:
             before = len(self._edges)
+            removed = [e for e in self._edges if e["source"] == source and e["target"] == target and e["relation"] == relation]
             self._edges = [e for e in self._edges if not (e["source"] == source and e["target"] == target and e["relation"] == relation)]
-            if len(self._edges) != before:
+            if removed:
+                for e in removed:
+                    self._unindex_edge(e)
                 self._save()
                 return True
             return False
@@ -197,96 +333,107 @@ class KnowledgeGraph:
 
     def sync_todo(self, todo: dict):
         with self._lock:
-            existing = None
-            for n in self._nodes.values():
-                if n["type"] == "todo" and n["properties"].get("todo_id") == todo["id"]:
-                    existing = n
-                    break
-            if existing:
-                existing["label"] = todo["title"]
-                existing["properties"].update({
-                    "description": todo.get("description", ""),
-                    "due_date": todo.get("due_date"),
-                    "priority": todo.get("priority"),
-                    "completed": todo.get("completed", False),
-                    "tags": todo.get("tags", []),
-                    "recurrence": todo.get("recurrence"),
-                })
-            else:
-                node_id = uuid.uuid4().hex[:12]
-                self._nodes[node_id] = {
-                    "id": node_id,
-                    "type": "todo",
-                    "label": todo["title"],
-                    "properties": {
-                        "todo_id": todo["id"],
+            key = ("todo", "todo_id", todo["id"])
+            existing_id = self._prop_idx.get(key)
+            if existing_id:
+                existing = self._nodes.get(existing_id)
+                if existing:
+                    self._unindex_node(existing)
+                    existing["label"] = todo["title"]
+                    existing["properties"].update({
                         "description": todo.get("description", ""),
                         "due_date": todo.get("due_date"),
                         "priority": todo.get("priority"),
                         "completed": todo.get("completed", False),
                         "tags": todo.get("tags", []),
                         "recurrence": todo.get("recurrence"),
-                    },
-                }
-                for tag in todo.get("tags", []):
-                    tag_node_id = self._ensure_tag_node(tag)
-                    self._edges.append({
-                        "id": uuid.uuid4().hex[:12],
-                        "source": node_id,
-                        "target": tag_node_id,
-                        "relation": "has_tag",
-                        "properties": {},
                     })
+                    self._index_node(existing)
+                    self._save()
+                    return
+            node_id = uuid.uuid4().hex[:12]
+            node = {
+                "id": node_id,
+                "type": "todo",
+                "label": todo["title"],
+                "properties": {
+                    "todo_id": todo["id"],
+                    "description": todo.get("description", ""),
+                    "due_date": todo.get("due_date"),
+                    "priority": todo.get("priority"),
+                    "completed": todo.get("completed", False),
+                    "tags": todo.get("tags", []),
+                    "recurrence": todo.get("recurrence"),
+                },
+            }
+            self._nodes[node_id] = node
+            self._index_node(node)
+            for tag in todo.get("tags", []):
+                tag_node_id = self._ensure_tag_node(tag)
+                edge = {
+                    "id": uuid.uuid4().hex[:12],
+                    "source": node_id,
+                    "target": tag_node_id,
+                    "relation": "has_tag",
+                    "properties": {},
+                }
+                self._edges.append(edge)
+                self._index_edge(edge)
             self._save()
 
     def sync_event(self, event: dict):
         with self._lock:
-            existing = None
-            for n in self._nodes.values():
-                if n["type"] == "event" and n["properties"].get("event_id") == event["id"]:
-                    existing = n
-                    break
-            if existing:
-                existing["label"] = event["title"]
-                existing["properties"].update({
-                    "description": event.get("description", ""),
-                    "start_time": event.get("start_time"),
-                    "end_time": event.get("end_time"),
-                    "all_day": event.get("all_day", False),
-                    "recurrence": event.get("recurrence"),
-                })
-            else:
-                node_id = uuid.uuid4().hex[:12]
-                self._nodes[node_id] = {
-                    "id": node_id,
-                    "type": "event",
-                    "label": event["title"],
-                    "properties": {
-                        "event_id": event["id"],
+            key = ("event", "event_id", event["id"])
+            existing_id = self._prop_idx.get(key)
+            if existing_id:
+                existing = self._nodes.get(existing_id)
+                if existing:
+                    self._unindex_node(existing)
+                    existing["label"] = event["title"]
+                    existing["properties"].update({
                         "description": event.get("description", ""),
                         "start_time": event.get("start_time"),
                         "end_time": event.get("end_time"),
                         "all_day": event.get("all_day", False),
                         "recurrence": event.get("recurrence"),
-                    },
-                }
+                    })
+                    self._index_node(existing)
+                    self._save()
+                    return
+            node_id = uuid.uuid4().hex[:12]
+            node = {
+                "id": node_id,
+                "type": "event",
+                "label": event["title"],
+                "properties": {
+                    "event_id": event["id"],
+                    "description": event.get("description", ""),
+                    "start_time": event.get("start_time"),
+                    "end_time": event.get("end_time"),
+                    "all_day": event.get("all_day", False),
+                    "recurrence": event.get("recurrence"),
+                },
+            }
+            self._nodes[node_id] = node
+            self._index_node(node)
             self._save()
 
     def sync_conversation(self, conv: dict) -> str:
         with self._lock:
-            existing = None
-            for n in self._nodes.values():
-                if n["type"] == "conversation" and n["properties"].get("conv_id") == conv["id"]:
-                    existing = n
-                    break
-            if existing:
-                existing["label"] = conv["id"]
-                existing["properties"]["message_count"] = len(conv.get("messages", []))
-                existing["properties"]["title"] = conv.get("title", "Conversation")
-                self._save()
-                return existing["id"]
+            key = ("conversation", "conv_id", conv["id"])
+            existing_id = self._prop_idx.get(key)
+            if existing_id:
+                existing = self._nodes.get(existing_id)
+                if existing:
+                    self._unindex_node(existing)
+                    existing["label"] = conv["id"]
+                    existing["properties"]["message_count"] = len(conv.get("messages", []))
+                    existing["properties"]["title"] = conv.get("title", "Conversation")
+                    self._index_node(existing)
+                    self._save()
+                    return existing["id"]
             node_id = uuid.uuid4().hex[:12]
-            self._nodes[node_id] = {
+            node = {
                 "id": node_id,
                 "type": "conversation",
                 "label": conv["id"],
@@ -296,47 +443,56 @@ class KnowledgeGraph:
                     "message_count": len(conv.get("messages", [])),
                 },
             }
+            self._nodes[node_id] = node
+            self._index_node(node)
             self._save()
             return node_id
 
     def _ensure_tag_node(self, tag: str) -> str:
-        for n in self._nodes.values():
-            if n["type"] == "tag" and n["label"] == tag:
-                return n["id"]
+        nid = self._label_idx.get(tag.strip().lower())
+        if nid and nid in self._nodes and self._nodes[nid]["type"] == "tag":
+            return nid
         node_id = uuid.uuid4().hex[:12]
-        self._nodes[node_id] = {
+        node = {
             "id": node_id,
             "type": "tag",
             "label": tag,
             "properties": {},
         }
+        self._nodes[node_id] = node
+        self._index_node(node)
         return node_id
 
     def delete_todo_node(self, todo_id: str):
         with self._lock:
-            to_remove = [nid for nid, n in self._nodes.items() if n["type"] == "todo" and n["properties"].get("todo_id") == todo_id]
-            for nid in to_remove:
+            key = ("todo", "todo_id", todo_id)
+            nid = self._prop_idx.get(key)
+            if nid:
                 self.remove_node(nid)
 
     def delete_event_node(self, event_id: str):
         with self._lock:
-            to_remove = [nid for nid, n in self._nodes.items() if n["type"] == "event" and n["properties"].get("event_id") == event_id]
-            for nid in to_remove:
+            key = ("event", "event_id", event_id)
+            nid = self._prop_idx.get(key)
+            if nid:
                 self.remove_node(nid)
 
     def delete_conversation_node(self, conv_id: str):
         with self._lock:
-            to_remove = [nid for nid, n in self._nodes.items() if n["type"] == "conversation" and n["properties"].get("conv_id") == conv_id]
-            for nid in to_remove:
+            key = ("conversation", "conv_id", conv_id)
+            nid = self._prop_idx.get(key)
+            if nid:
                 self.remove_node(nid)
 
     def set_status(self, label: str, status: str) -> dict | None:
         with self._lock:
-            for n in self._nodes.values():
-                if n["label"].strip().lower() == label.strip().lower():
-                    n["properties"]["status"] = status
-                    self._save()
-                    return n
+            nid = self._label_idx.get(label.strip().lower())
+            if nid and nid in self._nodes:
+                self._unindex_node(self._nodes[nid])
+                self._nodes[nid]["properties"]["status"] = status
+                self._index_node(self._nodes[nid])
+                self._save()
+                return self._nodes[nid]
             return None
 
     def repair_graph(self) -> dict:
@@ -353,7 +509,9 @@ class KnowledgeGraph:
                     scraped_ids.add(nid)
                     report["projects_scraped"].append(n["label"])
             for nid in scraped_ids:
+                self._unindex_node(self._nodes[nid])
                 self._nodes[nid]["properties"]["status"] = "scraped"
+                self._index_node(self._nodes[nid])
             self._save()
             report["total_scraped"] = len(scraped_ids)
             return report

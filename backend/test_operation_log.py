@@ -61,9 +61,10 @@ class TestRecord:
         month = list(log._loaded_months)[0]
         month_path = log._month_path(month)
         assert month_path.exists()
-        data = json.loads(month_path.read_text(encoding="utf-8"))
-        assert len(data) == 1
-        assert data[0]["entity_name"] == "Test"
+        lines = [l for l in month_path.read_text(encoding="utf-8").strip().split("\n") if l.strip()]
+        assert len(lines) == 1
+        data = json.loads(lines[0])
+        assert data["entity_name"] == "Test"
 
 
 class TestQuery:
