@@ -86,24 +86,192 @@ Planned features organized by impact tier for future implementation beyond the c
 
 ---
 
-### 2b. System Commands
+### 2b. System Commands — Planned for Jun 27
 
-**Goal**: Mayday can control the local machine — open apps, adjust volume, shutdown, clipboard.
+**Goal**: Mayday can control the local machine — open apps, adjust volume, shutdown, clipboard, system info, and whitelisted shell commands.
 
-**Implementation**:
-- 6 new Python functions in `backend/functions/system_functions.py`:
-  - `open_application(path_or_name)` — `subprocess.Popen` with known app paths
-  - `set_volume(level)` — Windows `ctypes` + kernel32
-  - `shutdown_system(delay)` — `os.system("shutdown /s /t N")`
-  - `copy_to_clipboard(text)` — `pyperclip` or `ctypes` user32
-  - `get_system_info()` — platform, CPU, memory, disk
-  - `run_shell_command(command)` — limited whitelist of allowed commands
-- Register in `function_registry.py` as LLM tools
-- Add to `CORE_TOOL_NAMES` in `chat.py`
+**Status** — PLANNED (Jun 27)
 
-**New files**: `backend/functions/system_functions.py`
+#### Architecture
 
-**Files modified**: `backend/assistant/function_registry.py`, `backend/api/chat.py`
+```
+User: "Open Chrome and lower the volume"
+  → LLM calls open_application("chrome")
+  → subprocess.Popen → "Chrome opened"
+  → LLM calls set_volume(30)
+  → ctypes winmm → "Volume set to 30%"
+  → User sees tool_call bubbles with results
+```
+
+All tools are synchronous Python functions running via `run_in_executor` (same pattern as existing tools). On Windows, `ctypes.windll` and `subprocess` handle the OS interactions. No additional Python packages required — everything uses built-in `ctypes`, `subprocess`, `os`, `platform`.
+
+#### 9 LLM Tools in `backend/functions/system_functions.py`
+
+| Tool | Parameters | Implementation | Destructive? |
+|------|-----------|----------------|:------------:|
+| `open_application` | `name: str` | `subprocess.Popen` — known app table ("notepad", "chrome", "calc", "spotify", "explorer", "cmd") + `start "" "path"` for full paths. Uses `where.exe` as name-to-path resolver. | No |
+| `close_application` | `name: str` | `subprocess.run(["taskkill", "/IM", f"{name}.exe", "/F"])` — kills by process name | Yes — requires user confirm |
+| `set_volume` | `level: int` (0–100) | `ctypes.windll.winmm.waveOutSetVolume(0, (level * 65535 // 100) \| ((level * 65535 // 100) << 16))` | No |
+| `get_volume` | none | `ctypes.windll.winmm.waveOutGetVolume(0)` → unpack to 0–100 integer | No |
+| `system_power` | `action: str` (enum: shutdown/restart/sleep/hibernate/lock) | `subprocess.run` with: `shutdown /s /t 30`, `shutdown /r /t 30`, `rundll32 powrprof.dll SetSuspendState`, `shutdown /h`, `rundll32 user32.dll LockWorkStation` | **Yes** — requires user confirm |
+| `copy_to_clipboard` | `text: str` | `subprocess.run(["powershell", "-Command", "Set-Clipboard", text])` — simple, reliable, no ctypes | No |
+| `get_system_info` | none | `platform.platform()`, `os.cpu_count()`, `psutil.disk_usage('/')` (try/except fallback to `wmic`) | No |
+| `get_active_window` | none | `ctypes.windll.user32.GetForegroundWindow()` + `GetWindowTextLength()` + `GetWindowText()` → window title string | No |
+| `run_shell_command` | `command: str` | Whitelist-only execution — checks against safe pattern regex before running | Yes — whitelist constrained |
+
+#### Security Model
+
+**Destructive action protection:**
+- Tools marked "Yes — requires user confirm" above must be confirmed by the user.
+- The tool function returns a string like: `⚠️ This will shut down the computer in 30 seconds. Say "Yes, proceed" to confirm.`
+- LLM is instructed to **never** execute destructive actions without explicit user confirmation.
+
+**Shell command whitelist:**
+- Only commands matching these patterns execute:
+
+| Pattern | Example |
+|---------|---------|
+| `^(dir\|ls)\b` | `dir C:\Users` |
+| `^(type\|cat)\b` | `type file.txt` |
+| `^(whoami\|who am i)\b` | `whoami` |
+| `^ipconfig\b` | `ipconfig /all` |
+| `^ping\b` | `ping -n 1 google.com` |
+| `^systeminfo\b` | `systeminfo \| find "Memory"` |
+| `^tasklist\b` | `tasklist /FI "MEMUSAGE gt 100000"` |
+| `^(date\|time)\b` | `date /t` |
+| `^echo\b` | `echo hello` |
+| `^ver\b` | `ver` |
+
+- Anything not matching returns: `"Command not in whitelist. Allowed commands: dir, type, whoami, ipconfig, ping, systeminfo, tasklist, date, time, echo, ver"`
+- Whitelist is enforced in code, not just LLM instructions — LLM cannot bypass it
+
+**Timeouts:**
+- All `subprocess.run()` calls have a 10-second timeout
+- `ctypes` calls are instant (no blocking)
+
+#### Data Flow
+
+```
+User message → LLM decides → tool call
+  → dispatch_call("open_application", {"name": "chrome"})
+  → loop.run_in_executor(None, open_application, "chrome")
+  → open_application():
+      1. Check name in KNOWN_APPS dict → "C:\Program Files\Google\Chrome\Application\chrome.exe"
+      2. subprocess.Popen(path, shell=False)
+      3. Store process handle in _opened_procs dict (for close_application)
+      4. Return "Opened Chrome"
+  → Result → WS tool_call bubble → user sees confirmation
+```
+
+For `close_application`:
+```
+User: "Close Chrome"
+  → LLM calls close_application("chrome")
+  → taskkill /IM chrome.exe /F
+  → Returns "Closed Chrome (PID: 1234)"
+```
+
+For destructive actions:
+```
+User: "Shutdown my PC"
+  → LLM calls system_power("shutdown")
+  → Returns "⚠️ This will shut down the computer in 30 seconds. Say 'Yes, proceed' to confirm."
+  → User: "Yes, proceed"
+  → LLM calls system_power("shutdown") again
+  → Returns "Shutting down in 30 seconds..."
+  → Actual shutdown.exe executes
+```
+
+#### New Files
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `backend/functions/system_functions.py` | ~220 | 9 tool implementations: open_application, close_application, set_volume, get_volume, system_power, copy_to_clipboard, get_system_info, get_active_window, run_shell_command |
+
+#### Modified Files
+
+| File | Changes |
+|------|---------|
+| `backend/assistant/function_registry.py` | Import 9 functions + add 9 tool defs to `LOCAL_TOOL_DEFINITIONS` + add 9 entries to `FUNCTION_MAP` |
+| `backend/api/chat.py` | Add 9 names to `CORE_TOOL_NAMES` + add `close_application`, `system_power`, `run_shell_command` to `SKIP_SECOND_CALL` |
+
+#### Known Application Table
+
+```python
+KNOWN_APPS = {
+    "notepad": "notepad.exe",
+    "chrome": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    "edge": "msedge.exe",
+    "firefox": r"C:\Program Files\Mozilla Firefox\firefox.exe",
+    "calculator": "calc.exe",
+    "cmd": "cmd.exe",
+    "powershell": "powershell.exe",
+    "explorer": "explorer.exe",
+    "spotify": r"C:\Users\%USERNAME%\AppData\Roaming\Spotify\Spotify.exe",
+    "vscode": "code.exe",
+    "taskmgr": "taskmgr.exe",
+}
+```
+
+If not in table, falls back to `subprocess.run(["where.exe", name])` to find the path. If `where.exe` fails, returns `"Could not find application '{name}'. Try providing the full path."`
+
+#### Edge Cases
+
+| Case | Handling |
+|------|----------|
+| App already open | `subprocess.Popen` opens another instance (standard behavior). `close_application("chrome")` kills ALL chrome.exe processes. |
+| Volume out of range | Clamp to 0–100 via `max(0, min(100, level))` |
+| Muted system | Volume 0 → unmute + set level. `waveOutGetVolume` returns 0 → treat as "system muted", set to requested level. |
+| Shutdown with unsaved work | `shutdown /s /t 30` gives 30s grace period. Return warning: "You have 30 seconds to save your work." |
+| Process already dead | `taskkill` returns error → "No running process '{name}' found" |
+| Path with spaces | `subprocess.Popen` with list form avoids shell injection and path splitting. `["notepad.exe"]` not `"notepad.exe"` string. |
+| No active window | `GetForegroundWindow` returns 0 → "Could not detect active window (desktop or lock screen)" |
+| Large clipboard | Truncate at 10,000 chars with warning |
+| PowerShell not available | Fallback to `clip` command: `echo text | clip` |
+| Permission denied (shutdown) | `Access Denied` from shutdown.exe → "Mayday needs administrator privileges. Run as admin or use the physical power button." |
+
+#### LLM Usage Examples
+
+```
+User: "Open Chrome"
+LLM: calls open_application("chrome") → "Opened Chrome"
+
+User: "Lower volume to 30%"
+LLM: calls set_volume(30) → "Volume set to 30%"
+
+User: "Close the browser"
+LLM: needs clarification → "Which browser? Chrome, Firefox, or Edge?"
+User: "Chrome"
+LLM: calls close_application("chrome") → "Closed Chrome"
+
+User: "What's my system info?"
+LLM: calls get_system_info() → "You're on Windows 11 Pro 23H2, 16GB RAM, 8 cores (16 logical), 500GB SSD with 234GB free."
+
+User: "What app is focused right now?"
+LLM: calls get_active_window() → "Active window: 'Mayday - Visual Studio Code'"
+
+User: "Copy this to clipboard: Hello World"
+LLM: calls copy_to_clipboard("Hello World") → "Copied to clipboard"
+
+User: "Restart my computer"
+LLM: calls system_power("restart") → "⚠️ Warning: This will restart the computer in 30 seconds. Say 'Yes, proceed' to confirm."
+User: "Yes, proceed"
+LLM: calls system_power("restart") → "Restarting in 30 seconds..."
+
+User: "Run ipconfig"
+LLM: calls run_shell_command("ipconfig /all") → [output truncated to 2000 chars]
+
+User: "Run rm -rf /"
+LLM: calls run_shell_command("rm -rf /") → "Command not in whitelist. Allowed commands: dir, type, whoami, ipconfig, ping, systeminfo, tasklist, date, time, echo, ver"
+```
+
+#### Implementation Order
+
+1. Create `backend/functions/system_functions.py` with all 9 tools
+2. Register in `function_registry.py` (tool defs + function map)
+3. Register in `chat.py` (CORE_TOOL_NAMES + SKIP_SECOND_CALL)
+4. Test each tool manually via chat
+5. Test destructive action confirmation flow
 
 ---
 

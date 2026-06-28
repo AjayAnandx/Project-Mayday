@@ -60,6 +60,13 @@ export const api = {
   fetchNode: (id: string) =>
     request<{ node: GraphNode; subgraph: GraphData }>(`/memory/graph/node/${id}`),
 
+  // Location
+  getLocation: () =>
+    request<{ lat: number | null; lon: number | null; city: string; country: string }>('/location'),
+
+  setLocation: (data: { lat: number; lon: number; city?: string; country?: string }) =>
+    request<{ status: string }>('/location', { method: 'POST', body: JSON.stringify(data) }),
+
   // Search
   searchAll: (q: string) =>
     request<SearchResults>(`/search?q=${encodeURIComponent(q)}&limit=20`),

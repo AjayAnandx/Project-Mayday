@@ -30,43 +30,33 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
     store = get_store()
     kg = get_graph()
     olog = get_operation_log()
-    q_lower = q.lower()
 
     todos = store.list_todos(query=q)
-    
+
     events = store.list_events(query=q)
-    
-    convs_raw = store.list_conversations()
+
+    store._ensure_conv_text_index()
+    conv_ids = {doc_id for doc_id, _ in store._conv_text_idx.search(q, limit * 5)}
     conversations = []
-    max_conv_scan = min(len(convs_raw), limit * 5)
-    conv_limit = limit
-    for c in convs_raw[:max_conv_scan]:
-        if len(conversations) >= conv_limit:
+    for c in store._conv_idx.values():
+        if c["id"] not in conv_ids:
+            continue
+        if len(conversations) >= limit:
             break
         conv = store.get_conversation(c["id"])
         if not conv:
             continue
-        title_match = q_lower in conv.get("title", "").lower()
-        if title_match:
-            snippet = _snippet(conv.get("title", ""), q)
-            conversations.append({
-                "id": conv["id"],
-                "title": conv.get("title", "Untitled"),
-                "date": c.get("created_at", "")[:10],
-                "snippet": snippet,
-            })
-            continue
+        text = conv.get("title", "")
         for m in conv.get("messages", []):
-            if q_lower in m.get("content", "").lower():
-                snippet = _snippet(m["content"], q)
-                conversations.append({
-                    "id": conv["id"],
-                    "title": conv.get("title", "Untitled"),
-                    "date": c.get("created_at", "")[:10],
-                    "snippet": snippet,
-                })
-                break
-    
+            text += " " + m.get("content", "")
+        snippet = _snippet(text, q)
+        conversations.append({
+            "id": conv["id"],
+            "title": conv.get("title", "Untitled"),
+            "date": c.get("date", conv.get("created_at", ""))[:10],
+            "snippet": snippet,
+        })
+
     graph_nodes = []
     for node in kg.search(q):
         if len(graph_nodes) >= limit:
@@ -77,7 +67,7 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
             "type": node["type"],
             "snippet": _snippet(str(node.get("properties", {})), q),
         })
-    
+
     operations = olog.query(query=q, limit=limit)
 
     return {
@@ -110,3 +100,23 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
             for op in operations[:limit]
         ],
     }
+
+
+@router.get("/prefix")
+def prefix_search(q: str = Query("", min_length=1), limit: int = 20):
+    store = get_store()
+    ids = store._trie.search(q)
+    todos = []
+    events = []
+    for t in store._todos:
+        if f"todo:{t['id']}" in ids:
+            if len(todos) >= limit:
+                break
+            todos.append({"id": t["id"], "title": t["title"]})
+    for e in store._events:
+        key = f"event:{e['id']}"
+        if key in ids:
+            if len(events) >= limit:
+                break
+            events.append({"id": e["id"], "title": e["title"]})
+    return {"todos": todos, "events": events, "conversations": []}

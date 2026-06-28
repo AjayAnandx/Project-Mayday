@@ -5,7 +5,9 @@ Desktop AI personal assistant with:
 - **Todo app** (visual panel with CRUD, search, filter)
 - **Calendar app** (visual month grid, click-to-add events)
 - **LLM chat** (Ollama with tool calling via OpenAI-compatible API)
-- **Real-time voice** (speech-in/speech-out, interruptible — functional, browser SpeechRecognition + Puter/SpeechSynthesis TTS)
+- **Real-time voice** (speech-in/speech-out, interruptible — functional, browser SpeechRecognition + Deepgram/SpeechSynthesis TTS)
+
+See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (architecture, data model, phase plan, edge cases).
 
 ## Tech Decisions
 
@@ -20,20 +22,21 @@ Desktop AI personal assistant with:
 | Chat streaming | WebSocket (`/ws/chat` — token-by-token) |
 | LLM | Ollama local — `gemma4:31b-cloud` |
 | STT | Web Speech API `SpeechRecognition` (frontend, on-device, primary) |
-| TTS | Puter.js (ElevenLabs) → browser `SpeechSynthesis` (fallback) |
+| TTS | Deepgram TTS (primary) → browser `SpeechSynthesis` (fallback) |
 | VAD | Browser built-in (SpeechRecognition handles VAD internally) |
 | Conv memory | Per-day files in `conversations/YYYY-MM-DD.json` + `index.json` for fast lookup |
 | Icons | `lucide-react` |
 | Animations | `motion` (framer-motion) |
 | Markdown render | `react-markdown` + `remark-gfm` + `rehype-highlight` |
 | Graph viz | `cytoscape` (force-directed, cose layout) |
+| Search | Hash-based trigram inverted index (NgramIndex) + trie prefix tree (SearchTrie) + TF-IDF ranker — O(1) exact substring matching, 50–700× faster, zero accuracy regression |
 
 ## Architecture
 - **Two-process**: FastAPI backend (uvicorn) + React frontend (Vite dev / Electron)
 - Vite proxies `/api` → `localhost:8771` and `/ws` → `ws://localhost:8771`
 - Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
-- 22 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status` + `unified_search`
+- 33 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status` + `unified_search` + 11 system/file (open/close app, volume, clipboard, system info, active window, read/write/append/list files)
 - MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`)
 - `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
 - `mcp_server_git` — 12 tools for local git operations (status, log, diff, commit, branch)
@@ -42,7 +45,7 @@ Desktop AI personal assistant with:
 - Requires `GITHUB_PERSONAL_ACCESS_TOKEN` env var (stored in `config.yaml`)
 - Requires `EXA_API_KEY` env var (stored in `config.yaml`) for Exa MCP server (get from https://dashboard.exa.ai/api-keys)
 - WebSocket protocol: `token`/`tool_call`/`done`/`error` message types
-- Voice pipeline: Mic → SpeechRecognition → LLM → Puter/SpeechSynthesis → Speakers (mic OFF during TTS, 1500ms echo cooldown after)
+- Voice pipeline: Mic → SpeechRecognition → LLM → Deepgram/SpeechSynthesis → Speakers (mic OFF during TTS, 1500ms echo cooldown after)
 - Notification system: scheduler fires reminders → in-memory list + queue → REST polling (`GET /api/notifications/fired`) + optional WebSocket
 - Frontend polls `/api/notifications/fired` every 3s — reliable, no WebSocket proxy dependency
 - In-app `ReminderDialog` modal (DOM-based, no browser permission needed) + `Toast` component
@@ -75,7 +78,8 @@ mayday/
 │   ├── core/
 │   │   ├── data_store.py             # JSON persistence (thread-safe)
 │   │   ├── config.py                 # YAML config loader
-│   │   └── operation_log.py          # Per-month operation log (indexed, thread-safe)
+│   │   ├── operation_log.py          # Per-month operation log (indexed, thread-safe)
+│   │   └── search_index.py           # Hash-based n-gram index + trie + TF-IDF ranker
 │   ├── memory/
 │   │   ├── __init__.py
 │   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
@@ -89,8 +93,12 @@ mayday/
 │   │       └── conversation_manager.py  # Context window (last 20 messages)
 │   ├── functions/
 │   │   ├── todo_functions.py         # Todo CRUD implementations
-│   │   └── calendar_functions.py     # Event CRUD + search implementations
-│   └── voice/                        # router.py (status + transcribe stubs)
+│   │   ├── calendar_functions.py     # Event CRUD + search implementations
+│   │   └── system_functions.py       # System control + file access tools (11 tools)
+│   └── voice/
+│       ├── router.py                 # Voice REST + WebSocket endpoints
+│       ├── deepgram_stt.py           # Deepgram STT WebSocket relay
+│       └── deepgram_tts.py           # Deepgram TTS REST synthesis
 │
 ├── frontend/                         # React + Vite + TypeScript
 │   ├── index.html
@@ -141,7 +149,7 @@ mayday/
 │       │   ├── useGraph.ts          # Memory graph data fetching
 │       │   ├── useSearch.ts         # Debounced unified search hook
 │       │   ├── useVoice.ts          # Browser SpeechRecognition + SpeechSynthesis hook
-│       │   ├── useBackendVoice.ts   # Voice mode hook (SpeechRecognition STT + Puter/SpeechSynthesis TTS)
+│   │   ├── useBackendVoice.ts   # Voice mode hook (SpeechRecognition STT + Deepgram/SpeechSynthesis TTS)
 │       │   └── use-auto-resize-textarea.ts
 │       ├── services/
 │       │   ├── api.ts               # Typed REST client
@@ -177,9 +185,9 @@ mayday/
 └── CLAUDE.md                        # This file
 ```
 
-## API Endpoints (27 total)
+## API Endpoints (29 total)
 
-### REST (27 total)
+### REST (29 total)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Health check |
@@ -207,6 +215,7 @@ mayday/
 | `GET` | `/api/memory/stats` | Node/edge counts |
 | `POST` | `/api/memory/repair` | One-time cleanup of junk nodes + stale projects |
 | `GET` | `/api/search` | Unified search across todos, events, conversations, graph, operations `?q=&limit=` |
+| `GET` | `/api/search/prefix` | Prefix/autocomplete search `?q=&limit=` (trie-based) |
 | `GET` | `/api/voice/status` | Backend voice status (STT/TTS engine info) |
 | `POST` | `/api/voice/transcribe` | Upload audio blob for transcription (stub) |
 
@@ -317,6 +326,7 @@ yellow:  '#eab308'
 - [x] **70 passing tests** (30 operation log + 40 memory graph) covering record, query, stats, full-text, persistence, concurrency, dedup, tombstone, repair, clean graph, prefix matching
 - [x] **Duplicate detection for todos & events**: LLM create_todo/create_event checks for existing items with same title (case-insensitive) before creating. Todo dedup narrows by due_date; event dedup narrows by same day. `force=True` bypasses. Frontend dialogs show inline yellow warning banner with debounced API check. `GET /api/todos/check-duplicates` and `GET /api/events/check-duplicates` endpoints.
 - [x] **Unified Search**: `GET /api/search?q=&limit=` endpoint searches all 5 stores (todos, events, conversations, graph nodes, operations) simultaneously. LLM tool `unified_search(query)` replaces 2-4 guessing game tool calls with one. Frontend Ctrl+K modal overlay with categorized results and click-to-navigate.
+- [x] **DSA-powered search (Jun 28)**: Replaced all O(n) substring scans with `NgramIndex` (hash-based trigram inverted index) + `SearchTrie` (prefix/autocomplete) + `SearchRanker` (TF-IDF). Todos/events/conversations now search in O(1). Conversations indexed in-memory — no more opening JSON files per search. Zero accuracy regression vs O(n) substring scan. 50–700× faster across all stores. New `GET /api/search/prefix` endpoint for instant autocomplete. See `backend/core/search_index.py`.
 - [x] **Voice system rewrite**: Replaced Puter.js speech2txt with browser SpeechRecognition for STT (on-device, reliable). Puter kept only for TTS (ElevenLabs) with SpeechSynthesis fallback. Removed fragile MediaRecorder + VAD code path.
 - [x] **Echo prevention**: Mic is OFF during TTS playback (stopRecognition). After TTS ends, mic restarts with 1500ms cooldown that discards residual room echo. User can interrupt TTS by speaking.
 - [x] **TTS reliability**: Puter txt2speech now handles Blob return type (URL.createObjectURL). `el.play()` rejection caught. 15s timeout on both Puter and SpeechSynthesis paths. Falls back gracefully on any error.
@@ -324,13 +334,19 @@ yellow:  '#eab308'
 - [x] **Backend voice router**: `router.py` with `GET /api/voice/status` and `POST /api/voice/transcribe` (stub)
 - [x] **Frontend voice API**: `getVoiceStatus()` and `transcribeAudio()` in `api.ts`
 - [x] **Exa MCP search server**: 3 web search tools (`web_search_exa`, `web_fetch_exa`, `web_search_advanced_exa`) always available in core. Replaces `mcp-server-fetch` for complex search needs. Simple `fetch` tool kept as keyword-triggered fallback. Requires `EXA_API_KEY` in `config.yaml`.
+- [x] **Deepgram integration**: `deepgram_stt.py` (WebSocket relay for STT), `deepgram_tts.py` (REST synthesis for TTS). Backend voice router rewritten with Deepgram endpoints. Puter.js CDN removed from `frontend/index.html`.
+- [x] **Markdown stripping for TTS**: `stripMarkdown()` in `useBackendVoice.ts` removes `**bold**`, `*italic*`, `## headers`, `[links](url)`, `` `code` ``, lists, tables, HTML tags before text reaches TTS — prevents TTS from reading markdown syntax aloud.
+- [x] **Voice/UI Response Router**: Backend `_make_voice_text()` strips all markdown from LLM response and truncates to 2 sentences / 300 chars for TTS. Deterministic — no LLM instruction needed. VoiceMode uses `voice_content` field when available, falls back to content-diff + `stripMarkdown()`.
+- [x] **System App Control (11 tools)** — : 7 system tools (open/close app, set/get volume, clipboard, system info, active window) + 4 file access tools (read/write/append/list files). Path whitelist security (Documents, Desktop, project root). No power/shutdown/shell commands. No file deletion.
+- [x] **Broad app search**: `open_application` now searches Start Menu shortcuts, Windows Registry, Program Files, AppData, and system PATH — not just a hardcoded table. Apps like zoom, word, excel, outlook, onenote, powerpoint found automatically. Non-installed apps return "not available".
+- [ ] **Proactive Suggestions — PLANNED (Jun 28)**: Chat shows clickable suggestion chips (upcoming events, overdue todos, recent activity, general prompts) when the chat page is empty.
 
 ## How to Run
 
 ### Dev mode (two terminals)
 ```bash
 # Terminal 1 — Backend
-uvicorn backend.main:app --reload --port 8770
+uvicorn backend.main:app --reload --port 8771
 
 # Terminal 2 — Frontend
 cd frontend && npm run dev
@@ -355,7 +371,7 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 
 ## Known Issues
 - Voice mode requires Chrome or Edge (SpeechRecognition not supported in Firefox/Safari)
-- Puter.js TTS requires internet access (ElevenLabs); falls back to browser SpeechSynthesis if unavailable
+- Deepgram TTS requires internet access; falls back to browser SpeechSynthesis if unavailable
 - No settings dialog yet (model/mic/speaker config via yaml only)
 - Frontend WebSocket connects on mount — reconnection logic is basic (3s retry)
 - Electron dev mode requires FastAPI running separately; production mode serves built frontend from FastAPI
@@ -394,15 +410,17 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `frontend/src/services/api.ts`: Typed REST client
 - `backend/api/chat.py`: WebSocket endpoint with LLM streaming + tool dispatch
 - `backend/assistant/llm_client.py`: Ollama HTTP client
-- `backend/assistant/function_registry.py`: 14 tool definitions + dispatch (9 local + 5 memory)
+- `backend/assistant/function_registry.py`: 33 tool definitions + dispatch (9 todo/event + 5 memory + 3 screenshot + 4 conversation/operations + 3 reminders + 11 system/file)
 - `backend/assistant/exa_tools.py`: Static tool definitions for 3 Exa search/fetch tools
 - `config.yaml`: Shared config (Ollama, voice, server)
 - `plan.md`: MCP integration architecture and implementation plan
 - `backend/api/screenshots.py`: ScreenshotStore + REST list/delete endpoints + 3 LLM tools
 - `backend/core/data_store.py`: JSON persistence (todos, events) + per-day conversation file storage
 - `backend/core/operation_log.py`: Per-month indexed operation log (record, query, stats, full-text search)
+- `backend/core/search_index.py`: Hash-based n-gram inverted index (NgramIndex) + trie prefix tree (SearchTrie) + TF-IDF ranker (SearchRanker)
 - `backend/memory/knowledge_graph.py`: KnowledgeGraph singleton (JSON persistence, thread-safe)
 - `backend/memory/memory_tools.py`: 5 LLM functions for memory (remember, recall, recall_entity, forget, delete_entity)
+- `backend/functions/system_functions.py`: 11 LLM functions for system control + file access (open_application, close_application, set_volume, get_volume, copy_to_clipboard, get_system_info, get_active_window, read_file, write_file, append_file, list_directory)
 - `backend/api/memory.py`: REST API for graph visualization (GET/DELETE nodes)
 - `backend/api/search.py`: Unified search across all 5 data stores
 - `frontend/src/components/brain/BrainPanel.tsx`: Graph page with search/refresh
@@ -411,9 +429,11 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `frontend/src/components/search/SearchOverlay.tsx`: Ctrl+K search modal with categorized results
 - `frontend/src/hooks/useSearch.ts`: Debounced unified search hook with abort controller
 - `frontend/src/types/search.ts`: TypeScript interfaces for search results
-- `backend/voice/router.py`: Backend voice REST endpoints (status, transcribe)
+- `backend/voice/router.py`: Backend voice REST + WebSocket endpoints
+- `backend/voice/deepgram_stt.py`: Deepgram STT WebSocket relay
+- `backend/voice/deepgram_tts.py`: Deepgram TTS REST synthesis
 - `frontend/src/hooks/useVoice.ts`: Browser SpeechRecognition + SpeechSynthesis hook with echo prevention
-- `frontend/src/hooks/useBackendVoice.ts`: Voice mode hook (SpeechRecognition STT + Puter/SpeechSynthesis TTS)
+- `frontend/src/hooks/useBackendVoice.ts`: Voice mode hook (SpeechRecognition STT + Deepgram/SpeechSynthesis TTS)
 - `frontend/src/components/voice/VoiceMode.tsx`: Full-page voice UI with auto-speak, tab-switch recovery
 - `frontend/src/components/voice/VoiceIndicator.tsx`: Animated voice state indicator
 - `frontend/src/components/voice/VoiceTranscript.tsx`: Live interim transcript display

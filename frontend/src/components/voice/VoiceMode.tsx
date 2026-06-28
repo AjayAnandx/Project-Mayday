@@ -44,12 +44,20 @@ export function VoiceMode({ onExit }: VoiceModeProps) {
       if (last.id !== prevAssistantId.current) {
         prevAssistantId.current = last.id
         prevAssistantLen.current = 0
+        // If the message has a dedicated voice summary, use it directly
+        if (last.voice_content) {
+          feedTokensRef.current(last.voice_content)
+          prevAssistantLen.current = -1
+        }
       }
-      const prevLen = prevAssistantLen.current
-      const currLen = last.content.length
-      if (currLen > prevLen) {
-        feedTokensRef.current(last.content.slice(prevLen))
-        prevAssistantLen.current = currLen
+      // Fall back to content-diff if no voice_content
+      if (!last.voice_content && prevAssistantLen.current >= 0) {
+        const prevLen = prevAssistantLen.current
+        const currLen = last.content.length
+        if (currLen > prevLen) {
+          feedTokensRef.current(last.content.slice(prevLen))
+          prevAssistantLen.current = currLen
+        }
       }
     }
 

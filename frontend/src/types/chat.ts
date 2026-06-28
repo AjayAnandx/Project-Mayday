@@ -15,6 +15,7 @@ export interface Conversation {
 export interface WsResponse {
   type: 'token' | 'tool_call' | 'done' | 'error' | 'conversation_loaded'
   content?: string
+  voice_content?: string
   name?: string
   result?: string
   image_url?: string

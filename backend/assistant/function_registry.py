@@ -8,6 +8,14 @@ from backend.functions.calendar_functions import create_event, update_event, del
 from backend.functions.reminder_functions import create_reminder, list_reminders, delete_reminder
 from backend.memory.memory_tools import remember, recall, recall_entity, forget, delete_entity, set_status
 from backend.api.screenshots import list_screenshots, get_screenshot_info, delete_screenshot_file
+from backend.core.weather import get_weather
+from backend.functions.system_functions import (
+    open_application, close_application,
+    set_volume, get_volume,
+    copy_to_clipboard,
+    get_system_info, get_active_window,
+    read_file, write_file, append_file, list_directory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -489,6 +497,21 @@ LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "get_weather",
+            "description": "Get current weather and up to 7-day forecast for any city worldwide. Proactively call this when the user mentions meetings, events, travel plans, or outdoor activities tied to a location and date. If no location is specified, the user's stored default location is used.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "City name (e.g. 'New York', 'London', 'Tokyo', 'Anna Nagar, Chennai'). Optional — uses stored default location if omitted."},
+                    "days": {"type": "integer", "description": "Number of forecast days (1-7, default 3)"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_reminder",
             "description": "Set a reminder that will fire as a desktop notification at the specified time. Use 24-hour format for the time.",
             "parameters": {
@@ -526,6 +549,153 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_application",
+            "description": "Open a desktop application by name (e.g. netflix, spotify, chrome, whatsapp, zoom). Searches the Start Menu, Program Files, AppData, Windows Registry, and system PATH. If the app is installed anywhere on the system, it will be found and launched. Returns 'not available' if no installed app is found.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Application name (e.g. netflix, spotify, chrome, whatsapp, zoom, slack, discord)"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_application",
+            "description": "Close a running desktop application by name (e.g. chrome, notepad). Uses taskkill.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Application name to close (e.g. chrome, notepad)"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_volume",
+            "description": "Set the system master volume level (0-100).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "level": {"type": "integer", "description": "Volume level 0-100"},
+                },
+                "required": ["level"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_volume",
+            "description": "Get the current system master volume level as a percentage (0-100).",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "copy_to_clipboard",
+            "description": "Copy text to the system clipboard. Max 10,000 characters.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Text to copy to clipboard"},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_system_info",
+            "description": "Get system information including OS, CPU, RAM, disk space, and hostname.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_active_window",
+            "description": "Get the title of the currently active/foreground window.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file's contents from your Documents, Desktop, or the project root directory. Shows text content up to 100KB. Binary files return size only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute or relative path to the file"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Create or overwrite a file in your Documents, Desktop, or the project root directory. Creates parent folders if needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file"},
+                    "content": {"type": "string", "description": "Full content to write to the file"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "append_file",
+            "description": "Append content to a file in your Documents, Desktop, or the project root directory. Creates the file if it doesn't exist.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file"},
+                    "content": {"type": "string", "description": "Content to append"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_directory",
+            "description": "List files and folders in a directory from your Documents, Desktop, or the project root. Shows file sizes and directory markers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the directory"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
 ]
 
 FUNCTION_MAP = {
@@ -554,6 +724,18 @@ FUNCTION_MAP = {
     "create_reminder": create_reminder,
     "list_reminders": list_reminders,
     "delete_reminder": delete_reminder,
+    "open_application": open_application,
+    "close_application": close_application,
+    "set_volume": set_volume,
+    "get_volume": get_volume,
+    "copy_to_clipboard": copy_to_clipboard,
+    "get_system_info": get_system_info,
+    "get_active_window": get_active_window,
+    "read_file": read_file,
+    "write_file": write_file,
+    "append_file": append_file,
+    "list_directory": list_directory,
+    "get_weather": get_weather,
 }
 
 

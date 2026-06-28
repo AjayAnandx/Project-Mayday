@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from backend.core.config import load_config
+from backend.core.search_index import NgramIndex, SearchTrie
 
 
 def _utcnow():
@@ -29,8 +30,14 @@ class DataStore:
         self._todos: list[dict] = []
         self._events: list[dict] = []
         self._conv_idx: dict[str, dict] = {}
+        self._todo_idx = NgramIndex(3)
+        self._event_idx = NgramIndex(3)
+        self._conv_text_idx = NgramIndex(3)
+        self._conv_text_idx_built = False
+        self._trie = SearchTrie()
         self._load()
         self._init_conv_dir()
+        self._rebuild_search_indexes()
 
     def _load(self):
         if self._path.exists():
@@ -138,6 +145,86 @@ class DataStore:
         self._conv_idx = {e["id"]: e for e in index}
         self._save_index(index)
 
+    # --- Search Indexes ---
+
+    def _rebuild_search_indexes(self):
+        self._todo_idx = NgramIndex(3)
+        self._event_idx = NgramIndex(3)
+        self._conv_text_idx = NgramIndex(3)
+        self._conv_text_idx_built = False
+        self._trie = SearchTrie()
+        for t in self._todos:
+            self._index_todo(t)
+        for e in self._events:
+            self._index_event(e)
+
+    def _index_todo(self, todo: dict):
+        text = f"{todo['title']} {todo.get('description', '')}"
+        self._todo_idx.add(todo["id"], text)
+        self._trie.insert(todo["title"], f"todo:{todo['id']}")
+        for word in todo["title"].split():
+            self._trie.insert(word, f"todo:{todo['id']}")
+
+    def _unindex_todo(self, todo_id: str):
+        self._todo_idx.remove(todo_id)
+
+    def _index_event(self, event: dict):
+        text = f"{event['title']} {event.get('description', '')}"
+        self._event_idx.add(event["id"], text)
+        self._trie.insert(event["title"], f"event:{event['id']}")
+        for word in event["title"].split():
+            self._trie.insert(word, f"event:{event['id']}")
+
+    def _unindex_event(self, event_id: str):
+        self._event_idx.remove(event_id)
+
+    def _ensure_conv_text_index(self):
+        if self._conv_text_idx_built:
+            return
+        with self._lock:
+            if self._conv_text_idx_built:
+                return
+            for entry in self._conv_idx.values():
+                conv = self.get_conversation(entry["id"])
+                if conv:
+                    self._index_conversation(conv)
+            self._conv_text_idx_built = True
+
+    def _index_conversation(self, conv: dict):
+        text = conv.get("title", "")
+        for m in conv.get("messages", []):
+            text += " " + m.get("content", "")
+        self._conv_text_idx.add(conv["id"], text)
+
+    def _unindex_conversation(self, conv_id: str):
+        self._conv_text_idx.remove(conv_id)
+
+    def search_all(self, query: str, limit: int = 20) -> dict:
+        todo_ids = {doc_id for doc_id, _ in self._todo_idx.search(query, limit)}
+        event_ids = {doc_id for doc_id, _ in self._event_idx.search(query, limit)}
+        self._ensure_conv_text_index()
+        conv_ids = {doc_id for doc_id, _ in self._conv_text_idx.search(query, limit)}
+        items = []
+        if todo_ids:
+            for t in self._todos:
+                if t["id"] in todo_ids:
+                    items.append({"type": "todo", "id": t["id"], "title": t["title"]})
+                    if len(items) >= limit:
+                        break
+        if event_ids and len(items) < limit:
+            for e in self._events:
+                if e["id"] in event_ids:
+                    items.append({"type": "event", "id": e["id"], "title": e["title"]})
+                    if len(items) >= limit:
+                        break
+        if conv_ids and len(items) < limit:
+            for entry in self._conv_idx.values():
+                if entry["id"] in conv_ids:
+                    items.append({"type": "conversation", "id": entry["id"], "title": entry.get("title", "Untitled")})
+                    if len(items) >= limit:
+                        break
+        return items
+
     # --- Todos ---
 
     def create_todo(self, title: str, description: str = "", due_date: str = None,
@@ -158,6 +245,7 @@ class DataStore:
             if recurrence:
                 todo["recurrence"] = recurrence
             self._todos.append(todo)
+            self._index_todo(todo)
             self._save()
             return todo
 
@@ -172,6 +260,7 @@ class DataStore:
                             else:
                                 todo[k] = v
                     todo["updated_at"] = _utcnow()
+                    self._index_todo(todo)
                     self._save()
                     return todo
             return None
@@ -181,6 +270,7 @@ class DataStore:
             before = len(self._todos)
             self._todos = [t for t in self._todos if t["id"] != todo_id]
             if len(self._todos) != before:
+                self._unindex_todo(todo_id)
                 self._save()
                 return True
             return False
@@ -201,13 +291,15 @@ class DataStore:
             return results
 
     def list_todos(self, include_completed: bool = True, query: str = "") -> list[dict]:
-        with self._lock:
-            todos = list(self._todos)
+        if query:
+            ids = set(self._todo_idx.search_top(query))
+            with self._lock:
+                todos = [t for t in self._todos if t["id"] in ids]
+        else:
+            with self._lock:
+                todos = list(self._todos)
         if not include_completed:
             todos = [t for t in todos if not t["completed"]]
-        if query:
-            q = query.lower()
-            todos = [t for t in todos if q in t["title"].lower()]
         return todos
 
     def get_todo(self, todo_id: str) -> dict | None:
@@ -236,6 +328,7 @@ class DataStore:
             if recurrence:
                 event["recurrence"] = recurrence
             self._events.append(event)
+            self._index_event(event)
             self._save()
             return event
 
@@ -250,6 +343,7 @@ class DataStore:
                             else:
                                 event[k] = v
                     event["updated_at"] = _utcnow()
+                    self._index_event(event)
                     self._save()
                     return event
             return None
@@ -259,6 +353,7 @@ class DataStore:
             before = len(self._events)
             self._events = [e for e in self._events if e["id"] != event_id]
             if len(self._events) != before:
+                self._unindex_event(event_id)
                 self._save()
                 return True
             return False
@@ -279,15 +374,17 @@ class DataStore:
             return results
 
     def list_events(self, start_date: str = None, end_date: str = None, query: str = "") -> list[dict]:
-        with self._lock:
-            events = list(self._events)
+        if query:
+            ids = set(self._event_idx.search_top(query))
+            with self._lock:
+                events = [e for e in self._events if e["id"] in ids]
+        else:
+            with self._lock:
+                events = list(self._events)
         if start_date:
             events = [e for e in events if e["start_time"] >= start_date]
         if end_date:
             events = [e for e in events if e["start_time"] <= end_date]
-        if query:
-            q = query.lower()
-            events = [e for e in events if q in e["title"].lower() or q in e.get("description", "").lower()]
         return events
 
     def get_event(self, event_id: str) -> dict | None:
@@ -410,6 +507,7 @@ class DataStore:
             index.append(entry)
             self._conv_idx[conv["id"]] = entry
             self._save_index(index)
+            self._index_conversation(conv)
             return conv
 
     def add_message(self, conversation_id: str, role: str, content: str) -> dict | None:
@@ -433,6 +531,7 @@ class DataStore:
                     entry["message_count"] = len(conv["messages"])
                     self._save_day(entry["date"], day)
                     self._save_index(list(self._conv_idx.values()))
+                    self._index_conversation(conv)
                     return msg
             return None
 
@@ -447,12 +546,16 @@ class DataStore:
                     return conv
             return None
 
-    def list_conversations(self, date: str | None = None) -> list[dict]:
+    def list_conversations(self, date: str | None = None, query: str = "") -> list[dict]:
         with self._lock:
             self._load_index()
             entries = list(self._conv_idx.values())
             if date:
                 entries = [e for e in entries if e["date"] == date]
+            if query:
+                self._ensure_conv_text_index()
+                conv_ids = set(self._conv_text_idx.search_top(query))
+                entries = [e for e in entries if e["id"] in conv_ids]
             sorted_entries = sorted(entries, key=lambda e: e.get("date", ""), reverse=True)
 
             day_cache: dict[str, dict] = {}
@@ -491,6 +594,7 @@ class DataStore:
                 self._daily_path(entry["date"]).unlink(missing_ok=True)
             self._conv_idx.pop(conversation_id, None)
             self._save_index(list(self._conv_idx.values()))
+            self._unindex_conversation(conversation_id)
             return True
 
     def get_recent_messages(self, conversation_id: str, limit: int = 20) -> list[dict]:

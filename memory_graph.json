@@ -971,19 +971,6 @@
       }
     },
     {
-      "id": "ce80470140a8",
-      "type": "event",
-      "label": "Buy groceries",
-      "properties": {
-        "event_id": "45c5fb68e82f",
-        "description": "",
-        "start_time": "2026-06-18T17:00:00Z",
-        "end_time": "2026-06-18T17:30:00Z",
-        "all_day": false,
-        "recurrence": null
-      }
-    },
-    {
       "id": "6b534cfad5f3",
       "type": "conversation",
       "label": "6c2661d3edd1",
@@ -1041,19 +1028,6 @@
         "conv_id": "ebb9c5dbc6b3",
         "title": "i have a meeting in 2 minutes set a reminder",
         "message_count": 3
-      }
-    },
-    {
-      "id": "7e33ee1c0a65",
-      "type": "event",
-      "label": "Meeting",
-      "properties": {
-        "event_id": "56b293a06af1",
-        "description": "",
-        "start_time": "2026-06-18T23:48:03+05:30",
-        "end_time": "2026-06-18T23:58:03+05:30",
-        "all_day": false,
-        "recurrence": null
       }
     },
     {
@@ -1423,22 +1397,6 @@
       }
     },
     {
-      "id": "96c80ef462e6",
-      "type": "todo",
-      "label": "Follow up on missed events from June 18th (Groceries & Meeting)",
-      "properties": {
-        "todo_id": "569f70ac5408",
-        "description": "",
-        "due_date": null,
-        "priority": 2,
-        "completed": false,
-        "tags": [
-          "follow-up"
-        ],
-        "recurrence": null
-      }
-    },
-    {
       "id": "ee22cca02beb",
       "type": "tag",
       "label": "follow-up",
@@ -1574,19 +1532,6 @@
       }
     },
     {
-      "id": "6a2deb605bd7",
-      "type": "event",
-      "label": "Product Discovery Meeting",
-      "properties": {
-        "event_id": "cee8067902b4",
-        "description": "",
-        "start_time": "2026-06-25T11:30:00",
-        "end_time": "2026-06-25T13:30:00",
-        "all_day": false,
-        "recurrence": null
-      }
-    },
-    {
       "id": "4c9c09372f84",
       "type": "conversation",
       "label": "7631de678d43",
@@ -1594,6 +1539,179 @@
         "conv_id": "7631de678d43",
         "title": "Hey Maddy, can you hear me?",
         "message_count": 7
+      }
+    },
+    {
+      "id": "f4ab6f671232",
+      "type": "conversation",
+      "label": "8049e89c034a",
+      "properties": {
+        "conv_id": "8049e89c034a",
+        "title": "Hey. Hi. Can you hear me?",
+        "message_count": 4
+      }
+    },
+    {
+      "id": "1cc758f37e3e",
+      "type": "conversation",
+      "label": "a12d8abff784",
+      "properties": {
+        "conv_id": "a12d8abff784",
+        "title": "Units. You might have different layers within those in Princ",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "76131c8554e5",
+      "type": "conversation",
+      "label": "7bbca5708e9b",
+      "properties": {
+        "conv_id": "7bbca5708e9b",
+        "title": "Hey, Mary, can you hear me?",
+        "message_count": 5
+      }
+    },
+    {
+      "id": "df4355ac2712",
+      "type": "conversation",
+      "label": "6ab6dbd3ece0",
+      "properties": {
+        "conv_id": "6ab6dbd3ece0",
+        "title": "Hey Madam, can you get me a details about AGI?",
+        "message_count": 3
+      }
+    },
+    {
+      "id": "06a22af0a63d",
+      "type": "conversation",
+      "label": "a3bfa55d8e55",
+      "properties": {
+        "conv_id": "a3bfa55d8e55",
+        "title": "Hey, Maddy.",
+        "message_count": 5
+      }
+    },
+    {
+      "id": "fc87804133bb",
+      "type": "conversation",
+      "label": "28f0e0c8a3ff",
+      "properties": {
+        "conv_id": "28f0e0c8a3ff",
+        "title": "Hey, my dear, can you hear me?",
+        "message_count": 5
+      }
+    },
+    {
+      "id": "9eaf6defa519",
+      "type": "conversation",
+      "label": "32a46d2646d6",
+      "properties": {
+        "conv_id": "32a46d2646d6",
+        "title": "Hello. Hello.",
+        "message_count": 5
+      }
+    },
+    {
+      "id": "ea9495836381",
+      "type": "conversation",
+      "label": "e564d6da6a03",
+      "properties": {
+        "conv_id": "e564d6da6a03",
+        "title": "How many can you hear me?",
+        "message_count": 9
+      }
+    },
+    {
+      "id": "89516e78c0c9",
+      "type": "conversation",
+      "label": "4b7b3c32bce4",
+      "properties": {
+        "conv_id": "4b7b3c32bce4",
+        "title": "Hey, can you cancel all my meetings tomorrow?",
+        "message_count": 7
+      }
+    },
+    {
+      "id": "3df33afd4647",
+      "type": "conversation",
+      "label": "9f05dc0f258b",
+      "properties": {
+        "conv_id": "9f05dc0f258b",
+        "title": "Hey, my name.",
+        "message_count": 11
+      }
+    },
+    {
+      "id": "d91ec6bdfe25",
+      "type": "conversation",
+      "label": "83f3c5a5a0e9",
+      "properties": {
+        "conv_id": "83f3c5a5a0e9",
+        "title": "Can you do me a research about API?",
+        "message_count": 15
+      }
+    },
+    {
+      "id": "fe014a818d64",
+      "type": "conversation",
+      "label": "2ffde622bb51",
+      "properties": {
+        "conv_id": "2ffde622bb51",
+        "title": "hi",
+        "message_count": 8
+      }
+    },
+    {
+      "id": "2d7a6f0b0520",
+      "type": "conversation",
+      "label": "ac40c5984023",
+      "properties": {
+        "conv_id": "ac40c5984023",
+        "title": "Hey, can you hear me?",
+        "message_count": 21
+      }
+    },
+    {
+      "id": "dc0ff12a37aa",
+      "type": "conversation",
+      "label": "15893a6f7e0b",
+      "properties": {
+        "conv_id": "15893a6f7e0b",
+        "title": "Can you list me what are the todo i have listed this month",
+        "message_count": 21
+      }
+    },
+    {
+      "id": "733c47666e6f",
+      "type": "conversation",
+      "label": "fa5dd71803ef",
+      "properties": {
+        "conv_id": "fa5dd71803ef",
+        "title": "list the event attended this month",
+        "message_count": 19
+      }
+    },
+    {
+      "id": "34db8e0b0105",
+      "type": "conversation",
+      "label": "9989d27567c7",
+      "properties": {
+        "conv_id": "9989d27567c7",
+        "title": "what is the weather now",
+        "message_count": 7
+      }
+    },
+    {
+      "id": "ee534b14a721",
+      "type": "event",
+      "label": "Meeting in Bangalore",
+      "properties": {
+        "event_id": "e0849844a77e",
+        "description": "",
+        "start_time": "2026-06-30T10:00:00Z",
+        "end_time": "2026-06-30T11:00:00Z",
+        "all_day": false,
+        "recurrence": null
       }
     }
   ],
@@ -1631,13 +1749,6 @@
       "source": "bf0302fe19f3",
       "target": "75eab07f13a2",
       "relation": "status_update",
-      "properties": {}
-    },
-    {
-      "id": "5b5af407ba7c",
-      "source": "96c80ef462e6",
-      "target": "ee22cca02beb",
-      "relation": "has_tag",
       "properties": {}
     },
     {

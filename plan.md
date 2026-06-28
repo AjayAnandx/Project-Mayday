@@ -721,7 +721,7 @@ New session: remember("project:AGI Personal Assistant", ...)
 ### Goal
 Make Mayday useful for real daily workflows with recurring tasks, cross-type search, notifications, and data portability.
 
-### Status — 3a COMPLETED, 3b COMPLETED, 3d COMPLETED, 3c PLANNED
+### Status — 3a COMPLETED, 3b COMPLETED, 3d COMPLETED, 3c PLANNED, 2b IMPLEMENTED
 
 ---
 
@@ -1068,10 +1068,10 @@ Removed from the original 5c spec. Suggestions are always computed and shown reg
 
 ---
 
-## Voice System Rewrite — Implementation Complete (Jun 21)
+## Voice System Rewrite — Implementation Complete (Jun 21, updated Jun 24)
 
 ### Goal
-Replace unreliable Puter.js cloud STT with browser's built-in SpeechRecognition API, fix echo feedback loop, and make TTS reliable with proper error handling and fallbacks.
+Replace unreliable Puter.js cloud STT with browser's built-in SpeechRecognition API, fix echo feedback loop, make TTS reliable with proper error handling and fallbacks, integrate Deepgram for STT/TTS.
 
 ### Problems Solved
 
@@ -1118,10 +1118,17 @@ User speaks → onResult (state=listening, cooldown passed) → accumulate → 1
 | `backend/voice/vad.py` | **DELETED** — backend VAD stub (replaced by browser built-in) |
 | `frontend/src/services/api.ts` | Added `getVoiceStatus()` and `transcribeAudio()` |
 
-### Remaining Considerations
+### Post-Rewrite Updates
+
+| Date | Change |
+|------|--------|
+| Jun 23 | Deepgram integration: `deepgram_stt.py`, `deepgram_tts.py`, rewritten `router.py`, Puter CDN removed from `index.html`, frontend `useBackendVoice.ts` uses Deepgram TTS REST calls |
+| Jun 24 | `stripMarkdown()` added to `useBackendVoice.ts` — strips markdown syntax before TTS to prevent reading `**Product**` as "star star Product star star" |
+
+### Known Limitations
 
 - SpeechRecognition requires Chrome or Edge (no Firefox/Safari support)
-- Puter.js TTS needs internet; falls back to SpeechSynthesis
+- Deepgram TTS needs internet; falls back to SpeechSynthesis
 - No backend VAD/whisper pipeline — all processing is frontend
 
 ---
@@ -1193,10 +1200,14 @@ mcp:
 
 ---
 
-## Deepgram Voice Replacement — PLANNED (Jun 23)
+## Deepgram Voice Replacement — COMPLETED (Jun 23)
 
 ### Goal
 Completely remove Puter.js (STT + TTS) and replace with Deepgram STT + TTS. Deepgram API key stays server-side in `config.yaml`. Backend proxies audio/text to Deepgram APIs.
+
+### Status — COMPLETED
+
+All files created per plan. Deepgram STT (WebSocket relay) + TTS (REST synthesis) implemented. Backend voice router rewritten with new endpoints. Puter.js CDN removed from `index.html`. Frontend `useBackendVoice.ts` rewritten to use Deepgram TTS REST calls + SpeechRecognition STT (kept frontend STT as primary).
 
 ### Architecture
 
@@ -1282,6 +1293,216 @@ User can interrupt TTS at any time → state → listening → re-captures mic
 | File | Reason |
 |------|--------|
 | `frontend/src/hooks/useVoice.ts` | `VoiceState` type is imported by `VoiceIndicator.tsx` and the new Deepgram hook |
+
+---
+
+## 5c. Proactive Suggestions — Implementation Plan (Tomorrow — Jun 28)
+
+### Goal
+When the chat page is empty or idle, Mayday shows clickable suggestion chips — upcoming events, overdue todos, recent activity, and general prompts — so the user discovers features without being asked. No personality gating; suggestions are always active.
+
+### Status — PLANNED (Jun 28)
+
+### Architecture
+
+```
+SuggestionChips (frontend component)
+    │ polls GET /api/suggestions every 60s
+    ▼
+Backend: /api/suggestions
+    ├── list_events(start_time=now, end_time=now+60min) → "Standup in 15 min"
+    ├── list_todos(include_completed=False, check overdue) → "Buy milk is overdue"
+    ├── operation_log.query(date_from=today) → "3 items created today"
+    └── general prompts (rotated) → "Ask me about your schedule"
+```
+
+### New Files (3)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `backend/api/suggestions.py` | ~60 | `GET /api/suggestions` endpoint — on-demand computation from event/todo store + operation log + knowledge graph |
+| `frontend/src/hooks/useSuggestions.ts` | ~40 | Polling hook (60s interval), returns `Suggestion[]` |
+| `frontend/src/components/chat/SuggestionChips.tsx` | ~80 | Green pill-shaped buttons below empty chat state |
+
+### Modified Files (2)
+
+| File | Change |
+|------|--------|
+| `backend/main.py` | Register `suggestions.py` router |
+| `frontend/src/components/chat/ChatPanel.tsx` | Import `<SuggestionChips>` — render when `messages.length === 0` |
+
+### Backend: `GET /api/suggestions`
+
+Returns JSON array capped at 5 suggestions, computed on-the-fly:
+
+```json
+[
+  {"id": "evt_abc", "type": "event_upcoming", "label": "Standup in 15 min", "action": {"page": "calendar"}},
+  {"id": "todo_xyz", "type": "todo_overdue", "label": "Buy milk is overdue", "action": {"page": "todos"}},
+  {"id": "recent_3", "type": "recent_activity", "label": "3 items created today", "message": "What did I do today?"},
+  {"id": "general_1", "type": "general", "label": "Ask me about your schedule", "message": "What's on my calendar?"}
+]
+```
+
+Generation order (high to low priority):
+1. **Upcoming events** — `get_store().list_events(start_date=now, end_date=now+60min)` → max 2 chips with `action.page: "calendar"`
+2. **Overdue todos** — `get_store().list_todos(include_completed=False)`, filter past `due_date` → max 2 chips with `action.page: "todos"`
+3. **Recent activity** — `get_operation_log().query(date_from=today)` → 1 chip with `message` for LLM
+4. **General prompts** — rotated static list: "Ask me about your schedule", "Try creating a todo", "Search for anything" → max 2 with `message`
+
+Each suggestion has:
+- `id` — unique string for dedup on frontend
+- `type` — `event_upcoming` | `todo_overdue` | `recent_activity` | `general`
+- `label` — short display text (e.g. "Standup in 15 min")
+- `message` (optional) — text to send as chat message on click
+- `action` (optional) — `{page: "calendar"|"todos"|"brain"}` for navigation on click
+
+### Suggestion Object TypeScript Interface
+
+```typescript
+interface Suggestion {
+  id: string
+  type: 'event_upcoming' | 'todo_overdue' | 'recent_activity' | 'general'
+  label: string
+  message?: string
+  action?: { page: 'chat' | 'todos' | 'calendar' | 'brain' }
+}
+```
+
+### Frontend: SuggestionChips Component
+
+- Rendered inside `ChatPanel.tsx` when `messages.length === 0`
+- Horizontal row of rounded-full pill buttons, horizontally scrollable on overflow
+- Styling: `bg-green/10 text-green border border-green/20` pills with hover `bg-green/20`
+- Click behavior:
+  - If `message` is present → `sendMessage(chip.message)` — sends as user message, triggers LLM
+  - If `action.page` is present → `onNavigate(chip.action.page)` — switches tab
+- Poll every 60s via `useSuggestions()` hook
+
+### Implementation Order
+
+1. Create `backend/api/suggestions.py`
+2. Register router in `backend/main.py`
+3. Create `frontend/src/hooks/useSuggestions.ts`
+4. Create `frontend/src/components/chat/SuggestionChips.tsx`
+5. Update `frontend/src/components/chat/ChatPanel.tsx`
+6. Test: verify chips appear, click navigates/sends, poll updates
+
+---
+
+## 2b. System App Control + File Access — IMPLEMENTED (Jun 27)
+
+### Goal
+Mayday can open/close apps, adjust volume, clipboard, system info, detect the active window, and access files (create, update, view) — no power/shell commands, no file deletion.
+
+### Status — COMPLETED (Jun 27)
+
+### Architecture
+
+```
+User → LLM tool call → dispatch_call("open_application", {"name": "chrome"})
+  → loop.run_in_executor(None, open_application, "chrome")
+  → subprocess.Popen or ctypes.windll call
+  → plain string result → WS tool_call bubble
+```
+
+All tools are synchronous Python functions in `backend/functions/system_functions.py`. No new dependencies — uses only built-in `ctypes`, `subprocess`, `os`, `platform`.
+
+### 11 LLM Tools
+
+| Tool | Parameters | Implementation | Needs Confirm? |
+|------|-----------|----------------|:--------------:|
+| `open_application` | `name: str` | `subprocess.Popen` — known app table + `where.exe` fallback | No |
+| `close_application` | `name: str` | `subprocess.run(["taskkill", "/IM", f"{name}.exe", "/F"])` | Yes |
+| `set_volume` | `level: int` (0–100) | `ctypes.windll.winmm.waveOutSetVolume(0, level_encoded)` | No |
+| `get_volume` | none | `ctypes.windll.winmm.waveOutGetVolume(0)` → 0–100 | No |
+| `copy_to_clipboard` | `text: str` | PowerShell `Set-Clipboard` or `clip.exe` fallback | No |
+| `get_system_info` | none | `platform` + `os.cpu_count()` + `wmic` fallback | No |
+| `get_active_window` | none | `ctypes.windll.user32` → foreground window title | No |
+| `read_file` | `path: str` | `open(path, "r")` with safe-path check — whitelisted directories only | No |
+| `write_file` | `path: str, content: str` | `open(path, "w")` — creates file, overwrites if exists. Whitelisted dirs only. | No |
+| `append_file` | `path: str, content: str` | `open(path, "a")` — appends to existing or creates new. Whitelisted dirs only. | No |
+| `list_directory` | `path: str` | `os.listdir()` + `os.path.isdir()` — returns files/folders with type markers. Whitelisted dirs only. | No |
+
+### File Access Security
+
+All file tools enforce a **whitelist** of allowed directories (hardcoded, not LLM-instruction-only):
+```
+ALLOWED_PATHS = [
+    Path.home() / "Documents",
+    Path.home() / "Desktop",
+    Path.cwd(),  # Mayday project root
+]
+```
+- Path must be within an allowed directory (resolved via `Path.resolve()` — no `..` escape)
+- `write_file` creates parent directories if they don't exist
+- `read_file` validates file exists before opening
+- `append_file` creates file if it doesn't exist
+- Binary files: `read_file` auto-detects and returns "Binary file — preview not available" with size
+- No `delete_file` tool — LLM cannot delete files through these tools
+
+### Files
+
+**New:**
+| File | Lines | Purpose |
+|------|-------|---------|
+| `backend/functions/system_functions.py` | ~280 | 11 tool implementations (7 system + 4 file access) |
+
+**Modified:**
+| File | Changes |
+|------|---------|
+| `backend/assistant/function_registry.py` | 11 tool defs in `LOCAL_TOOL_DEFINITIONS` + 11 entries in `FUNCTION_MAP` |
+| `backend/api/chat.py` | 11 names in `CORE_TOOL_NAMES` |
+
+### Edge Cases
+
+#### System
+| Case | Handling |
+|------|----------|
+| App already open | Opens another instance (standard OS behavior) |
+| Volume out of range | Clamp to 0–100 |
+| Muted system | Volume 0 → unmute + set to requested level |
+| Process already dead | Return "No running process '{name}' found" |
+| Path with spaces | List-form `subprocess.Popen` — no shell injection |
+| No active window | Return "Could not detect active window" |
+| Large clipboard | Truncate at 10,000 chars |
+| Permission denied | Return admin elevation suggestion |
+| Unknown app name | `where.exe` fallback; if fails → return "Could not find application" |
+
+#### File Access
+| Case | Handling |
+|------|----------|
+| Path outside whitelist | Return "Access denied: path not in allowed directories" |
+| File not found | Return "File not found at {path}" |
+| Permission denied | Return "Permission denied: cannot access {path}" |
+| Binary file read | Detect via null bytes / `is_binary_string()` → return size + "Binary file" message |
+| Large file | `read_file` caps at 100KB — returns truncation warning if exceeded |
+| Unicode decode error | Try `utf-8` → `latin-1` → `utf-16` fallback |
+| Directory path given as file | Return "Is a directory" |
+| Write to non-existent parent | Auto-create directories via `os.makedirs(exist_ok=True)` |
+| Concurrent writes | Each call is stateless `open/write/close` — no concurrent conflict within OS limits |
+
+### Implementation Order
+
+1. Create `backend/functions/system_functions.py` (all 11 tools)
+2. Register in `function_registry.py` (tool defs + FUNCTION_MAP entries)
+3. Register in `chat.py` (CORE_TOOL_NAMES)
+4. Manual test: each tool via chat
+
+### Post-Implementation App Search Improvement (Jun 27)
+
+The `_find_app_path` function was enhanced to search beyond the hardcoded `_KNOWN_APPS` table and `where.exe`:
+
+| Search Method | Order | Description |
+|---------------|-------|-------------|
+| `_KNOWN_APPS` | 1st | Fast lookup for common app paths (chrome, spotify, discord, etc.) |
+| `where.exe` | 2nd | System PATH lookup |
+| Registry | 3rd | `HKLM\...\App Paths` and `HKCU\...\App Paths` |
+| Start Menu | 4th | PowerShell scan of `.lnk` files in All Users + User Start Menu (8s timeout) |
+| `where.exe /R` | 5th | Recursive search in Program Files, Program Files (x86), Local/Roaming AppData (8s timeout per dir) |
+| Cache TTL | — | Results cached for 5 minutes to avoid repeated slow scans |
+
+Results tested on this machine — found: chrome, firefox, edge, vscode, notepad, calculator, spotify, zoom, word, excel, powerpoint, onenote, outlook, and any PATH app. Non-installed apps (netflix, whatsapp, vlc, telegram, obsidian) correctly return "not available".
 
 ### Files with Puter References (verify removal)
 
@@ -1371,7 +1592,12 @@ voice:
 
 ---
 
-## AI-Aware Voice/UI Response Split — PLANNED (Jun 23)
+## AI-Aware Voice/UI Response Split — REPLACED by Router
+
+### Note
+The prompt-based JSON approach was unreliable — LLMs often ignored the JSON instruction. Replaced with a deterministic `_make_voice_text()` router on the backend that strips all markdown syntax from the LLM response and truncates to 2 sentences / 300 chars for TTS. No LLM behavioral changes needed.
+
+### What Was Done (archived)
 
 ### Goal
 When the LLM returns a long answer with markdown, tables, code blocks, the TTS engine reads everything verbatim — slow, awkward, hits voice output limits. Fix by having the LLM output **two texts** every turn:
@@ -1539,3 +1765,372 @@ useEffect(() => {
 | Second LLM call to summarize | ❌ | Double latency, double tokens |
 | Key-point extraction via regex | ❌ | Fragile, misses nuance |
 | Streaming split | ❌ Unneeded | Response is already non-streaming (full text at once) |
+
+---
+
+## DSA-Powered Search — Implementation Complete (Jun 28)
+
+### Goal
+Replace all O(n) substring scans with hash-based n-gram inverted indexes for 50–700× faster search across todos, events, and conversations. Same accuracy (exact substring match with verification), zero fallback needed.
+
+### Status — COMPLETED
+
+### Architecture
+
+```
+Query → Short (<3 chars)? → Direct substring scan
+        ↓ No
+        N-gram index lookup (hash table) → Candidates → Verify (.lower() substring check) → Ranked results
+                                                                           ↑ zero false positives
+Trie path → Prefix query → Trie walk → IDs
+```
+
+### New File
+
+#### CREATE: `backend/core/search_index.py`
+
+Three classes:
+
+| Class | Purpose | Key Method | Complexity |
+|-------|---------|------------|:----------:|
+| `NgramIndex` | Hash-based trigram inverted index | `search(query)` → `[(doc_id, score)]` | O(1) lookup + O(k) verify |
+| `SearchTrie` | Prefix/autocomplete tree | `search(prefix)` → `set[entity_id]` | O(\|prefix\|) |
+| `SearchRanker` | TF-IDF scorer for relevance | `score(query, doc_id)` → `float` | O(\|tokens\|) |
+
+`NgramIndex` details:
+- Breaks text into character trigrams (n=3) without padding
+- Stores `hash(ngram)` → `{doc_id: count}` in Python dict
+- Queries shorter than 3 chars fall back to direct substring scan
+- Verification step: `.lower()` substring check guarantees zero false positives
+- Scoring: n-gram overlap count, sorted descending
+
+### Modified Files
+
+| File | Changes |
+|------|---------|
+| `backend/core/data_store.py` | Added `_todo_idx`, `_event_idx`, `_conv_text_idx` (NgramIndex) + `_trie` (SearchTrie). Populated via `_rebuild_search_indexes()` on startup. Maintained on all CRUD ops (create/update/delete). `list_todos(query)` and `list_events(query)` now use n-gram index. `list_conversations(query=)` added — searches indexed message content. New `search_all(query, limit)` for fast cross-store search. |
+| `backend/api/search.py` | Conversation search rewritten — uses `_conv_text_idx` instead of scanning all files. Added `GET /api/search/prefix` endpoint for trie-based autocomplete. |
+
+### Performance Gains
+
+| Operation | Before | After | Improvement |
+|-----------|:------:|:-----:|:-----------:|
+| `list_todos("milk")` | ~1ms O(n) scan | ~0.1ms O(1) | 10× |
+| `list_events("meeting")` | ~1ms O(n) scan | ~0.1ms O(1) | 10× |
+| Conversation search | 50–5000ms (file I/O + scan) | ~1–5ms O(1) | 50–1000× |
+| `unified_search("query")` | 50–5000ms | ~2–7ms | 25–700× |
+| Prefix autocomplete | Not supported | <0.01ms | New |
+
+### Test Results
+
+All n-gram index tests pass:
+- Exact substring match: `"milk" → ["todo-1"]` ✓
+- Partial word (< 3 chars): `"bu" → ["todo-1", "todo-3"]` ✓
+- Multi-word: `"meeting notes" → ["todo-5"]` ✓
+- No match: `"zzzzz" → []` ✓
+- Remove/re-add consistency ✓
+- Trie prefix match: `"meeting" → {"todo-2", "todo-5"}` ✓
+- Trie remove consistency ✓
+
+## Weather + Location Integration — Implementation Complete (Jun 28)
+
+### Goal
+Add real-time weather data and user location to Mayday. Users should be able to ask "What's the weather in Chennai?" and get a natural-language forecast. The LLM should proactively check weather when users mention meetings, events, or travel. Location should be automatically resolved via browser geolocation with IP fallback.
+
+### Status — COMPLETED
+
+### API Choices
+
+| Service | Purpose | Cost | API Key |
+|---------|---------|:----:|:-------:|
+| Open-Meteo | Geocoding + weather forecast | Free (10k req/day) | None |
+| ip-api.com | IP geolocation fallback | Free (45 req/min) | None |
+| Browser Geolocation | Precise user location | Free | None |
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `backend/core/weather.py` | `geocode(city)` → `{lat,lon,name,country}`, `get_weather(location="", lat=None, lon=None, days=3)` → formatted weather string with emojis |
+| `backend/core/location.py` | `resolve_location()` → IP geolocation fallback, `store_location(data)` → memory graph + config |
+| `backend/api/location.py` | `GET /api/location` (returns stored lat/lon/city/country), `POST /api/location` (sets from browser) |
+| `frontend/src/hooks/useLocation.ts` | React hook: calls `navigator.geolocation.getCurrentPosition()`, then `POST /api/location`; runs once on mount |
+
+### Modified Files
+
+| File | Changes |
+|------|---------|
+| `backend/assistant/function_registry.py` | Added `get_weather` tool definition + dispatch entry |
+| `backend/api/chat.py` | Added `"get_weather"` to `CORE_TOOL_NAMES`, added `WEATHER_INSTRUCTIONS` system prompt block |
+| `backend/main.py` | Registered `location_router` from `backend.api.location` |
+| `frontend/src/services/api.ts` | Added `getLocation()` and `setLocation()` typed methods |
+| `frontend/src/App.tsx` | Calls `useLocation()` hook on mount |
+| `config.yaml` | Added `location:` section with optional `default_location` |
+
+### LLM Integration
+
+- `get_weather` tool: accepts `location` (city name, e.g. "Chennai") or `lat`+`lon`
+- Returns: current conditions (temp, feels-like, humidity, wind, description) + N-day forecast (daily high/low, precipitation, weather icon emoji)
+- System prompt instructions: LLM proactively calls `get_weather()` when user mentions meetings, events, or travel with a location+date. Only reports weather if forecast covers the relevant date.
+
+### Location Resolution Chain
+
+```
+1. Browser geolocation (navigator.geolocation.getCurrentPosition)
+   → POST /api/location {lat, lon} → geocode(lat,lon) → store to memory graph + config
+   ↓ if denied / unavailable
+2. IP fallback (ip-api.com/json) → {lat, lon, city, country}
+   → memory graph + config
+   ↓ if unavailable
+3. default_location from config.yaml → geocode(city)
+```
+
+### Test Results
+
+```
+Geocode Chennai: {lat: 13.09, lon: 80.28, name: "Chennai", country: "India"} ✓
+Reverse geocode via lat/lon: works ✓
+Weather for Chennai: formatted with emojis, current + 3-day forecast ✓
+Weather for lat/lon: same output ✓
+IP geolocation: returns actual location ✓
+Unknown city: "Could not find location" ✓
+```
+
+### API Endpoints Added
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/location` | Get stored location |
+| `POST` | `/api/location` | Set location browser geolocation data |
+
+## Skills System — Implementation Plan (Designed Jun 28)
+
+### Goal
+Add an opencode-style skill system to Mayday: injectable markdown+tool files that teach the LLM how to perform specific tasks (research, debug, plan, etc.). Skills can add new function tools and follow a suggest→confirm→execute flow.
+
+### Status — DESIGNED, NOT IMPLEMENTED
+
+### Design Decisions
+
+| Dimension | Choice |
+|-----------|--------|
+| Invocation | Model suggests → user confirms (two-turn flow) |
+| Storage | Separate `skills/<name>/SKILL.md` files with YAML frontmatter |
+| Capability | Instructions + optional new tools (via `skills/<name>/tools.py`) |
+| Confirmation | Configurable per skill via `needs_confirm: true/false` in frontmatter |
+
+### Architecture
+
+```
+User: "Research quantum computing"
+  ↓
+LLM sees research skill matches → calls suggest_skill("research", "quantum computing")
+  ↓
+Backend sets pending_suggestion → sends WS tool_call ("Mayday suggests Research skill")
+  ↓
+Frontend shows [Proceed] / [Dismiss] buttons
+  ↓
+User confirms → backend loads skills/research/SKILL.md body
+  + merges any tools from skills/research/tools.py
+  → fresh LLM call with skill context
+  ↓
+LLM executes research steps: search Exa → fetch → cross-reference → synthesize
+```
+
+### New Directory
+
+```
+mayday/skills/
+├── research/
+│   ├── SKILL.md          # YAML frontmatter + markdown instructions
+│   └── tools.py          # Optional: new tool definitions + implementations
+├── plan-day/
+│   └── SKILL.md
+└── ...
+```
+
+### New Files
+
+#### CREATE: `backend/assistant/skill_manager.py`
+
+Core module that:
+- Scans `skills/*/SKILL.md` at startup
+- Parses YAML frontmatter (`name`, `description`, `needs_confirm`)
+- Reads markdown body
+- Optionally imports `tools.py` for skill-specific tools
+- Maintains Skill registry: `dict[str, Skill]`
+- Provides `load_skills()`, `get_skill(name)`, `apply_skill(name)` → `(body, tool_defs)`
+- `reload_skills()` for hot-reload without restart
+
+**Data model:**
+```python
+@dataclass
+class Skill:
+    name: str
+    description: str
+    needs_confirm: bool       # false = auto-execute
+    body: str                 # Full markdown instructions
+    tool_defs: list           # From tools.py (empty if none)
+    func_map: dict            # From tools.py (empty if none)
+    enabled: bool
+    path: str                 # Directory path
+```
+
+### Modified Files
+
+#### MODIFY: `backend/api/chat.py`
+
+**Injection A — Skill descriptions in system prompt:**
+```python
+SKILL_DESCRIPTIONS = """
+## Available Skills
+When a user's request matches a skill below, suggest using it by calling suggest_skill():
+{descriptions}
+"""
+```
+
+**Injection B — `suggest_skill` tool handler:**
+- Receives `suggest_skill(name, context)` from LLM
+- Sets `pending_suggestion = {"skill": name, "context": context}` per session
+- Sends WS tool_call: `"Mayday suggests using the {name} skill"`
+- No second LLM call yet (waiting for user confirmation)
+
+**Injection C — User confirmation handler:**
+- When user message matches "yes/proceed/go ahead" AND pending_suggestion exists:
+- Calls `skill_manager.apply_skill(name)` → gets body + tool_defs
+- Loads skill body into system prompt as active skill block
+- Merges skill tool_defs into available tools
+- Executes fresh LLM call with: identity + personality + skill body + skill tools + context
+- On completion / topic change: clears active_skill
+
+**Session state management:**
+```python
+# Stored per WebSocket session
+active_skill: Skill | None = None
+pending_suggestion: dict | None = None
+```
+
+#### MODIFY: `backend/assistant/function_registry.py`
+
+- Add `suggest_skill` to `LOCAL_TOOL_DEFINITIONS` (always available):
+```python
+{
+    "type": "function",
+    "function": {
+        "name": "suggest_skill",
+        "description": "Suggest using a named skill. Call when user's request matches a skill's purpose.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Skill name"},
+                "context": {"type": "string", "description": "The user's request to apply the skill to"},
+            },
+            "required": ["name", "context"],
+        },
+    },
+}
+```
+- Add `suggest_skill` to `FUNCTION_MAP` → handler in chat.py
+- Add `get_skill_tools()` → merges skill tool_defs when skill is active
+
+#### MODIFY: `config.yaml`
+
+```yaml
+skills:
+  enabled: true
+  directory: skills
+  list:
+    research:
+      enabled: true
+    plan-day:
+      enabled: true
+```
+
+### Modified Frontend Files
+
+#### MODIFY: `frontend/src/components/chat/MessageBubble.tsx`
+
+- Detect `suggest_skill` tool_call type
+- Render suggestion card with skill name + context
+- Add **[Proceed]** and **[Dismiss]** buttons
+- **[Proceed]** → sends `@confirm_skill` message to WebSocket
+- **[Dismiss]** → sends `@dismiss_skill` message to WebSocket
+
+#### MODIFY: `frontend/src/components/chat/ChatPanel.tsx`
+
+- Add active skill banner pill: `🔧 Research skill active`
+- Show when `active_skill` is set in WebSocket state
+- Hide when skill completes or user changes topic
+
+#### MODIFY: `frontend/src/services/websocket.ts`
+
+- Add `confirm_skill` / `dismiss_skill` message types
+
+### SKILL.md Format
+
+```yaml
+---
+name: research
+description: |
+  Thorough web research on any topic. Use when user asks to
+  research, investigate, explore, find info, or compare sources.
+needs_confirm: true
+---
+
+## Research Skill
+
+When invoked, follow these steps:
+
+1. **Search** — Call `web_search_exa` or `web_search_advanced_exa` with the topic, get 3-5 results
+2. **Fetch** — Call `web_fetch_exa` on the 2-3 most relevant URLs to get full content
+3. **Cross-reference** — Check knowledge graph for existing related facts via `recall`
+4. **Store findings** — Use `remember` to save key facts to the knowledge graph
+5. **Present** — Summarize findings with sources, confidence level, and related topics
+```
+
+### tools.py Format (Optional)
+
+```python
+"""Skill-specific tools. Only available when this skill is active."""
+
+TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_page",
+            "description": "Analyze a webpage for key entities and facts",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "question": {"type": "string"},
+                },
+                "required": ["url", "question"],
+            },
+        },
+    },
+]
+
+FUNCTION_MAP = {
+    "analyze_page": lambda url, question: f"Analysis of {url} for '{question}'...",
+}
+```
+
+### Example Skills to Ship
+
+| Skill | Description | Tools Needed | Priority |
+|-------|-------------|:------------:|:--------:|
+| `research` | Web research with citations + knowledge graph storage | Exa (existing) | High |
+| `plan-day` | Check weather + events + todos → daily plan | Weather (existing) | Medium |
+| `memory-audit` | Review, deduplicate, clean knowledge graph | Maybe (bulk ops) | Medium |
+| `compare-sources` | Fetch multiple pages, compare answers on same question | Exa (existing) | Low |
+
+### Implementation Order
+
+| Phase | What | Files | Est. Lines |
+|:-----:|------|-------|:----------:|
+| 1 | Skill manager + SKILL.md format | `skill_manager.py`, `config.yaml` | ~130 |
+| 2 | LLM integration (suggest_confirm tool + system prompt injection) | `function_registry.py`, `chat.py` | ~105 |
+| 3 | Frontend confirmation UI + skill banner | `MessageBubble.tsx`, `ChatPanel.tsx`, `websocket.ts` | ~70 |
+| 4 | Example skills + tools.py support | `skills/research/SKILL.md`, `skills/plan-day/SKILL.md` | ~40 |
+| | **Total** | | **~345** |

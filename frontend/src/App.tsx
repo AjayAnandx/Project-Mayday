@@ -10,6 +10,7 @@ import { ToastContainer } from './components/ui/Toast'
 import { ReminderDialog } from './components/ui/ReminderDialog'
 import { VoiceMode } from './components/voice/VoiceMode'
 import { useNotifications } from './hooks/useNotifications'
+import { useLocation } from './hooks/useLocation'
 
 function AppContent() {
   const { connected, newConversation } = useChatContext()
@@ -17,6 +18,7 @@ function AppContent() {
   const [searchOpen, setSearchOpen] = useState(false)
 
   useNotifications()
+  useLocation()
 
   useEffect(() => {
     const handleNavigate = (e: Event) => {

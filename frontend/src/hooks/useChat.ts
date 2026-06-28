@@ -6,6 +6,7 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'tool'
   content: string
+  voice_content?: string
   tool_name?: string
   image_url?: string
 }
@@ -38,17 +39,16 @@ export function useChat() {
     return () => window.removeEventListener('reminder-fired', handler)
   }, [addMessage])
 
-  const appendToAssistant = useCallback((text: string) => {
+  const appendToAssistant = useCallback((text: string, voiceContent?: string) => {
     setMessages((prev) => {
       const copy = [...prev]
       let last = copy[copy.length - 1]
       if (last && last.role === 'assistant') {
-        copy[copy.length - 1] = { ...last, content: last.content + text }
+        copy[copy.length - 1] = { ...last, content: last.content + text, voice_content: voiceContent ?? last.voice_content }
       } else {
-        // Create a new assistant message
         const newId = nextId()
         currentAssistantId.current = newId
-        copy.push({ id: newId, role: 'assistant', content: text })
+        copy.push({ id: newId, role: 'assistant', content: text, voice_content: voiceContent })
       }
       return copy
     })
@@ -60,7 +60,7 @@ export function useChat() {
         switch (data.type) {
           case 'token':
             setStreaming(true)
-            appendToAssistant(data.content || '')
+            appendToAssistant(data.content || '', data.voice_content)
             break
           case 'tool_call':
             addMessage({

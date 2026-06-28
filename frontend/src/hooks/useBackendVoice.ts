@@ -25,6 +25,43 @@ const SUBMIT_SILENCE_MS = 1200
 const TTS_ECHO_COOLDOWN_MS = 1500
 const SENTENCE_RE = /^.*?[.!?](?:\s|$)/
 
+const stripMarkdown = (text: string): string => {
+  return text
+    // Remove code blocks (```...```)
+    .replace(/```[\s\S]*?```/g, '')
+    // Remove inline code
+    .replace(/`([^`]+)`/g, '$1')
+    // Remove images ![alt](url)
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    // Remove links [text](url)
+    .replace(/\[([^\]]*)\]\([^)]+\)/g, '$1')
+    // Remove headers
+    .replace(/^#{1,6}\s+/gm, '')
+    // Remove bold/italic with ** **
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    // Remove bold/italic with * *
+    .replace(/\*([^*]+)\*/g, '$1')
+    // Remove bold/italic with __ __
+    .replace(/__([^_]+)__/g, '$1')
+    // Remove strikethrough ~~ ~~
+    .replace(/~~([^~]+)~~/g, '$1')
+    // Remove blockquotes >
+    .replace(/^>\s+/gm, '')
+    // Remove unordered list markers
+    .replace(/^[*-]\s+/gm, '')
+    // Remove ordered list markers
+    .replace(/^\d+\.\s+/gm, '')
+    // Remove horizontal rules
+    .replace(/^[-*_]{3,}\s*$/gm, '')
+    // Remove HTML tags
+    .replace(/<[^>]*>/g, '')
+    // Collapse multiple spaces
+    .replace(/[ \t]+/g, ' ')
+    // Clean up multiple newlines
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 interface UseVoiceOptions {
   sendMessage: (text: string) => void
 }
@@ -243,7 +280,7 @@ export function useBackendVoice({ sendMessage }: UseVoiceOptions) {
     while (true) {
       const m = ttsTextRef.current.match(SENTENCE_RE)
       if (!m) break
-      const sentence = m[0].trim()
+      const sentence = stripMarkdown(m[0].trim())
       ttsTextRef.current = ttsTextRef.current.slice(m[0].length)
       if (sentence) {
         ttsQueueRef.current.push(sentence)
@@ -258,7 +295,7 @@ export function useBackendVoice({ sendMessage }: UseVoiceOptions) {
   }, [speakNextSentence, stopRecognition])
 
   const flushTtsBuffer = useCallback(() => {
-    const remaining = ttsTextRef.current.trim()
+    const remaining = stripMarkdown(ttsTextRef.current.trim())
     ttsTextRef.current = ''
     if (remaining && stateRef.current !== 'idle') {
       ttsQueueRef.current.push(remaining)

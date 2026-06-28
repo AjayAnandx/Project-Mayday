@@ -71,6 +71,14 @@ Rules: {rules}
 - Example: "Updated todo 'Buy milk' - set priority from 1 to 2. Knowledge graph is also updated."
 - Example: "Deleted project 'AGI Personal Assistant' — status set to 'scraped'. It can be reactivated with set_status() if needed."""
 
+WEATHER_INSTRUCTIONS = """
+### Proactive Weather
+- get_weather(location, days) returns current conditions + forecast.
+- When the user mentions a meeting, event, trip, or outdoor plan at a specific location and date, YOU MUST proactively call get_weather() for that location to check conditions.
+- If the location is a neighborhood or area, include the city name (e.g. "Anna Nagar, Chennai").
+- get_weather() without a location uses the user's stored location.
+- Only mention weather in your response if the forecast data covers the relevant date. If the forecast doesn't reach that date, say nothing about weather."""
+
 PROJECT_INSTRUCTIONS = """
 ### Project Tracking
 - When starting a NEW project, link it by calling:
@@ -96,6 +104,14 @@ CORE_TOOL_NAMES = {
     "unified_search",
     "create_reminder", "list_reminders", "delete_reminder",
     "web_search_exa", "web_fetch_exa", "web_search_advanced_exa",
+    # System commands
+    "open_application", "close_application",
+    "set_volume", "get_volume",
+    "copy_to_clipboard",
+    "get_system_info", "get_active_window",
+    # File access
+    "read_file", "write_file", "append_file", "list_directory",
+    "get_weather",
 }
 
 GIT_KEYWORDS = re.compile(r"\b(git|commit|branch|diff|log|status|staged|unstaged|push|pull|clone)\b", re.I)
@@ -186,6 +202,11 @@ SKIP_SECOND_CALL = {
     "delete_file", "fork_repository",     "push_files",
     # Reminder actions
     "create_reminder", "delete_reminder",
+    # System commands (read-only — result IS the answer)
+    "get_volume", "get_system_info", "get_active_window",
+    "copy_to_clipboard",
+    # File access (result IS the answer)
+    "read_file", "write_file", "append_file", "list_directory",
 }
 
 CONNECTION_HINT = (
@@ -196,6 +217,40 @@ CONNECTION_HINT = (
 
 async def _send_json(ws: WebSocket, data: dict):
     await ws.send_text(json.dumps(data))
+
+
+def _make_voice_text(text: str) -> str:
+    stripped = text
+    stripped = re.sub(r'```[\s\S]*?```', '', stripped)
+    stripped = re.sub(r'`([^`]+)`', r'\1', stripped)
+    stripped = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', stripped)
+    stripped = re.sub(r'\[([^\]]*)\]\([^)]+\)', r'\1', stripped)
+    stripped = re.sub(r'^#{1,6}\s+', '', stripped, flags=re.M)
+    stripped = re.sub(r'\*\*([^*]+)\*\*', r'\1', stripped)
+    stripped = re.sub(r'\*([^*]+)\*', r'\1', stripped)
+    stripped = re.sub(r'__([^_]+)__', r'\1', stripped)
+    stripped = re.sub(r'~~([^~]+)~~', r'\1', stripped)
+    stripped = re.sub(r'^>\s+', '', stripped, flags=re.M)
+    stripped = re.sub(r'^[*-]\s+', '', stripped, flags=re.M)
+    stripped = re.sub(r'^\d+\.\s+', '', stripped, flags=re.M)
+    stripped = re.sub(r'^[-*_]{3,}\s*$', '', stripped, flags=re.M)
+    stripped = re.sub(r'<[^>]*>', '', stripped)
+    stripped = re.sub(r'\n+', '. ', stripped)
+    stripped = re.sub(r'\s+', ' ', stripped).strip()
+    sentences = re.split(r'(?<=[.!?:;])\s+', stripped)
+    sentences = [s for s in sentences if s.strip()]
+    if not sentences:
+        if len(stripped) > 200:
+            return stripped[:200].rsplit(' ', 1)[0] + '. Check the chat for more details.'
+        return stripped[:300] if stripped else ""
+    short = ' '.join(sentences[:2])
+    if len(sentences) == 1 and len(short) > 200:
+        short = short[:200].rsplit(' ', 1)[0] + '. Check the chat for more details.'
+    elif len(sentences) > 2:
+        short = short.rstrip('.!?:;') + '. Check the chat for more details.'
+    if len(short) > 300:
+        short = short[:300].rsplit(' ', 1)[0] + '. Check the chat for more details.'
+    return short
 
 
 async def _run_engine(
@@ -219,11 +274,12 @@ async def _run_engine(
             traits=", ".join(_personality.get("traits", [])),
             rules="\n".join(f"- {r}" for r in _personality.get("rules", [])),
         )
+    system += WEATHER_INSTRUCTIONS
     system += PROJECT_INSTRUCTIONS
 
     if kg:
         keywords = extract_keywords(user_text)
-        if keywords:
+        if keywords and len(keywords) >= 2:
             query = " ".join(keywords)
             memories = [m for m in kg.search(query) if m.get("properties", {}).get("search_result") != "true"]
             memory_lines = ""
@@ -380,8 +436,10 @@ async def _run_engine(
                 content = None
 
     if content:
+        voice_text = _make_voice_text(content)
+        logger.info("Voice: ui=%d chars, voice=%d chars", len(content), len(voice_text))
         conv.add_message("assistant", content)
-        await _send_json(ws, {"type": "token", "content": content})
+        await _send_json(ws, {"type": "token", "content": content, "voice_content": voice_text})
 
     if kg and conv.current_id:
         conv_data = get_store().get_conversation(conv.current_id)
