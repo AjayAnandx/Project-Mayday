@@ -20,6 +20,7 @@ from backend.assistant.fetch_tools import FETCH_TOOL_DEFINITIONS
 from backend.assistant.memory.conversation_manager import ConversationManager
 from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
 from backend.api.screenshots import get_screenshot_store
+from backend.core.tool_selector import ToolSelector
 
 logger = logging.getLogger(__name__)
 
@@ -114,11 +115,6 @@ CORE_TOOL_NAMES = {
     "get_weather",
 }
 
-GIT_KEYWORDS = re.compile(r"\b(git|commit|branch|diff|log|status|staged|unstaged|push|pull|clone)\b", re.I)
-GITHUB_KEYWORDS = re.compile(r"\b(github|repo|repository|issue|pr|pull\s*request|release|fork|star)\b", re.I)
-BROWSER_KEYWORDS = re.compile(r"\b(browser|web|url|http|navigate|click|type|input|page|selenium|website|google)\b", re.I)
-FETCH_KEYWORDS = re.compile(r"\b(fetch|curl|api\s*request)\b", re.I)
-
 GIT_TOOL_NAMES = {
     "git_status", "git_diff_unstaged", "git_diff_staged", "git_diff",
     "git_commit", "git_add", "git_reset", "git_log",
@@ -134,9 +130,6 @@ GITHUB_TOOL_NAMES = {
     "search_code", "search_commits", "search_repositories",
 }
 
-EXA_TOOL_NAMES = {"web_search_exa", "web_fetch_exa", "web_search_advanced_exa"}
-FETCH_TOOL_NAMES = {"fetch"}
-
 SELENIUM_TOOL_NAMES = {
     "navigate", "get_an_element", "get_direct_children", "get_elements",
     "click_to_element", "set_value_to_input_element", "take_screenshot",
@@ -147,35 +140,15 @@ SELENIUM_TOOL_NAMES = {
     "local_storage_remove_all",
 }
 
+FETCH_TOOL_NAMES = {"fetch"}
 
-def filter_tools(text: str, all_tools: list[dict]) -> list[dict]:
-    active_groups = {"core"}
-
-    if GIT_KEYWORDS.search(text):
-        active_groups.add("git")
-    if GITHUB_KEYWORDS.search(text):
-        active_groups.add("github")
-    if BROWSER_KEYWORDS.search(text):
-        active_groups.add("browser")
-    if FETCH_KEYWORDS.search(text):
-        active_groups.add("fetch")
-
-    allowed = dict.fromkeys(CORE_TOOL_NAMES)
-    if "git" in active_groups:
-        allowed.update(dict.fromkeys(GIT_TOOL_NAMES))
-    if "github" in active_groups:
-        allowed.update(dict.fromkeys(GITHUB_TOOL_NAMES))
-    if "browser" in active_groups:
-        allowed.update(dict.fromkeys(SELENIUM_TOOL_NAMES))
-    if "fetch" in active_groups:
-        allowed.update(dict.fromkeys(FETCH_TOOL_NAMES))
-
-    result = [t for t in all_tools if t["function"]["name"] in allowed]
-    if len(result) < len(all_tools):
-        filtered = len(all_tools) - len(result)
-        exclude = [t["function"]["name"] for t in all_tools if t["function"]["name"] not in allowed]
-        logger.debug("Filtered %d tools (excluded: %s)", filtered, exclude)
-    return result
+GROUP_SETS = {
+    "core": CORE_TOOL_NAMES,
+    "git": GIT_TOOL_NAMES,
+    "github": GITHUB_TOOL_NAMES,
+    "browser": SELENIUM_TOOL_NAMES,
+    "fetch": FETCH_TOOL_NAMES,
+}
 
 
 MAX_TOOL_RESULT_LENGTH = 3000
@@ -261,6 +234,7 @@ async def _run_engine(
     tools: list[dict],
     mcp: MCPManager | None,
     kg: KnowledgeGraph | None = None,
+    selector: ToolSelector | None = None,
 ):
     now = datetime.now(timezone.utc).astimezone()
     system = SYSTEM_PROMPT.format(
@@ -321,8 +295,12 @@ async def _run_engine(
 
     loop = asyncio.get_running_loop()
 
-    filtered_tools = filter_tools(user_text, tools)
-    if len(filtered_tools) == 0:
+    if selector is not None:
+        allowed_names = selector.select_tool_names(user_text)
+        filtered_tools = [t for t in tools if t["function"]["name"] in allowed_names]
+        if len(filtered_tools) == 0:
+            filtered_tools = tools
+    else:
         filtered_tools = tools
 
     try:
@@ -501,13 +479,18 @@ async def chat_websocket(websocket: WebSocket):
             logger.error("MCP tool discovery error: %s", e)
     tools = get_tool_definitions(mcp_tools)
 
+    selector = ToolSelector()
+    selector.build_index(tools, GROUP_SETS)
+    logger.info("ToolSelector built index for %d tools in %d groups",
+                len(tools), len(GROUP_SETS))
+
     try:
         while True:
             data = await websocket.receive_text()
             msg = json.loads(data)
             if msg.get("type") == "message":
                 user_text = msg.get("content", "")
-                await _run_engine(websocket, user_text, conv, llm, tools, mcp, kg)
+                await _run_engine(websocket, user_text, conv, llm, tools, mcp, kg, selector=selector)
             elif msg.get("type") == "new_conversation":
                 conv.new_conversation()
                 await _send_json(websocket, {"type": "conversation_created"})

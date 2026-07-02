@@ -1713,6 +1713,94 @@
         "all_day": false,
         "recurrence": null
       }
+    },
+    {
+      "id": "9615e693fe26",
+      "type": "conversation",
+      "label": "2db51da002c5",
+      "properties": {
+        "conv_id": "2db51da002c5",
+        "title": "hi",
+        "message_count": 30
+      }
+    },
+    {
+      "id": "3978d6008829",
+      "type": "todo",
+      "label": "Meeting with cafe client",
+      "properties": {
+        "todo_id": "46541d6f9301",
+        "description": "",
+        "due_date": "2026-07-04",
+        "priority": 1,
+        "completed": false,
+        "tags": [],
+        "recurrence": null
+      }
+    },
+    {
+      "id": "eeae5443757a",
+      "type": "event",
+      "label": "Meeting with cafe client",
+      "properties": {
+        "event_id": "a8ec4c1d99f6",
+        "description": "",
+        "start_time": "2026-07-04T16:00:00",
+        "end_time": "2026-07-04T17:00:00",
+        "all_day": false,
+        "recurrence": null
+      }
+    },
+    {
+      "id": "25c5944a897e",
+      "type": "project",
+      "label": "project:AGI",
+      "properties": {
+        "context": "",
+        "status": "active"
+      }
+    },
+    {
+      "id": "0b9bb1a3d959",
+      "type": "concept",
+      "label": "Research and implementation of advanced AI agent capabilities, focusing on Claude Code skills and autonomous agentic workflows.",
+      "properties": {
+        "status": "active"
+      }
+    },
+    {
+      "id": "5f02fe9014c3",
+      "type": "concept",
+      "label": "Oruga420/claude-code-skills (Focus: Autonomous loops, Karpathy LLM Wiki, multi-agent harnesses)",
+      "properties": {
+        "status": "active"
+      }
+    },
+    {
+      "id": "5b25dc1d3fe3",
+      "type": "concept",
+      "label": "deepakdevp/claude-code-skills (Focus: Audited professional toolkit for Engineering, DevOps, and Security)",
+      "properties": {
+        "status": "active"
+      }
+    },
+    {
+      "id": "f2ec0417e36e",
+      "type": "concept",
+      "label": "anthropics/skills (Focus: Official baseline performance and reference implementations)",
+      "properties": {
+        "status": "active"
+      }
+    },
+    {
+      "id": "9d7e06dbd440",
+      "type": "conversation",
+      "label": "f3ee9345d74f",
+      "properties": {
+        "conv_id": "f3ee9345d74f",
+        "title": "what are the event in 5 july",
+        "message_count": 7
+      }
     }
   ],
   "edges": [
@@ -1756,6 +1844,41 @@
       "source": "9ee0598a490b",
       "target": "bbc7a7804491",
       "relation": "status",
+      "properties": {}
+    },
+    {
+      "id": "cde2aba5b028",
+      "source": "25c5944a897e",
+      "target": "bbc7a7804491",
+      "relation": "status",
+      "properties": {}
+    },
+    {
+      "id": "5599fd2a9e35",
+      "source": "25c5944a897e",
+      "target": "0b9bb1a3d959",
+      "relation": "description",
+      "properties": {}
+    },
+    {
+      "id": "059e275ca2f6",
+      "source": "25c5944a897e",
+      "target": "5f02fe9014c3",
+      "relation": "reference_repo_power_user",
+      "properties": {}
+    },
+    {
+      "id": "ed2d4f5a9104",
+      "source": "25c5944a897e",
+      "target": "5b25dc1d3fe3",
+      "relation": "reference_repo_curated",
+      "properties": {}
+    },
+    {
+      "id": "d212f242699e",
+      "source": "25c5944a897e",
+      "target": "f2ec0417e36e",
+      "relation": "reference_repo_official",
       "properties": {}
     }
   ]

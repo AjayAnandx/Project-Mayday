@@ -30,6 +30,7 @@ See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (
 | Markdown render | `react-markdown` + `remark-gfm` + `rehype-highlight` |
 | Graph viz | `cytoscape` (force-directed, cose layout) |
 | Search | Hash-based trigram inverted index (NgramIndex) + trie prefix tree (SearchTrie) + TF-IDF ranker — O(1) exact substring matching, 50–700× faster, zero accuracy regression |
+| Tool selection | Inverted group index (TF-IDF weighted, BM25 saturation, group-penalty) — replaces hand-written keyword regexes; **92% precision, 91% recall, <<0.01ms** per query |
 
 ## Architecture
 - **Two-process**: FastAPI backend (uvicorn) + React frontend (Vite dev / Electron)
@@ -38,6 +39,7 @@ See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
 - 33 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status` + `unified_search` + 11 system/file (open/close app, volume, clipboard, system info, active window, read/write/append/list files)
 - MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`)
+- Tool selection: Inverted group index (TF-IDF weighted, BM25 saturation, group-penalty) — replaces 4 hand-written keyword regexes; **92.2% precision, 90.8% recall**, <<0.01ms per query
 - `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
 - `mcp_server_git` — 12 tools for local git operations (status, log, diff, commit, branch)
 - `github-mcp-server` — GitHub API tools (search repos, list commits, read files, repo info on any public repo)
@@ -79,7 +81,8 @@ mayday/
 │   │   ├── data_store.py             # JSON persistence (thread-safe)
 │   │   ├── config.py                 # YAML config loader
 │   │   ├── operation_log.py          # Per-month operation log (indexed, thread-safe)
-│   │   └── search_index.py           # Hash-based n-gram index + trie + TF-IDF ranker
+│   │   ├── search_index.py           # Hash-based n-gram index + trie + TF-IDF ranker
+│   │   ├── tool_selector.py          # Inverted group index for LLM tool selection
 │   ├── memory/
 │   │   ├── __init__.py
 │   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
@@ -174,6 +177,8 @@ mayday/
 ├── screenshots/                     # Screenshot images + index.json
 ├── operations/                      # Per-month operation log files
 │   └── YYYY-MM.json                 # All operations from that month
+├── docs/
+│   └── adr.md                       # Architecture Decision Record (15 decisions)
 ├── plan.md                          # MCP integration plan
 ├── main.py                          # Original PyQt6 entry (kept as reference)
 ├── ui/                              # Original PyQt6 widgets (kept as reference)
@@ -323,7 +328,7 @@ yellow:  '#eab308'
 - [x] **`query_operations` LLM tool**: Search operations by action (create/update/delete), entity type, date range, or full-text query. Available to LLM in all conversations.
 - [x] **Bug fix: operation recording in LLM tool path**: Recording was only in REST endpoints (`todos.py`, `events.py`) — LLM-created entities through `todo_functions.py` and `calendar_functions.py` were never logged. Fixed by adding `get_operation_log().record()` to both function files.
 - [x] **Bug fix: silent second LLM call**: Second call passed `tools=filtered_tools`, allowing LLM to call another tool instead of generating text. When LLM returned only tool_calls (no content), user saw tool_call bubble but no natural language response. Fixed by removing tools from second call (`tools=[]`).
-- [x] **70 passing tests** (30 operation log + 40 memory graph) covering record, query, stats, full-text, persistence, concurrency, dedup, tombstone, repair, clean graph, prefix matching
+- [x] **80 passing tests** (30 operation log + 40 memory graph + 10 tool selector) covering record, query, stats, full-text, persistence, concurrency, dedup, tombstone, repair, clean graph, prefix matching, threshold calibration, per-group synonym detection, false-positive rejection, cross-domain queries
 - [x] **Duplicate detection for todos & events**: LLM create_todo/create_event checks for existing items with same title (case-insensitive) before creating. Todo dedup narrows by due_date; event dedup narrows by same day. `force=True` bypasses. Frontend dialogs show inline yellow warning banner with debounced API check. `GET /api/todos/check-duplicates` and `GET /api/events/check-duplicates` endpoints.
 - [x] **Unified Search**: `GET /api/search?q=&limit=` endpoint searches all 5 stores (todos, events, conversations, graph nodes, operations) simultaneously. LLM tool `unified_search(query)` replaces 2-4 guessing game tool calls with one. Frontend Ctrl+K modal overlay with categorized results and click-to-navigate.
 - [x] **DSA-powered search (Jun 28)**: Replaced all O(n) substring scans with `NgramIndex` (hash-based trigram inverted index) + `SearchTrie` (prefix/autocomplete) + `SearchRanker` (TF-IDF). Todos/events/conversations now search in O(1). Conversations indexed in-memory — no more opening JSON files per search. Zero accuracy regression vs O(n) substring scan. 50–700× faster across all stores. New `GET /api/search/prefix` endpoint for instant autocomplete. See `backend/core/search_index.py`.
@@ -339,6 +344,9 @@ yellow:  '#eab308'
 - [x] **Voice/UI Response Router**: Backend `_make_voice_text()` strips all markdown from LLM response and truncates to 2 sentences / 300 chars for TTS. Deterministic — no LLM instruction needed. VoiceMode uses `voice_content` field when available, falls back to content-diff + `stripMarkdown()`.
 - [x] **System App Control (11 tools)** — : 7 system tools (open/close app, set/get volume, clipboard, system info, active window) + 4 file access tools (read/write/append/list files). Path whitelist security (Documents, Desktop, project root). No power/shutdown/shell commands. No file deletion.
 - [x] **Broad app search**: `open_application` now searches Start Menu shortcuts, Windows Registry, Program Files, AppData, and system PATH — not just a hardcoded table. Apps like zoom, word, excel, outlook, onenote, powerpoint found automatically. Non-installed apps return "not available".
+- [x] **Tool Latency Optimization (Jul 2)**: Replaced 4 brittle keyword regexes (`GIT_KEYWORDS`, `GITHUB_KEYWORDS`, `BROWSER_KEYWORDS`, `FETCH_KEYWORDS`) with `ToolSelector` — inverted group index built from tool descriptions (TF-IDF weighted terms, BM25-style TF saturation with k1=1.2, sqrt group-penalty). Default threshold 0.9 yields 92.2% precision, 90.8% recall, <<0.01ms per query. 8 unavoidable failure cases due to intrinsic lexical limits. Core group always active. See `backend/core/tool_selector.py`.
+- [x] **Inverted Group Index design**: TF-IDF weight per term × (k1+1)/k1(1-b+b*L) BM25 saturation × 1/sqrt(groups_containing(term)). Lightweight stemmer (15 suffix rules) + 15-entry alias map + stopword filter. Filter fallback: if select returns empty, all tools passed to LLM. No external dependencies.
+- [x] **plan.md expansion**: Added full Tool Latency Optimization section with strategy, data model, timeline, performance analysis, failed-path alternatives (all 3 evaluated), risk register.
 - [ ] **Proactive Suggestions — PLANNED (Jun 28)**: Chat shows clickable suggestion chips (upcoming events, overdue todos, recent activity, general prompts) when the chat page is empty.
 
 ## How to Run
@@ -418,6 +426,7 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `backend/core/data_store.py`: JSON persistence (todos, events) + per-day conversation file storage
 - `backend/core/operation_log.py`: Per-month indexed operation log (record, query, stats, full-text search)
 - `backend/core/search_index.py`: Hash-based n-gram inverted index (NgramIndex) + trie prefix tree (SearchTrie) + TF-IDF ranker (SearchRanker)
+- `backend/core/tool_selector.py`: Inverted group index for LLM tool selection (TF-IDF weighted, BM25 saturation, group-penalty)
 - `backend/memory/knowledge_graph.py`: KnowledgeGraph singleton (JSON persistence, thread-safe)
 - `backend/memory/memory_tools.py`: 5 LLM functions for memory (remember, recall, recall_entity, forget, delete_entity)
 - `backend/functions/system_functions.py`: 11 LLM functions for system control + file access (open_application, close_application, set_volume, get_volume, copy_to_clipboard, get_system_info, get_active_window, read_file, write_file, append_file, list_directory)
@@ -437,3 +446,5 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `frontend/src/components/voice/VoiceMode.tsx`: Full-page voice UI with auto-speak, tab-switch recovery
 - `frontend/src/components/voice/VoiceIndicator.tsx`: Animated voice state indicator
 - `frontend/src/components/voice/VoiceTranscript.tsx`: Live interim transcript display
+- `docs/adr.md`: Architecture Decision Record (15 decisions — backend, frontend, LLM, voice, search, skills)
+- `backend/core/tool_selector.py`: Inverted group index for LLM tool selection (TF-IDF weighted, BM25 saturation, group-penalty)

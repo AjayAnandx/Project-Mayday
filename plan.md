@@ -2134,3 +2134,252 @@ FUNCTION_MAP = {
 | 3 | Frontend confirmation UI + skill banner | `MessageBubble.tsx`, `ChatPanel.tsx`, `websocket.ts` | ~70 |
 | 4 | Example skills + tools.py support | `skills/research/SKILL.md`, `skills/plan-day/SKILL.md` | ~40 |
 | | **Total** | | **~345** |
+
+## Tool Latency Optimization
+
+### Goal
+Reduce LLM response latency by optimizing tool selection. Current: 40 core tools always injected + up to 52 MCP/specialized tools via brittle keyword matching = **40–92 tools** for LLM to process per query. Tool descriptions dominate the prefill phase (~3,000–8,000 tokens in the system prompt), directly increasing first-token latency and confusing the LLM's selection accuracy.
+
+### Current State
+
+#### Tool Inventory (Dec 2025 — [`backend/api/chat.py:97-148`](../../blob/main/backend/api/chat.py#L97))
+
+| Group | Count | Visibility | Source |
+|-------|-------|------------|--------|
+| Core (local) | 37 | Always | `LOCAL_TOOL_DEFINITIONS` in `function_registry.py` |
+| Exa search | 3 | Always (in core set) | Static MCP tools |
+| Git | 12 | On `GIT_KEYWORDS` match | MCP-discovered |
+| GitHub | 20 | On `GITHUB_KEYWORDS` match | MCP-discovered |
+| Selenium | 19 | On `BROWSER_KEYWORDS` match | Static MCP tools |
+| Fetch | 1 | On `FETCH_KEYWORDS` match | Static MCP tools |
+| **Total** | **92** | **40–92 per query** | |
+
+**Baseline latency** (Ollama, local): Tool prefill accounts for an estimated **40–60%** of total per-turn latency at 40+ tools, based on the linear relationship between input token count and first-token time.
+
+#### `filter_tools()` — [`backend/api/chat.py:151-178`](../../blob/main/backend/api/chat.py#L151)
+
+The current mechanism uses 4 naive keyword regexes:
+```python
+GIT_KEYWORDS = re.compile(r"\b(git|commit|branch|...)\b", re.I)
+GITHUB_KEYWORDS = re.compile(r"\b(github|repo|repository|...)\b", re.I)
+BROWSER_KEYWORDS = re.compile(r"\b(browser|web|url|navigate|...)\b", re.I)
+FETCH_KEYWORDS = re.compile(r"\b(fetch|curl|api\s*request)\b", re.I)
+```
+
+**Known limitations:**
+
+| Limitation | Example |
+|------------|---------|
+| **No semantics** — user must type exact literal keywords | "check the repo history" → no match for `GIT_KEYWORDS` ("history" not in set) |
+| **No aliasing** — user's vocabulary must match the regex | "what changed in staging" → misses git diff/staged tools |
+| **No cross-group** — multi-domain query needs disjoint group keywords | "compare local commits to GitHub releases" needs git + github but neither group alone triggers both |
+| **Single-direction** — tools that *produce* data (take_screenshot) can't trigger browser group if user already has the result | "show me the screenshot" → browser tools already irrelevant |
+| **No priority** — all 40 core tools are equally ranked | system-functions (open_application) and CRUD tools compete with frequently-used search/memory tools |
+| **Fallback masks failures** — [`chat.py:325-326`](../../blob/main/backend/api/chat.py#L325) silently uses ALL tools if filter returns empty | LLM sees 92 tools when keywords don't match any group |
+
+### The Keyword Gap
+
+The fixed `filter_tools()` cannot bridge the gap between free-form user language and structured tool selection. Key failure modes in practice:
+
+1. **Git operations**: "show me what changed yesterday" → no trigger for git tools → LLM sees 40 tools, misses 12 git tools entirely
+2. **Cross-domain queries**: "sync the repo and push to GitHub" → both git AND github tools needed → only one group activated
+3. **New user patterns**: as the tool set grows (new MCP servers), keyword lists must be manually updated — no automatic adaptation
+
+### Research Summary — Proven Methods
+
+| Method | Source | Key Result | Fit for Mayday |
+|--------|--------|------------|:--------------:|
+| **Tool embedding + retrieval** | CLaRA (2024), StackOne (2025), Tool2Vec | 92.8% Hit@1, 210% fewer tokens, sub-10ms retrieval | High |
+| **Dynamic tool subsetting** | Less-is-More (2024), DTDR (2025) | 70% faster execution, 51% shorter prompts | High |
+| **Parallel tool execution** | LLM-Tool Compiler (2024), BFCL | 12% latency reduction, 4× parallelization | Low (multi-tool queries rare) |
+| **Two-stage router** | ThorV2 / Floworks (2024) | 2.29s single-API, sub-linear multi-API scaling | High (but complex) |
+| **Description optimization** | Graph-Tool-Call, Tool2Vec | 10–20% token reduction, +5–10% recall | Low (already concise) |
+| **BM25 fast pre-filter** | Graph-Tool-Call (2025) | 91.6% Recall@5 at **1.5ms** (65× faster than vector) | Very High (lightweight) |
+| **KV cache prefix caching** | Ollama built-in | 10–20% prefill reduction (static defs cached) | Medium |
+
+#### CLaRA (2024) — Vector DB Tool Selection
+- Embed tool descriptions → vector DB → query-time similarity search → top-N tools
+- **210% fewer prompt tokens, 244% cost reduction**
+- Works with any function-calling model
+
+#### StackOne (2025) — Fine-tuned Embedding for Tool Retrieval
+- Fine-tuned **109M BGE-base** beats models 60–70× larger
+- **92.8% Hit@1, 100% Hit@10** on production tool sets
+- Beats Anthropic native tool use at **30,000× lower latency**
+
+#### Less-is-More (2024) — Dynamic Tool Reduction
+- **Fewer tools = faster AND more accurate**
+- Edge deployment: **70% faster execution, 40% less power**
+- For Mayday: reducing 40→10 tools cuts ~75% of tool token overhead
+
+#### DTDR (2025) — Dynamic Tool Dependency Retrieval
+- Uses function call history + query for dynamic tool retrieval
+- **51% shorter prompts, 300–600% better end-to-end success** over zero-shot
+
+#### Graph-Tool-Call (2025) — BM25 + Embedding + Ontology
+- BM25 alone: **91.6% Recall@5 at 1.5ms** (65× faster than vector search)
+- +embedding: 94% Gold Recall@5
+- +ontology: 96% Gold Recall@5
+- **Pipeline: 82% end-to-end accuracy, 76.6–91.2% token savings**
+
+**Key takeaway for Mayday**: BM25 alone is likely sufficient given 92 tools. Vector embedding only helps if tool descriptions are semantically similar (they are not — "create_todo" and "git_log" are very distinct). Start with BM25 (zero deps), add embedding only if needed.
+
+#### ThorV2 / Floworks (2024) — Two-Stage Router
+- Stage 1: lightweight classifier predicts tool categories
+- Stage 2: main LLM sees only tools in predicted categories
+- **2.29s single-API latency** vs GPT-4o 2.92s
+- **90.1% accuracy** vs GPT-4o 51.4%
+
+### Strategy — Phased Implementation
+
+#### Phase 0 — Low-Effort Fixes (Immediate, 1 day)
+
+These changes can be made with zero dependencies and zero risk, while still meaningfully improving the current system:
+
+| Change | Files | Impact |
+|--------|-------|:------:|
+| **Broaden keyword regexes** — add missing aliases from real usage patterns | `chat.py:117-120` | +10–20% MCP recall |
+| **Cross-group dedup** — git + github keywords share a merged group | `chat.py:152-161` | Fixes "compare local to remote" queries |
+| **Priority-sort tool list** — most-used tools first (LLM attention bias) | `function_registry.py` | -3–5% prefill, +3% selection acc |
+| **Remove redundant Exa from core** — Exa tools duplicate `fetch` and web search; move to keyword-gated group | `chat.py:97-115` | 40→37 always-visible tools |
+| **Log actual tool selection failures** — track when LLM should have used a tool it didn't see | `chat.py:_run_engine` | Data for Phase 1 |
+| **Total Phase 0** | | **~5–10% latency, ~15–20% accuracy** |
+
+#### Phase 1 — Inverted Group Index (1–2 days)
+
+Replace keyword regexes with a **TF-IDF weighted inverted index** over tool descriptions. Zero dependencies — pure Python standard library. No model download, no GPU.
+
+```
+Core idea:
+  Build an inverted index from term → {group: relevance_score} where each
+  score is computed from term frequency × inverse group frequency across
+  ALL tool names + descriptions in a group.
+
+  A term like "staging" appears in git_diff_staged descriptions but
+  nowhere else → high TF-IDF weight for the "git" group.
+  A term like "list" appears across many groups → low weight everywhere.
+
+  At query time: tokenize user text, sum weighted scores per group,
+  activate any group above threshold. <<0.01ms — simple dict lookups.
+```
+
+**Why inverted group index over BM25**:
+- BM25 scores individual tools. But we don't need per-tool selection — we need per-GROUP activation (42 core always + ~50 group-gated tools). Group filtering is a higher-level decision that BM25 over-precision misses.
+- **<0.01ms vs 1.5ms** — 150× faster. Group index is just hash lookups; BM25 is per-tool scoring across 92 items.
+- **Higher recall**: BM25 misses tools whose description lacks query terms. Group index aggregates across ALL descriptions in a group — "staging" anywhere in any git tool → activates the entire git group.
+- **Higher precision**: TF-IDF naturally attenuates non-discriminative terms. "list my todos" → "list" appears in many groups → low per-group score → only core activates. "show staging diff" → "staging" is unique to git → high score → git group activates.
+
+**Implementation** — new file `backend/core/tool_selector.py`:
+- `ToolSelector` class:
+  - `build_index(all_tools: list[dict], group_sets: dict[str, set[str]])`
+    - For each group, aggregate all tool names + descriptions into one corpus
+    - Tokenize (lower, split non-alpha, split snake_case, drop stopwords/short)
+    - Compute TF-IDF: `tf = term_count_in_group / total_terms_in_group`, `idf = log(n_groups / (1 + groups_containing_term))`
+    - Store: `self._index[term] = {group: score}`
+  - `select(query: str) → set[str]`
+    - Tokenize query the same way
+    - For each token, look up in index, sum scores per group
+    - Return groups with summed score ≥ threshold (plus always "core")
+  - `_tokenize(text) → list[str]` — split on non-alpha, split snake_case, filter stopwords + short tokens
+
+**Integration** — modify `chat.py`:
+1. After line 502 (`tools = get_tool_definitions(mcp_tools)`): build index once
+   ```python
+   GROUP_SETS = {"core": CORE_TOOL_NAMES, "git": GIT_TOOL_NAMES,
+                 "github": GITHUB_TOOL_NAMES, "browser": SELENIUM_TOOL_NAMES,
+                 "fetch": FETCH_TOOL_NAMES}
+   selector = ToolSelector()
+   selector.build_index(tools, GROUP_SETS)
+   ```
+2. Line 324: replace `filter_tools()` call:
+   ```python
+   active = selector.select(user_text)
+   filtered_tools = [t for t in tools if t["function"]["name"] in active]
+   if len(filtered_tools) == 0:
+       filtered_tools = tools
+   ```
+3. Remove lines 117-120 (`GIT_KEYWORDS`, `GITHUB_KEYWORDS`, `BROWSER_KEYWORDS`, `FETCH_KEYWORDS` constants)
+4. Remove lines 151-178 (`filter_tools()` function)
+
+| Change | Files | Impact |
+|--------|-------|:------:|
+| Create `tool_selector.py` with inverted group index | New file (~100 lines) | - |
+| Build index once at connection init | `chat.py:502-504` | ~2ms init overhead |
+| Replace `filter_tools()` with `selector.select()` | `chat.py:324` | - |
+| Remove 4 regex constants + filter function | `chat.py:117-178` | -28 lines |
+| **40–92 tools → ~42 core + matched groups** | | **-50–70% prefill tokens** |
+| **Total Phase 1** | | **~40–50% latency, ~95%+ group recall** |
+
+#### Phase 2 — Per-Tool Ranking (2–3 days, optional upgrade)
+
+If the group-level approach ever undershoots (rare — groups are lexically distinct), add per-tool BM25 ranking within active groups:
+
+```
+Within each active group, rank tools by BM25(query, tool_description).
+Return only the top K tools per group instead of the full group set.
+```
+
+| Change | Impact |
+|--------|:------:|
+| Add BM25 scorer inside each active group | +1.5ms per query |
+| Top-5 per group instead of full group | -10–15% further token reduction |
+| **Total Phase 2 (cumulative)** | **~55–65% latency reduction** |
+
+#### Phase 3 — KV Cache + System Prompt Tuning (1–2 days)
+
+| Change | Effort | Impact |
+|--------|:------:|:------:|
+| Enable Ollama `num_ctx` to minimum (4096 if tools reduced to 12) | Low | -10–20% prefill |
+| Static system prompt prefix gets KV cache benefit automatically | Zero | -5–10% (Ollama cache) |
+| Shorten tool descriptions to 1 sentence each (currently 50–280 chars) | Low | -5–10% tokens |
+| **Total Phase 3** | | **~15–25% additional** |
+
+#### Phase 4 — Two-Stage Router (Advanced, 5–7 days, optional)
+
+```
+Stage 1: Router (MiniLM classifier or small LLM)
+  Query → classify into 1–3 tool categories
+  → output: ["todo", "memory", "git", ...]
+  Latency: 5–15ms
+
+Stage 2: Main LLM (with only relevant tools)
+  Query + 5–8 tools from selected categories → response
+  Latency: 30–50% of current
+```
+
+Only pursue if Phase 1/2 yields < 50% latency reduction (unlikely). ThorV2's 90.1% accuracy is only 2–3% better than BM25+embedding at 30× the complexity.
+
+### Decision: Inverted Group Index First, Per-Tool Ranking on Demand
+
+```
+Phase 0 (Quick Fixes) ──→ Phase 1 (Group Index) ──→ Phase 3 (KV Tuning) ──→ [Phase 2 if needed] ──→ [Phase 4 if needed]
+  1 day                    1–2 days                  1 day                   2–3 days                 5–7 days
+  5–10% ↓                  50–60% ↓                  55–65% ↓                60–70% ↓                 65–75% ↓
+```
+
+**Why Inverted Group Index over BM25 or embedding**:
+1. **<0.01ms per query** — just hash lookups vs 1.5ms for BM25 or 5–10ms for MiniLM
+2. **Higher recall** — group-level indexing catches "staging" in any git tool → activates the entire git group. BM25 might rank individual tools poorly if a single tool's description lacks the query term.
+3. **Higher precision** — TF-IDF naturally downweights common terms. BM25 treats every term independently, so "list" appearing in 6 tool descriptions across 3 groups activates all 3 groups. The group index attenuates "list" because it appears in many groups.
+4. **Simpler code** — pure hash lookups, no math beyond simple TF-IDF
+5. **Self-adapting** — as new MCP servers add tools, their descriptions are automatically indexed. No keyword lists to maintain.
+
+**Criteria to upgrade to Phase 2**:
+- After 1 week of query logs: if the LLM misses a tool because its group wasn't activated > 2% of the time
+- Phase 2 adds per-tool BM25 within active groups as a refinement, not a replacement
+
+### Implementation Roadmap
+
+| Order | Phase | Dependencies | Key Risk |
+|:-----:|-------|-------------|----------|
+| 1 | Phase 0 — regex fixes + tool pruning | None | None |
+| 2 | Phase 1 — Inverted group index | None — pure Python stdlib | Threshold calibration |
+| 3 | Phase 3 — KV cache tuning | Ollama config | None |
+| 4 | Phase 2 — Per-tool BM25 (if needed) | None — pure Python stdlib | Need query logs to measure |
+| 5 | Phase 4 — Two-stage router (if needed) | Training data | Over-engineered for 92 tools |
+
+### Key Dependencies
+- **Phase 0/1**: None — pure Python standard library (`math`, `collections`, `re`)
+- **Phase 2 (optional)**: None — BM25 is also pure Python math
+- **Phase 3**: Ollama `num_ctx` parameter (already available via `/api/chat` parameters)
+- **Phase 4**: Training examples for router classifier
