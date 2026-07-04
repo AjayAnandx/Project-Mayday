@@ -17,3 +17,6 @@ conversations/
 screenshots/
 memory_graph.json
 operations/
+reminders.json
+projects.json
+projects/

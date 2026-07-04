@@ -347,6 +347,7 @@ yellow:  '#eab308'
 - [x] **Tool Latency Optimization (Jul 2)**: Replaced 4 brittle keyword regexes (`GIT_KEYWORDS`, `GITHUB_KEYWORDS`, `BROWSER_KEYWORDS`, `FETCH_KEYWORDS`) with `ToolSelector` — inverted group index built from tool descriptions (TF-IDF weighted terms, BM25-style TF saturation with k1=1.2, sqrt group-penalty). Default threshold 0.9 yields 92.2% precision, 90.8% recall, <<0.01ms per query. 8 unavoidable failure cases due to intrinsic lexical limits. Core group always active. See `backend/core/tool_selector.py`.
 - [x] **Inverted Group Index design**: TF-IDF weight per term × (k1+1)/k1(1-b+b*L) BM25 saturation × 1/sqrt(groups_containing(term)). Lightweight stemmer (15 suffix rules) + 15-entry alias map + stopword filter. Filter fallback: if select returns empty, all tools passed to LLM. No external dependencies.
 - [x] **plan.md expansion**: Added full Tool Latency Optimization section with strategy, data model, timeline, performance analysis, failed-path alternatives (all 3 evaluated), risk register.
+- [x] **Iterative Tool Loop (Jul 4)**: Replaced two-call architecture (LLM → tools → LLM → text) with Claude Code-style iterative loop. LLM can call tools repeatedly, see results, self-correct. Duplicate guard (3× identical = stuck), max 20 iterations, intermediate thoughts stream in real-time, "Build Complete" notification on finish. `role: "tool"` messages stored properly.
 - [ ] **Proactive Suggestions — PLANNED (Jun 28)**: Chat shows clickable suggestion chips (upcoming events, overdue todos, recent activity, general prompts) when the chat page is empty.
 
 ## How to Run
@@ -354,7 +355,7 @@ yellow:  '#eab308'
 ### Dev mode (two terminals)
 ```bash
 # Terminal 1 — Backend
-uvicorn backend.main:app --reload --port 8771
+uvicorn backend.main:app --reload --port 8771 --reload-exclude 'projects/**' --reload-exclude 'operations/**' --reload-exclude 'conversations/**' --reload-exclude 'screenshots/**'
 
 # Terminal 2 — Frontend
 cd frontend && npm run dev

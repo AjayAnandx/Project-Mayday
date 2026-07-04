@@ -23,12 +23,12 @@ class ConversationManager:
             return True
         return False
 
-    def add_message(self, role: str, content: str, conversation_id: str = None) -> dict | None:
+    def add_message(self, role: str, content: str, conversation_id: str = None, tool_call_id: str | None = None, tool_calls: list | None = None) -> dict | None:
         store = get_store()
         cid = conversation_id or self._current_id
         if not cid:
             cid = self.new_conversation()
-        return store.add_message(cid, role, content)
+        return store.add_message(cid, role, content, tool_call_id=tool_call_id, tool_calls=tool_calls)
 
     def get_context(self, limit: int = 20) -> list[dict]:
         store = get_store()

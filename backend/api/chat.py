@@ -17,6 +17,7 @@ from backend.assistant.mcp_manager import MCPManager
 from backend.assistant.selenium_tools import SELENIUM_TOOL_DEFINITIONS
 from backend.assistant.exa_tools import EXA_TOOL_DEFINITIONS
 from backend.assistant.fetch_tools import FETCH_TOOL_DEFINITIONS
+from backend.assistant.mcp_server_opencode import STATIC_TOOL_DEFINITIONS as OPENCODE_TOOL_DEFINITIONS
 from backend.assistant.memory.conversation_manager import ConversationManager
 from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
 from backend.api.screenshots import get_screenshot_store
@@ -82,18 +83,28 @@ WEATHER_INSTRUCTIONS = """
 
 PROJECT_INSTRUCTIONS = """
 ### Project Tracking
-- When starting a NEW project, link it by calling:
-    remember(entity="project:<name>", relation="status", value="started", node_type="project")
-- When RESUMING an existing project:
-    1. recall_entity("project:<name>") to find the project and ALL linked conversations
-    2. If the entity exists with status 'scraped', tell the user: "The project '<name>' was scrapped previously. Use set_status('project:<name>', 'active') to reactivate it."
-    3. If the entity does not exist (returns "No entity found"), tell the user: "No project found with that name."
-    4. Otherwise, call get_conversation_history(<conv_id>) for EACH linked conversation by ID
-    5. Present a full summary: what was done, what was next, what to do now
-- Update progress:
-    remember(entity="project:<name>", relation="last_task", value="<what_was_done>", node_type="project")
-    remember(entity="project:<name>", relation="next_task", value="<what_is_next>", node_type="project")
-- To list all active projects, call recall("project:") (with colon) — this finds all project-prefixed nodes in the knowledge graph. Check each project's 'status' field to see if it's active, inactive, or scraped."""
+- You have dedicated project tools: create_project, resume_project, list_projects, update_project_status, add_project_note. Use these instead of remember/recall for projects.
+- When RESUME is called, resume_project(name) returns full project state (status, files, conversations, graph edges). If fuzzy match succeeds it says "Found it!" — otherwise it suggests similar names.
+- To LIST active projects, call list_projects(status="active"). Filters: active, paused, scrapped.
+- To UPDATE status, call update_project_status(name, status). Valid statuses: active, paused, scrapped.
+- To add research notes, call add_project_note(name, filename, content). This writes a .md to the project folder.
+- Projects auto-pause after 30 days of no activity.
+- Conversation IDs are auto-linked to the project — no need to call remember() for that.
+- To BUILD code, use opencode tools (opencode_write, opencode_bash, opencode_read, opencode_edit, opencode_glob, opencode_grep).
+- After EVERY project tool call, tell the user what happened."""
+
+BUILD_MODE_INSTRUCTIONS = """
+### Build Mode — Iterative Project Building
+When the user asks you to build, create, make, scaffold, or set up a project:
+1. Plan — briefly describe your approach
+2. Create — use opencode_bash (mkdir, git init, npm init) and opencode_write to create files
+3. Install — run dependency installers (npm install, pip install, etc.)
+4. Code — write the actual source files
+5. Test — run the test command (npm test, pytest, etc.)
+6. Fix — if tests fail, read the error output, fix the code, and re-run tests
+7. Complete — when ALL tests pass, stop calling tools and describe what was built
+You can think out loud between tool calls. Your intermediate thoughts will be shown to the user in real-time.
+Never call the same tool with the same arguments more than 3 times. If you are stuck, explain the issue instead of repeating."""
 
 CORE_TOOL_NAMES = {
     "create_todo", "update_todo", "delete_todo", "list_todos",
@@ -105,6 +116,9 @@ CORE_TOOL_NAMES = {
     "unified_search",
     "create_reminder", "list_reminders", "delete_reminder",
     "web_search_exa", "web_fetch_exa", "web_search_advanced_exa",
+    # Project tools (always available)
+    "create_project", "resume_project", "list_projects",
+    "update_project_status", "add_project_note",
     # System commands
     "open_application", "close_application",
     "set_volume", "get_volume",
@@ -113,6 +127,9 @@ CORE_TOOL_NAMES = {
     # File access
     "read_file", "write_file", "append_file", "list_directory",
     "get_weather",
+    # opencode build tools (always available)
+    "opencode_bash", "opencode_write", "opencode_read",
+    "opencode_edit", "opencode_glob", "opencode_grep",
 }
 
 GIT_TOOL_NAMES = {
@@ -142,45 +159,24 @@ SELENIUM_TOOL_NAMES = {
 
 FETCH_TOOL_NAMES = {"fetch"}
 
+OPENCODE_TOOL_NAMES = {
+    "opencode_bash", "opencode_write", "opencode_read",
+    "opencode_edit", "opencode_glob", "opencode_grep",
+}
+
 GROUP_SETS = {
     "core": CORE_TOOL_NAMES,
     "git": GIT_TOOL_NAMES,
     "github": GITHUB_TOOL_NAMES,
     "browser": SELENIUM_TOOL_NAMES,
     "fetch": FETCH_TOOL_NAMES,
+    "opencode": OPENCODE_TOOL_NAMES,
 }
 
 
-MAX_TOOL_RESULT_LENGTH = 3000
+MAX_TOOL_RESULT_LENGTH = 50000
 
-SKIP_SECOND_CALL = {
-    # CRUD operations — result IS the answer
-    "create_todo", "update_todo", "delete_todo",
-    "create_event", "update_event", "delete_event",
-    # Memory management
-    "forget", "delete_entity", "set_status", "remember",
-    # Screenshot delete
-    "delete_screenshot",
-    # Browser actions (not reads)
-    "navigate", "click_to_element", "set_value_to_input_element",
-    "take_screenshot", "run_javascript_in_console",
-    "check_page_ready",
-    "local_storage_add", "local_storage_read", "local_storage_remove",
-    "local_storage_read_all", "local_storage_remove_all",
-    # Git actions (not reads)
-    "git_commit", "git_add", "git_reset",
-    "git_create_branch", "git_checkout",
-    # GitHub actions (not reads)
-    "create_branch", "create_or_update_file", "create_repository",
-    "delete_file", "fork_repository",     "push_files",
-    # Reminder actions
-    "create_reminder", "delete_reminder",
-    # System commands (read-only — result IS the answer)
-    "get_volume", "get_system_info", "get_active_window",
-    "copy_to_clipboard",
-    # File access (result IS the answer)
-    "read_file", "write_file", "append_file", "list_directory",
-}
+_BUILD_REQUEST_KEYWORDS = re.compile(r"\b(build|create|make|scaffold|init|set up)\b", re.I)
 
 CONNECTION_HINT = (
     "Make sure Ollama is running locally (`ollama serve`), "
@@ -250,6 +246,7 @@ async def _run_engine(
         )
     system += WEATHER_INSTRUCTIONS
     system += PROJECT_INSTRUCTIONS
+    system += BUILD_MODE_INSTRUCTIONS
 
     if kg:
         keywords = extract_keywords(user_text)
@@ -326,16 +323,68 @@ async def _run_engine(
         await _send_json(ws, {"type": "done"})
         return
 
-    if tool_calls:
+    MAX_ITERATIONS = 20
+    DUPLICATE_LIMIT = 3
+    seen_calls: list[tuple] = []
+    opencode_used = False
+    iteration = 0
+
+    while iteration < MAX_ITERATIONS:
+        iteration += 1
+
+        if iteration > 1:
+            try:
+                def llm_call(msgs):
+                    resp = llm.chat(msgs, stream=False, tools=filtered_tools)
+                    resp.raise_for_status()
+                    return llm.extract_response(resp)
+                content, tool_calls = await loop.run_in_executor(None, llm_call, messages)
+            except httpx.ConnectError:
+                await _send_json(ws, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
+                break
+            except httpx.HTTPStatusError as e:
+                await _send_json(ws, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}. Check your model and API key."})
+                break
+            except Exception as e:
+                await _send_json(ws, {"type": "error", "content": f"LLM error: {e}"})
+                break
+
+        if not tool_calls:
+            break
+
+        conv.add_message("assistant", content or "", tool_calls=tool_calls)
+
+        if content and content.strip():
+            await _send_json(ws, {"type": "token", "content": content})
+
         for tc in tool_calls:
             fn_name = tc["function"]["name"]
             fn_args = tc["function"]["arguments"]
+            tool_call_id = tc.get("id", f"call_{iteration}_{fn_name}")
+
             if isinstance(fn_args, str):
                 fn_args = json.loads(fn_args)
+
+            if fn_name in OPENCODE_TOOL_NAMES:
+                opencode_used = True
+
             result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
             if len(result) > MAX_TOOL_RESULT_LENGTH:
                 result = result[:MAX_TOOL_RESULT_LENGTH] + "\n...[truncated]"
-            conv.add_message("assistant", f"[Called {fn_name}] {result}")
+
+            args_hash = json.dumps(fn_args, sort_keys=True)
+            result_head = result[:100]
+            call_key = (fn_name, args_hash, result_head)
+            seen_calls.append(call_key)
+            dup_count = sum(1 for c in seen_calls if c == call_key)
+            if dup_count >= DUPLICATE_LIMIT:
+                result = f"[Stuck after {dup_count} identical attempts] {result}"
+                content = "I got stuck — the same action repeated with the same result."
+                tool_calls = None
+                await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
+                break
+
+            conv.add_message("tool", result, tool_call_id=tool_call_id)
 
             if kg and fn_name in ("create_todo", "update_todo", "delete_todo"):
                 from backend.core.data_store import get_store as get_data_store
@@ -379,9 +428,9 @@ async def _run_engine(
                 path_start = result.find("screenshot_")
                 if path_start != -1:
                     raw_filename = result[path_start:].split()[0].rstrip(". \n")
-                    store = get_screenshot_store()
+                    ss_store = get_screenshot_store()
                     src_path = os.path.join(os.path.dirname(__file__), "..", "..", raw_filename)
-                    saved = store.add_screenshot(src_path)
+                    saved = ss_store.add_screenshot(src_path)
                     if saved:
                         tool_msg["image_url"] = f"/screenshots/{saved}"
 
@@ -395,23 +444,13 @@ async def _run_engine(
 
             await _send_json(ws, tool_msg)
 
-        skip_second = all(tc["function"]["name"] in SKIP_SECOND_CALL for tc in tool_calls)
-        needs_final = not content or not content.strip()
-        if skip_second and not needs_final:
-            pass
-        else:
-            messages = [{"role": "system", "content": system}] + conv.get_context()
+        if not tool_calls:
+            break
 
-            try:
-                def second_call(msgs):
-                    resp = llm.chat(msgs, stream=False, tools=[])
-                    resp.raise_for_status()
-                    return llm.extract_response(resp)
+        messages = [{"role": "system", "content": system}] + conv.get_context()
 
-                content, _ = await loop.run_in_executor(None, second_call, messages)
-            except Exception as e:
-                logger.error(f"Second LLM call error: {e}")
-                content = None
+        if iteration >= MAX_ITERATIONS:
+            content = (content or "") + "\n\n[Reached maximum iterations — the build may be incomplete.]"
 
     if content:
         voice_text = _make_voice_text(content)
@@ -423,6 +462,14 @@ async def _run_engine(
         conv_data = get_store().get_conversation(conv.current_id)
         if conv_data:
             kg.sync_conversation(conv_data)
+
+    if opencode_used and _BUILD_REQUEST_KEYWORDS.search(user_text) and content:
+        from backend.core.scheduler import get_scheduler
+        get_scheduler().fire_notification(
+            title="Build Complete",
+            body=content[:200],
+            category="event_reminder",
+        )
 
     await _send_json(ws, {"type": "done"})
 
@@ -471,6 +518,8 @@ async def chat_websocket(websocket: WebSocket):
                     mcp.add_static_tools(name, EXA_TOOL_DEFINITIONS)
                 elif name == "fetch":
                     mcp.add_static_tools(name, FETCH_TOOL_DEFINITIONS)
+                elif name == "opencode":
+                    mcp.add_static_tools(name, OPENCODE_TOOL_DEFINITIONS)
     mcp_tools = []
     if mcp._sessions:
         try:

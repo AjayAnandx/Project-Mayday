@@ -2,7 +2,7 @@
   "name": "mayday-monorepo",
   "private": true,
   "scripts": {
-    "backend": "python -m uvicorn backend.main:app --reload --port 8771",
+    "backend": "python -m uvicorn backend.main:app --reload --port 8771 --reload-exclude 'projects/**' --reload-exclude 'operations/**' --reload-exclude 'conversations/**' --reload-exclude 'screenshots/**' --reload-exclude 'data.json'",
     "frontend": "cd frontend && npm run dev",
     "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
     "build": "cd frontend && npm run build",

@@ -16,6 +16,10 @@ from backend.functions.system_functions import (
     get_system_info, get_active_window,
     read_file, write_file, append_file, list_directory,
 )
+from backend.functions.project_functions import (
+    create_project, resume_project, list_projects,
+    update_project_status, add_project_note,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -696,9 +700,94 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_project",
+            "description": "Create a new project. Creates a project entry JSON record, creates a folder under projects/, syncs to knowledge graph, and logs the operation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Project name"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "resume_project",
+            "description": "Resume an existing project. Returns full project state: status, files, linked conversations, knowledge graph edges. Supports fuzzy name matching — if no exact match, suggests similar project names.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Project name to resume"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_projects",
+            "description": "List all projects, optionally filtered by status (active/paused/scrapped).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["active", "paused", "scrapped"],
+                        "description": "Optional status filter",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_project_status",
+            "description": "Transition a project between states: active ↔ paused ↔ scrapped. Use 'scrapped' to archive a project permanently (tombstone set). Use resume_project to bring it back.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Project name"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["active", "paused", "scrapped"],
+                        "description": "New status",
+                    },
+                },
+                "required": ["name", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_project_note",
+            "description": "Write a research note (.md file) to the project folder. Creates the file inside projects/<project-slug>/ and syncs it to the knowledge graph.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Project name"},
+                    "filename": {"type": "string", "description": "Filename, e.g. research.md or architecture.md"},
+                    "content": {"type": "string", "description": "Markdown content of the note"},
+                },
+                "required": ["name", "filename", "content"],
+            },
+        },
+    },
 ]
 
 FUNCTION_MAP = {
+    "create_project": create_project,
+    "resume_project": resume_project,
+    "list_projects": list_projects,
+    "update_project_status": update_project_status,
+    "add_project_note": add_project_note,
     "create_todo": create_todo,
     "update_todo": update_todo,
     "delete_todo": delete_todo,

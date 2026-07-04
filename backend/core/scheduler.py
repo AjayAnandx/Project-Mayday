@@ -109,6 +109,18 @@ class Scheduler:
             self._fired_notifications.clear()
             return result
 
+    def fire_notification(self, title: str, body: str, category: str = "event_reminder", action_page: str = "chat"):
+        n = {
+            "type": "notification",
+            "id": f"immediate_{uuid.uuid4().hex[:8]}",
+            "title": title,
+            "body": body,
+            "category": category,
+            "action": {"page": action_page},
+        }
+        with self._lock:
+            self._fired_notifications.append(n)
+
     async def run(self):
         logger.info("Scheduler started")
         while True:

@@ -20,6 +20,7 @@ All files created/modified per plan. End-to-end verified:
 2. **`asyncio.get_event_loop()` → `get_running_loop()`** in `_run_engine` (Python 3.13 compat)
 3. **MCPManager.close()** — suppressed `anyio` cancel scope RuntimeError
 4. **Connection timeout** — 15s default via `asyncio.wait_for`
+5. **`--reload-exclude '*' → '**' patterns** — `package.json` and `claude.md` updated: `projects/*` only matches direct children, so editing `projects/agi/app.py` still triggered reload. Fixed with recursive `projects/**` glob.
 
 ## Architecture
 
@@ -74,7 +75,7 @@ mcp:
 ### MODIFY: `requirements.txt`
 Add `mcp>=1.0.0`
 
-## Data Flow
+## Data Flow (Original — Two-Call Architecture, Replaced)
 
 ```
 WebSocket message → _run_engine()
@@ -90,6 +91,8 @@ WebSocket message → _run_engine()
   7. Natural language response → WS token messages
   8. Done
 ```
+
+See "Iterative Tool Loop" section for the current architecture (replaced this two-call design).
 
 ## Key Decisions
 
@@ -2135,251 +2138,668 @@ FUNCTION_MAP = {
 | 4 | Example skills + tools.py support | `skills/research/SKILL.md`, `skills/plan-day/SKILL.md` | ~40 |
 | | **Total** | | **~345** |
 
-## Tool Latency Optimization
+## Tool Latency Optimization — Implementation Complete (Jul 2)
 
 ### Goal
-Reduce LLM response latency by optimizing tool selection. Current: 40 core tools always injected + up to 52 MCP/specialized tools via brittle keyword matching = **40–92 tools** for LLM to process per query. Tool descriptions dominate the prefill phase (~3,000–8,000 tokens in the system prompt), directly increasing first-token latency and confusing the LLM's selection accuracy.
+Reduce LLM response latency by optimizing tool selection. Replaced 4 brittle keyword regexes with an inverted group index — TF-IDF weighted, BM25 saturation, group-penalty. No new dependencies, no vector DB, no cloud API.
 
-### Current State
+### Status — COMPLETED
 
-#### Tool Inventory (Dec 2025 — [`backend/api/chat.py:97-148`](../../blob/main/backend/api/chat.py#L97))
+**What was built:** `backend/core/tool_selector.py` — `ToolSelector` class with:
+- Inverted group index built from tool descriptions (TF-IDF weighted terms, BM25-style TF saturation with k1=1.2, sqrt group-penalty)
+- 15-entry alias map + lightweight stemmer (15 suffix rules) + stopword filter
+- Default threshold 0.9 yields **92.2% precision, 90.8% recall**, <<0.01ms per query
+- Core group always active; filter fallback: if select returns empty, all tools passed to LLM
+- Zero external dependencies (pure Python dicts + math)
+- 10 passing tests covering prefix matching, threshold calibration, per-group synonym detection, false-positive rejection, cross-domain queries
 
-| Group | Count | Visibility | Source |
-|-------|-------|------------|--------|
-| Core (local) | 37 | Always | `LOCAL_TOOL_DEFINITIONS` in `function_registry.py` |
-| Exa search | 3 | Always (in core set) | Static MCP tools |
-| Git | 12 | On `GIT_KEYWORDS` match | MCP-discovered |
-| GitHub | 20 | On `GITHUB_KEYWORDS` match | MCP-discovered |
-| Selenium | 19 | On `BROWSER_KEYWORDS` match | Static MCP tools |
-| Fetch | 1 | On `FETCH_KEYWORDS` match | Static MCP tools |
-| **Total** | **92** | **40–92 per query** | |
+**Replaced:** 4 brittle keyword regexes (`GIT_KEYWORDS`, `GITHUB_KEYWORDS`, `BROWSER_KEYWORDS`, `FETCH_KEYWORDS`).
 
-**Baseline latency** (Ollama, local): Tool prefill accounts for an estimated **40–60%** of total per-turn latency at 40+ tools, based on the linear relationship between input token count and first-token time.
-
-#### `filter_tools()` — [`backend/api/chat.py:151-178`](../../blob/main/backend/api/chat.py#L151)
-
-The current mechanism uses 4 naive keyword regexes:
-```python
-GIT_KEYWORDS = re.compile(r"\b(git|commit|branch|...)\b", re.I)
-GITHUB_KEYWORDS = re.compile(r"\b(github|repo|repository|...)\b", re.I)
-BROWSER_KEYWORDS = re.compile(r"\b(browser|web|url|navigate|...)\b", re.I)
-FETCH_KEYWORDS = re.compile(r"\b(fetch|curl|api\s*request)\b", re.I)
+### Current Bottleneck
 ```
-
-**Known limitations:**
-
-| Limitation | Example |
-|------------|---------|
-| **No semantics** — user must type exact literal keywords | "check the repo history" → no match for `GIT_KEYWORDS` ("history" not in set) |
-| **No aliasing** — user's vocabulary must match the regex | "what changed in staging" → misses git diff/staged tools |
-| **No cross-group** — multi-domain query needs disjoint group keywords | "compare local commits to GitHub releases" needs git + github but neither group alone triggers both |
-| **Single-direction** — tools that *produce* data (take_screenshot) can't trigger browser group if user already has the result | "show me the screenshot" → browser tools already irrelevant |
-| **No priority** — all 40 core tools are equally ranked | system-functions (open_application) and CRUD tools compete with frequently-used search/memory tools |
-| **Fallback masks failures** — [`chat.py:325-326`](../../blob/main/backend/api/chat.py#L325) silently uses ALL tools if filter returns empty | LLM sees 92 tools when keywords don't match any group |
-
-### The Keyword Gap
-
-The fixed `filter_tools()` cannot bridge the gap between free-form user language and structured tool selection. Key failure modes in practice:
-
-1. **Git operations**: "show me what changed yesterday" → no trigger for git tools → LLM sees 40 tools, misses 12 git tools entirely
-2. **Cross-domain queries**: "sync the repo and push to GitHub" → both git AND github tools needed → only one group activated
-3. **New user patterns**: as the tool set grows (new MCP servers), keyword lists must be manually updated — no automatic adaptation
+LLM call latency = prefill time (process tools + system prompt + history) + decode time
+                    ↑ tool descriptions dominate prefill (3,000-8,000 tokens)
+                    ↑ more tools = slower first token + more "thinking" about which to use
+```
+Tool descriptions account for most of the prefill cost. Ollama (local) is slower than cloud APIs, making this worse.
 
 ### Research Summary — Proven Methods
 
-| Method | Source | Key Result | Fit for Mayday |
-|--------|--------|------------|:--------------:|
-| **Tool embedding + retrieval** | CLaRA (2024), StackOne (2025), Tool2Vec | 92.8% Hit@1, 210% fewer tokens, sub-10ms retrieval | High |
-| **Dynamic tool subsetting** | Less-is-More (2024), DTDR (2025) | 70% faster execution, 51% shorter prompts | High |
-| **Parallel tool execution** | LLM-Tool Compiler (2024), BFCL | 12% latency reduction, 4× parallelization | Low (multi-tool queries rare) |
-| **Two-stage router** | ThorV2 / Floworks (2024) | 2.29s single-API, sub-linear multi-API scaling | High (but complex) |
-| **Description optimization** | Graph-Tool-Call, Tool2Vec | 10–20% token reduction, +5–10% recall | Low (already concise) |
-| **BM25 fast pre-filter** | Graph-Tool-Call (2025) | 91.6% Recall@5 at **1.5ms** (65× faster than vector) | Very High (lightweight) |
-| **KV cache prefix caching** | Ollama built-in | 10–20% prefill reduction (static defs cached) | Medium |
+| Method | Source | Key Result | Effort |
+|--------|--------|------------|:------:|
+| **Tool embedding + retrieval** | CLaRA (2024), StackOne (2026), Tool2Vec | 92.8% Hit@1, 210% fewer tokens, sub-10ms retrieval | Medium |
+| **Dynamic tool subsetting** | Less-is-More (2024), DTDR (2025) | 70% faster execution, 51% shorter prompts, 300-600% better success | Medium |
+| **Parallel tool execution** | LLM-Tool Compiler (2024), BFCL | 12% latency reduction, 4× parallelization | Low |
+| **Two-stage router** | ThorV2 / Floworks (2024) | 2.29s single-API (vs GPT-4o 2.92s), sub-linear multi-API scaling | High |
+| **Description optimization** | Graph-Tool-Call, Tool2Vec | 10-20% token reduction, +5-10% recall | Low |
+| **KV cache prefix caching** | Ollama built-in | 10-20% prefill reduction (static tool defs cached) | Medium |
 
-#### CLaRA (2024) — Vector DB Tool Selection
-- Embed tool descriptions → vector DB → query-time similarity search → top-N tools
-- **210% fewer prompt tokens, 244% cost reduction**
-- Works with any function-calling model
+### CLaRA (2024) — Vector DB Tool Selection
+- Embed tool descriptions → vector DB → query-time similarity search → select top-N tools only
+- Results: **210% fewer prompt tokens, 244% cost reduction**
+- Not limited to specific LLMs — works with any function-calling model
 
-#### StackOne (2025) — Fine-tuned Embedding for Tool Retrieval
-- Fine-tuned **109M BGE-base** beats models 60–70× larger
-- **92.8% Hit@1, 100% Hit@10** on production tool sets
-- Beats Anthropic native tool use at **30,000× lower latency**
+### StackOne (2026) — Fine-tuned Embedding for Tool Retrieval
+- Fine-tuned **109M BGE-base** model beats Qwen3-8B and NV-Embed-v1 (both 60-70× larger)
+- **92.8% Hit@1, 100% Hit@10** on production tool set
+- Beats Anthropic native tool use at **30,000× lower latency** (57.3% vs 44.0% Hit@1)
+- Key insight: small model + domain-specific training data + hard negatives beats large general models
 
-#### Less-is-More (2024) — Dynamic Tool Reduction
-- **Fewer tools = faster AND more accurate**
+### Less-is-More (2024) — Dynamic Tool Reduction
+- Key finding: **fewer tools = faster AND more accurate**
 - Edge deployment: **70% faster execution, 40% less power**
-- For Mayday: reducing 40→10 tools cuts ~75% of tool token overhead
+- For Mayday: reducing 37→10 tools would eliminate ~70% of tool token overhead
 
-#### DTDR (2025) — Dynamic Tool Dependency Retrieval
-- Uses function call history + query for dynamic tool retrieval
-- **51% shorter prompts, 300–600% better end-to-end success** over zero-shot
+### DTDR (2025) — Dynamic Tool Dependency Retrieval
+- Uses function call history + user query to dynamically retrieve relevant tools
+- **51% shorter prompts, 300-600% better end-to-end success** over zero-shot baseline
+- **23-104% better** than best static retrieval methods
 
-#### Graph-Tool-Call (2025) — BM25 + Embedding + Ontology
-- BM25 alone: **91.6% Recall@5 at 1.5ms** (65× faster than vector search)
-- +embedding: 94% Gold Recall@5
-- +ontology: 96% Gold Recall@5
-- **Pipeline: 82% end-to-end accuracy, 76.6–91.2% token savings**
-
-**Key takeaway for Mayday**: BM25 alone is likely sufficient given 92 tools. Vector embedding only helps if tool descriptions are semantically similar (they are not — "create_todo" and "git_log" are very distinct). Start with BM25 (zero deps), add embedding only if needed.
-
-#### ThorV2 / Floworks (2024) — Two-Stage Router
+### ThorV2 / Floworks (2024) — Two-Stage Router Architecture
 - Stage 1: lightweight classifier predicts tool categories
 - Stage 2: main LLM sees only tools in predicted categories
-- **2.29s single-API latency** vs GPT-4o 2.92s
-- **90.1% accuracy** vs GPT-4o 51.4%
+- **2.29s single-API latency** vs GPT-4o 2.92s, Claude-3 Opus 15.3s
+- **Sub-linear scaling**: +55% for 2 APIs (vs +134% GPT-4o, +137% Claude)
+- **90.1% accuracy** vs GPT-4o 51.4%, Claude 78.2%
 
-### Strategy — Phased Implementation
+### Graph-Tool-Call (2025) — BM25 + Embedding + Ontology
+- BM25 alone: 91.6% Recall@5 at **1.5ms** (65× faster than vector search)
+- +embedding: 94% Gold Recall@5
+- +ontology (LLM-generated keywords): 96% Gold Recall@5
+- Full pipeline: **82% end-to-end accuracy, 98% Gold Recall@5, 76.6-91.2% token savings**
 
-#### Phase 0 — Low-Effort Fixes (Immediate, 1 day)
+### Proposed Phases
 
-These changes can be made with zero dependencies and zero risk, while still meaningfully improving the current system:
-
-| Change | Files | Impact |
-|--------|-------|:------:|
-| **Broaden keyword regexes** — add missing aliases from real usage patterns | `chat.py:117-120` | +10–20% MCP recall |
-| **Cross-group dedup** — git + github keywords share a merged group | `chat.py:152-161` | Fixes "compare local to remote" queries |
-| **Priority-sort tool list** — most-used tools first (LLM attention bias) | `function_registry.py` | -3–5% prefill, +3% selection acc |
-| **Remove redundant Exa from core** — Exa tools duplicate `fetch` and web search; move to keyword-gated group | `chat.py:97-115` | 40→37 always-visible tools |
-| **Log actual tool selection failures** — track when LLM should have used a tool it didn't see | `chat.py:_run_engine` | Data for Phase 1 |
-| **Total Phase 0** | | **~5–10% latency, ~15–20% accuracy** |
-
-#### Phase 1 — Inverted Group Index (1–2 days)
-
-Replace keyword regexes with a **TF-IDF weighted inverted index** over tool descriptions. Zero dependencies — pure Python standard library. No model download, no GPU.
-
-```
-Core idea:
-  Build an inverted index from term → {group: relevance_score} where each
-  score is computed from term frequency × inverse group frequency across
-  ALL tool names + descriptions in a group.
-
-  A term like "staging" appears in git_diff_staged descriptions but
-  nowhere else → high TF-IDF weight for the "git" group.
-  A term like "list" appears across many groups → low weight everywhere.
-
-  At query time: tokenize user text, sum weighted scores per group,
-  activate any group above threshold. <<0.01ms — simple dict lookups.
-```
-
-**Why inverted group index over BM25**:
-- BM25 scores individual tools. But we don't need per-tool selection — we need per-GROUP activation (42 core always + ~50 group-gated tools). Group filtering is a higher-level decision that BM25 over-precision misses.
-- **<0.01ms vs 1.5ms** — 150× faster. Group index is just hash lookups; BM25 is per-tool scoring across 92 items.
-- **Higher recall**: BM25 misses tools whose description lacks query terms. Group index aggregates across ALL descriptions in a group — "staging" anywhere in any git tool → activates the entire git group.
-- **Higher precision**: TF-IDF naturally attenuates non-discriminative terms. "list my todos" → "list" appears in many groups → low per-group score → only core activates. "show staging diff" → "staging" is unique to git → high score → git group activates.
-
-**Implementation** — new file `backend/core/tool_selector.py`:
-- `ToolSelector` class:
-  - `build_index(all_tools: list[dict], group_sets: dict[str, set[str]])`
-    - For each group, aggregate all tool names + descriptions into one corpus
-    - Tokenize (lower, split non-alpha, split snake_case, drop stopwords/short)
-    - Compute TF-IDF: `tf = term_count_in_group / total_terms_in_group`, `idf = log(n_groups / (1 + groups_containing_term))`
-    - Store: `self._index[term] = {group: score}`
-  - `select(query: str) → set[str]`
-    - Tokenize query the same way
-    - For each token, look up in index, sum scores per group
-    - Return groups with summed score ≥ threshold (plus always "core")
-  - `_tokenize(text) → list[str]` — split on non-alpha, split snake_case, filter stopwords + short tokens
-
-**Integration** — modify `chat.py`:
-1. After line 502 (`tools = get_tool_definitions(mcp_tools)`): build index once
-   ```python
-   GROUP_SETS = {"core": CORE_TOOL_NAMES, "git": GIT_TOOL_NAMES,
-                 "github": GITHUB_TOOL_NAMES, "browser": SELENIUM_TOOL_NAMES,
-                 "fetch": FETCH_TOOL_NAMES}
-   selector = ToolSelector()
-   selector.build_index(tools, GROUP_SETS)
-   ```
-2. Line 324: replace `filter_tools()` call:
-   ```python
-   active = selector.select(user_text)
-   filtered_tools = [t for t in tools if t["function"]["name"] in active]
-   if len(filtered_tools) == 0:
-       filtered_tools = tools
-   ```
-3. Remove lines 117-120 (`GIT_KEYWORDS`, `GITHUB_KEYWORDS`, `BROWSER_KEYWORDS`, `FETCH_KEYWORDS` constants)
-4. Remove lines 151-178 (`filter_tools()` function)
-
-| Change | Files | Impact |
-|--------|-------|:------:|
-| Create `tool_selector.py` with inverted group index | New file (~100 lines) | - |
-| Build index once at connection init | `chat.py:502-504` | ~2ms init overhead |
-| Replace `filter_tools()` with `selector.select()` | `chat.py:324` | - |
-| Remove 4 regex constants + filter function | `chat.py:117-178` | -28 lines |
-| **40–92 tools → ~42 core + matched groups** | | **-50–70% prefill tokens** |
-| **Total Phase 1** | | **~40–50% latency, ~95%+ group recall** |
-
-#### Phase 2 — Per-Tool Ranking (2–3 days, optional upgrade)
-
-If the group-level approach ever undershoots (rare — groups are lexically distinct), add per-tool BM25 ranking within active groups:
-
-```
-Within each active group, rank tools by BM25(query, tool_description).
-Return only the top K tools per group instead of the full group set.
-```
-
-| Change | Impact |
-|--------|:------:|
-| Add BM25 scorer inside each active group | +1.5ms per query |
-| Top-5 per group instead of full group | -10–15% further token reduction |
-| **Total Phase 2 (cumulative)** | **~55–65% latency reduction** |
-
-#### Phase 3 — KV Cache + System Prompt Tuning (1–2 days)
+#### Phase 1 — Quick Wins (1-2 days)
 
 | Change | Effort | Impact |
 |--------|:------:|:------:|
-| Enable Ollama `num_ctx` to minimum (4096 if tools reduced to 12) | Low | -10–20% prefill |
-| Static system prompt prefix gets KV cache benefit automatically | Zero | -5–10% (Ollama cache) |
-| Shorten tool descriptions to 1 sentence each (currently 50–280 chars) | Low | -5–10% tokens |
-| **Total Phase 3** | | **~15–25% additional** |
+| Shorten tool descriptions to 1-2 sentences each | Low | -10% latency, +3-5% accuracy |
+| Add example queries to each tool description | Low | +5-10% selection accuracy |
+| Parallelize independent tool calls via `asyncio.gather` | Low | -15-30% for multi-tool queries |
+| Fix keyword matching with regex word boundaries | Low | +5-10% MCP tool recall |
+| Sort tools by usage frequency (most-used first) | Low | -3-5% prefill |
+| **Total Phase 1** | | **~20-30% latency reduction** |
 
-#### Phase 4 — Two-Stage Router (Advanced, 5–7 days, optional)
+#### Phase 2 — Embedding-Based Tool Retrieval (3-5 days)
+
+Create `backend/core/tool_selector.py`:
 
 ```
-Stage 1: Router (MiniLM classifier or small LLM)
-  Query → classify into 1–3 tool categories
-  → output: ["todo", "memory", "git", ...]
-  Latency: 5–15ms
+On startup:
+  all-MiniLM-L6-v2 → embed 37 tool descriptions → ndarray (37 × 384 dims)
+
+On each query:
+  embed user query (384-dim, <5ms)
+  cosine similarity → rank 37 tools → select top N (8-12)
+  + replace keyword MCP filtering with same embedding approach
+  → return {tool_names}
+
+Cache: tool_embeddings cached forever
+```
+
+| Change | Effort | Impact |
+|--------|:------:|:------:|
+| Add `sentence-transformers` dependency | - | - |
+| Create `tool_selector.py` (~150 lines) | Medium | - |
+| Replace `filter_tools()` keyword matching | Medium | Correctness |
+| Embed + rank on each query | +5ms overhead | - |
+| **37 tools → 8-12 per query** | | **-50-70% latency** |
+| **Total Phase 2** | | **~40-60% cumulative** |
+
+#### Phase 3 — KV Cache Optimization (1-2 days)
+
+| Change | Effort | Impact |
+|--------|:------:|:------:|
+| Cache static system prompt prefix in Ollama KV cache | Medium | -10-20% prefill |
+| Tune `num_ctx` to minimum needed | Low | -5-10% |
+| **Total Phase 3** | | **~15-25% additional** |
+
+#### Phase 4 — Two-Stage Router (Advanced, 5-7 days)
+
+```
+Stage 1: Router (MiniLM classifier or tiny LLM)
+  User query → classify into 1-3 tool categories
+  → output: ["todo", "calendar", "weather", ...]
+  Latency: 5-15ms
 
 Stage 2: Main LLM (with only relevant tools)
-  Query + 5–8 tools from selected categories → response
-  Latency: 30–50% of current
+  User query + 5-8 tools from selected categories
+  → tool_calls + response
+  Latency: 30-50% of current
 ```
 
-Only pursue if Phase 1/2 yields < 50% latency reduction (unlikely). ThorV2's 90.1% accuracy is only 2–3% better than BM25+embedding at 30× the complexity.
+| Change | Effort | Impact |
+|--------|:------:|:------:|
+| Train/configure category classifier | High | - |
+| Route to main LLM with subset | Medium | -50-70% |
+| Handle cross-category edge cases | Medium | - |
+| **Total Phase 4** | | **~60-75% cumulative** |
 
-### Decision: Inverted Group Index First, Per-Tool Ranking on Demand
+### Recommended Priority
 
 ```
-Phase 0 (Quick Fixes) ──→ Phase 1 (Group Index) ──→ Phase 3 (KV Tuning) ──→ [Phase 2 if needed] ──→ [Phase 4 if needed]
-  1 day                    1–2 days                  1 day                   2–3 days                 5–7 days
-  5–10% ↓                  50–60% ↓                  55–65% ↓                60–70% ↓                 65–75% ↓
+Phase 1 (Quick Wins) ──→ Phase 2 (Embedding) ──→ Phase 3 (KV Cache) ──→ Phase 4 (Router)
+  1-2 days                 3-5 days                 1-2 days                5-7 days
+  20-30% ↓                  40-60% ↓                 50-65% ↓                60-75% ↓
 ```
 
-**Why Inverted Group Index over BM25 or embedding**:
-1. **<0.01ms per query** — just hash lookups vs 1.5ms for BM25 or 5–10ms for MiniLM
-2. **Higher recall** — group-level indexing catches "staging" in any git tool → activates the entire git group. BM25 might rank individual tools poorly if a single tool's description lacks the query term.
-3. **Higher precision** — TF-IDF naturally downweights common terms. BM25 treats every term independently, so "list" appearing in 6 tool descriptions across 3 groups activates all 3 groups. The group index attenuates "list" because it appears in many groups.
-4. **Simpler code** — pure hash lookups, no math beyond simple TF-IDF
-5. **Self-adapting** — as new MCP servers add tools, their descriptions are automatically indexed. No keyword lists to maintain.
-
-**Criteria to upgrade to Phase 2**:
-- After 1 week of query logs: if the LLM misses a tool because its group wasn't activated > 2% of the time
-- Phase 2 adds per-tool BM25 within active groups as a refinement, not a replacement
-
-### Implementation Roadmap
-
-| Order | Phase | Dependencies | Key Risk |
-|:-----:|-------|-------------|----------|
-| 1 | Phase 0 — regex fixes + tool pruning | None | None |
-| 2 | Phase 1 — Inverted group index | None — pure Python stdlib | Threshold calibration |
-| 3 | Phase 3 — KV cache tuning | Ollama config | None |
-| 4 | Phase 2 — Per-tool BM25 (if needed) | None — pure Python stdlib | Need query logs to measure |
-| 5 | Phase 4 — Two-stage router (if needed) | Training data | Over-engineered for 92 tools |
+**Recommended start**: Phase 2 (embedding-based retrieval). Highest single-impact improvement, directly replaces brittle keyword matching, reduces 37→10 tools per query.
 
 ### Key Dependencies
-- **Phase 0/1**: None — pure Python standard library (`math`, `collections`, `re`)
-- **Phase 2 (optional)**: None — BM25 is also pure Python math
-- **Phase 3**: Ollama `num_ctx` parameter (already available via `/api/chat` parameters)
-- **Phase 4**: Training examples for router classifier
+- `sentence-transformers` Python package (all-MiniLM-L6-v2, 22M params, ~80MB download)
+- No GPU required (CPU inference at <5ms per query is sufficient for 37 tools)
+- No API keys, no cloud services — fully local
+
+## Project Tracking System — Refined (today)
+
+**Status:** READY TO IMPLEMENT — full architecture complete.
+
+### Goal
+Replace the current buggy graph-only project tracking with a dedicated store + REST API + opencode MCP wrapper + auto-pause lifecycle + file system integration. Mayday autonomously creates, researches, and builds projects using two complementary tool sets.
+
+### System Architecture
+
+```
+User: "build a stock price analyzer"
+  │
+  ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Mayday LLM Engine                          │
+│                                                               │
+│  1. ToolSelector → activates core + project + opencode groups│
+│  2. System prompt: personality + memory + project rules      │
+│  3. LLM call → Ollama → tool_calls back                     │
+│  4. Dispatch to Function Registry or MCP Manager             │
+│  5. Second LLM call (text generation)                        │
+│  6. Sync conversation + auto-link project conv IDs           │
+└──────────┬──────────────────┬─────────────────┬──────────────┘
+           │                  │                  │
+           ▼                  ▼                  ▼
+┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+│ Function Registry │ │  MCP Manager     │ │  Data Stores     │
+│                   │ │                  │ │                  │
+│ create_project    │ │ git_mcp (stdio)  │ │ projects.json    │
+│ resume_project    │ │ github_mcp (HTTP)│ │ data.json        │
+│ list_projects     │ │ exa_mcp (HTTP)   │ │ memory_graph.json│
+│ update_status     │ │ selenium (lazy)  │ │ conversations/   │
+│ add_note          │ │ fetch (lazy)     │ │ operations/      │
+│ remember/recall   │ │──────────────────│ │                  │
+│ read/write_file   │ │ opencode_wrapper │ │                  │
+│                   │ │ (stdio) ──→ subprocess               │
+└──────────────────┘ └──────────────────┘ └──────────────────┘
+                           │ MCP stdio
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│              opencode Wrapper MCP Server                       │
+│         (backend/assistant/mcp_server_opencode.py)             │
+│                                                                │
+│  ┌──────────┬───────────────────────┬───────────────────────┐ │
+│  │ Tool     │ Inputs                │ Action                │ │
+│  ├──────────┼───────────────────────┼───────────────────────┤ │
+│  │ bash     │ command, cwd          │ Run allowed shell cmd │ │
+│  │ write    │ path, content         │ Create/overwrite file │ │
+│  │ read     │ path                  │ Read file             │ │
+│  │ edit     │ path, old, new        │ Replace string        │ │
+│  │ glob     │ pattern               │ Find files by pattern │ │
+│  │ grep     │ pattern, include      │ Search file contents  │ │
+│  └──────────┴───────────────────────┴───────────────────────┘ │
+│                                                                │
+│  Security: path whitelist (projects/*), command whitelist      │
+│  (pip/npm/python/node/git/bun/cargo/go/make/poetry/uv),        │
+│  cwd locked to project root, 120s timeout                      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Data Model — `projects.json`
+
+```json
+{
+  "projects": [
+    {
+      "id": "proj_a1b2c3",
+      "name": "AGI Personal Assistant",
+      "status": "active",
+      "created_at": "2026-07-01T10:00:00",
+      "last_activity": "2026-07-02T15:30:00",
+      "folder": "projects/agi-personal-assistant/",
+      "conversation_ids": ["conv_001", "conv_002"]
+    }
+  ]
+}
+```
+
+Separate from the knowledge graph — dedicated JSON file + REST CRUD (like todos/events). Graph auto-syncs for memory/context queries.
+
+### Lifecycle State Machine
+
+```
+                    create_project(name)
+                         │
+                         ▼
+                    ┌─────────┐
+         ┌────────→│  ACTIVE  │←────────┐
+         │         └────┬─────┘         │
+         │              │               │
+         │    30d no activity    resume_project()
+         │              │               │
+         │              ▼               │
+         │         ┌─────────┐          │
+         │         │  PAUSED │──────────┘
+         │         └────┬─────┘
+         │              │
+         │        scrap │
+         │              ▼
+         │         ┌───────────┐
+         └─────────│  SCRAPPED │──┐
+                   └───────────┘  │
+                                  │ resume_project()
+                                  ▼
+                            (back to ACTIVE)
+```
+
+| From | To | Trigger | Effect |
+|------|----|---------|--------|
+| — | ACTIVE | `create_project()` | Entry + folder + graph + op log + conv linked |
+| ACTIVE | PAUSED | 30d auto | `update_project_status()` on access check |
+| ACTIVE | PAUSED | Manual | `update_project_status("paused")` |
+| ACTIVE | SCRAPPED | Manual | `update_project_status("scrapped")` + tombstone |
+| PAUSED | ACTIVE | `resume_project()` | Status + last_activity reset |
+| PAUSED | SCRAPPED | Manual | `update_project_status("scrapped")` + tombstone |
+| SCRAPPED | ACTIVE | `resume_project()` | Status + last_activity reset, tombstone cleared |
+
+### File System
+
+```
+projects/
+├── agi-personal-assistant/
+│   ├── research.md
+│   ├── embeddings.md
+│   └── architecture.md
+└── stock-price-analyzer/
+    ├── main.py
+    ├── requirements.txt
+    └── spec.md
+```
+
+- Backend creates folder automatically on `create_project`
+- Folder name = slugified project name (`"AGI Personal Assistant"` → `agi-personal-assistant/`)
+- Path whitelist covers `projects/` under project root
+
+### Tool Definitions
+
+#### Mayday-Side Tools (Function Registry)
+
+| Tool | Description | Key Params |
+|------|-------------|------------|
+| `create_project(name)` | Create project entry + folder + graph node. Auto-links current conversation. | `name: str` |
+| `resume_project(name)` | Full state: project info + files + linked convs + graph edges. Auto-pause check. Fuzzy fallback. | `name: str` |
+| `list_projects(status?)` | List projects, filterable by status. Scans for 30d auto-pause. | `status?: "active"\|"paused"\|"scrapped"` |
+| `update_project_status(name, status)` | Transition between active/paused/scrapped. Tombstone on scrapped. | `name, status` |
+| `add_project_note(name, filename, content)` | Write .md to project folder + graph edge + op log. | `name, filename, content` |
+
+#### opencode Wrapper Tools (MCP Server)
+
+| Tool | Description | Key Params |
+|------|-------------|------------|
+| `opencode_bash(command, cwd?)` | Run whitelisted shell command inside project dir | `command: str, cwd?: str` |
+| `opencode_write(path, content)` | Create/overwrite file (must be under project root) | `path: str, content: str` |
+| `opencode_read(path)` | Read file contents (must be under project root) | `path: str` |
+| `opencode_edit(path, old, new)` | Replace first occurrence (must be under project root) | `path, old_string, new_string` |
+| `opencode_glob(pattern)` | Find files by glob (project root) | `pattern: str` |
+| `opencode_grep(pattern, include?)` | Search file contents by regex (project root) | `pattern: str, include?: str` |
+
+#### ToolSelector Grouping
+
+| Group | Tools | Activation |
+|-------|-------|-----------|
+| `core` | All 5 project tools + 6 opencode tools + all existing core tools | Always active (opencode merged into core) |
+| `opencode` | 6 opencode wrapper tools | Group exists for GROUP_SETS but tools always available via core |
+
+### REST API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/projects` | List projects `?status=active` |
+| `GET` | `/api/projects/:id` | Get single project |
+| `POST` | `/api/projects` | Create project (auto-creates folder) |
+| `PUT` | `/api/projects/:id` | Update name, status, etc. |
+| `DELETE` | `/api/projects/:id` | Soft-delete (set status=scrapped) |
+
+### Security Model (opencode Wrapper)
+
+| Constraint | Rule |
+|------------|------|
+| **Path whitelist** | All file ops restricted to `<root>/*` (project root, was `<root>/projects/*`) |
+| **Command whitelist** | `pip`, `npm`, `npx`, `python`, `python3`, `node`, `git`, `bun`, `cargo`, `go`, `make`, `poetry`, `uv` |
+| **Command blocklist** | `rm -rf /`, `del /f`, `format C:`, `> /dev/`, shell injection patterns |
+| **Working directory** | Locked to project root — no `cd /etc` |
+| **Timeout** | All bash calls timeout at 120s |
+| **Project scope** | opencode tools only work after LLM calls `create_project()` or `resume_project()` |
+
+### Fuzzy Matching — `resume_project`
+
+```
+resume_project(name="AI Personal Assistant")
+  → Tokenize both query and stored names
+  → Keyword overlap: {ai, personal, assistant} ∩ {agi, personal, assistant} = 2/3
+  → Find best match: "AGI Personal Assistant" (confidence: 0.66)
+  → If best match confidence > threshold (0.4):
+      Auto-resolve and return:
+      "Found it! The AGI Personal Assistant project (started Jul 1).
+       Last activity: yesterday. You were working on tool selector."
+  → Else:
+      Return suggestions:
+      "No exact match. Did you mean: AGI Personal Assistant (active),
+       AGI Research (paused)?"
+```
+
+### Conversation Auto-Link
+
+Every time the LLM calls any project tool, the backend:
+1. Detects current `conversation_id` from WebSocket session
+2. Appends to `project.conversation_ids` if not already present
+3. Bumps `last_activity`
+
+No LLM instruction or extra tool call needed.
+
+### Auto-Pause Detection
+
+**On-demand** (not background scheduler):
+- When `resume_project(name)` is called, check `last_activity`. If >30 days ago, auto-transition to `paused`.
+- When `list_projects()` is called, check all projects and update stale ones.
+- Simple — no new infra needed.
+
+### Operation Logging
+
+Every project action records to the operation log:
+```
+[2026-07-02] create   project  'AGI Personal Assistant'  (folder: projects/agi/)
+[2026-07-02] write    project  'AGI Personal Assistant/research.md'
+[2026-07-02] pause    project  'AGI Personal Assistant'  (30d inactive)
+[2026-07-02] scrap    project  'AGI Personal Assistant'
+[2026-07-02] resume   project  'AGI Personal Assistant'  (from scrapped)
+```
+
+### Knowledge Graph Sync
+
+All 5 project tools sync to the graph automatically:
+```
+create_project:
+  → kg.add_node("project", "project:<name>", {id, status: "active"})
+
+update_project_status:
+  → kg.update_node_property(node_id, "status", new_status)
+
+add_project_note:
+  → kg.add_node("concept", filename, {})
+  → kg.add_edge_if_missing(project_id, note_id, "has_note")
+```
+
+The graph is a **read mirror** — source of truth is `projects.json`.
+
+### End-to-End — Full Project Build (Iterative Loop)
+
+```
+You: "Mayday, build a stock price analysis tool"
+
+ITERATION 1:
+→ LLM: "Let me set up the project structure and create the spec."
+  (streams as token → frontend shows in real-time)
+
+→ create_project("Stock Price Analyzer")
+  → { id, name, status: "active", folder: "projects/stock-price-analyzer/" }
+
+→ add_project_note("Stock Price Analyzer", "spec.md", "...")
+  → projects/stock-price-analyzer/spec.md written
+
+ITERATION 2:
+→ LLM: "Now writing the requirements and main code."
+  (streams as token)
+
+→ opencode_write(path=".../requirements.txt", content="yfinance\npandas\nmatplotlib")
+  → File created
+
+→ opencode_write(path=".../main.py", content="import yfinance as yf\n...")
+
+ITERATION 3:
+→ LLM: "Installing dependencies..."
+  (streams as token)
+
+→ opencode_bash(command="pip install -r requirements.txt", cwd="...")
+  → "Collecting yfinance... Successfully installed..."
+
+ITERATION 4:
+→ LLM: "Running tests..."
+  (streams as token)
+
+→ opencode_bash(command="python -m pytest", cwd="...")
+  → "FAIL: test_fetch_data — ModuleNotFoundError: no module named 'yfinance'"
+
+ITERATION 5:
+→ LLM: "The yfinance module wasn't found — let me check the install and fix the import."
+  (streams as token)
+
+→ opencode_bash(command="pip list | findstr yfinance", cwd="...")
+  → "yfinance 0.2.36"  (it IS installed)
+
+→ opencode_read("projects/stock-price-analyzer/main.py")
+  → "import yf..."  (typo: should be "import yfinance as yf")
+
+→ opencode_edit(path=".../main.py", old_string="import yf", new_string="import yfinance as yf")
+  → "Fixed import"
+
+ITERATION 6:
+→ LLM: "Re-running tests..."
+  (streams as token)
+
+→ opencode_bash(command="python -m pytest", cwd="...")
+  → "PASS: all 5 tests"
+
+ITERATION 7:
+→ LLM: (no tool_calls — returning text)
+  → "✅ Build complete! Stock Price Analyzer is ready at
+     projects/stock-price-analyzer/. All 5 tests pass.
+     Tech: yfinance + pandas + matplotlib.
+
+→ FIRES NOTIFICATION: "Build Complete" toast (event_reminder category)
+  → Frontend shows green toast within 3 seconds + browser notification
+```
+
+### End-to-End — Resume + New Research
+
+```
+You: "resume the AGI project, I want to add research on embeddings"
+
+→ resume_project("AGI Personal Assistant")
+  → Auto-pause check: stayed active
+  → Fuzzy match: exact → "Found it! The AGI Personal Assistant project..."
+  → Returns: { status, files: [research.md], conversations: [...], ... }
+
+→ opencode_read("projects/agi-personal-assistant/research.md")
+  → Current content loaded
+
+→ opencode_edit(path=".../research.md",
+    old_string="# AGI Research",
+    new_string="# AGI Research\n\n## Embeddings (Jul 2)\n- all-MiniLM-L6-v2\n...")
+  → Research appended
+
+→ remember(entity="project:AGI Personal Assistant",
+            relation="last_task",
+            value="Added embedding research",
+            node_type="project")
+  → last_activity bumped, conv linked
+
+→ "Updated! Added embedding research to projects/agi-personal-assistant/research.md"
+```
+
+### Implementation Order
+
+```
+Phase 1: Project Store (core)
+  ├── backend/core/project_store.py     — ProjectStore CRUD, lifecycle, fuzzy match
+  ├── backend/api/projects.py           — REST router (5 endpoints)
+  ├── backend/functions/project_functions.py — 5 LLM tools
+  ├── backend/main.py                   — Register project router
+  ├── backend/assistant/function_registry.py — Add tools + dispatch map
+  └── projects/.gitkeep
+
+Phase 2: opencode MCP Wrapper
+  ├── backend/assistant/mcp_server_opencode.py — MCP stdio server (6 tools)
+  ├── config.yaml                              — Add MCP server entry
+  ├── backend/api/chat.py                      — Connect MCP server + remove PROJECT_INSTRUCTIONS
+  └── backend/core/tool_selector.py            — Add opencode GROUP_SETS
+
+Phase 3: Conversation Auto-Link
+  ├── backend/core/project_store.py     — Auto-link logic on project tool calls
+  └── backend/api/chat.py               — Pass conversation_id to project tools
+
+Phase 4: Knowledge Graph Sync
+  └── (already exists — project tools call remember() which syncs)
+```
+
+### Files Summary
+
+| File | Change | Phase |
+|------|--------|-------|
+| `backend/core/project_store.py` | **New** | 1 |
+| `backend/api/projects.py` | **New** | 1 |
+| `backend/functions/project_functions.py` | **New** | 1 |
+| `backend/assistant/function_registry.py` | Modify | 1 |
+| `backend/main.py` | Modify | 1 |
+| `projects/.gitkeep` | **New** | 1 |
+| `backend/assistant/mcp_server_opencode.py` | **New** | 2 |
+| `config.yaml` | Modify | 2 |
+| `backend/api/chat.py` | Modify | 2, 3 |
+| `backend/core/tool_selector.py` | Modify | 2 |
+
+---
+
+## Iterative Tool Loop — Implementation Complete (Jul 4)
+
+### Goal
+
+Replace the two-call architecture (LLM → tools → LLM → text → done) with a Claude Code-style iterative loop where the LLM can call tools repeatedly, see results, self-correct, and only notify the user when a build goal is complete.
+
+### Status — COMPLETED
+
+All 4 files modified per plan. Code compiles, 80 existing tests pass. Verified working:
+- Multi-tool build loops fire correctly (opencode_write, opencode_bash, etc.)
+- Intermediate thoughts stream as token messages between tool calls
+- Each tool_call card shows in the chat with result
+- "Build Complete" notification fires on completion
+- Duplicate guard stops 3× identical calls as stuck
+- Non-build queries flow through normal single-response path
+- `role: "tool"` messages stored in conversation file
+
+### Why
+
+The old architecture was strictly two LLM calls:
+```
+Call 1: LLM(tools) → tool_calls → dispatch → results
+Call 2: LLM(tools=[]) → text response → DONE
+```
+
+This meant:
+- No iteration — LLM couldn't read a file, fix it, re-run tests
+- Tool results were text-wrapped as `role: "assistant"` with `[Called fn]` prefix (poor LLM parsing)
+- opencode tools were filtered by ToolSelector threshold, often hidden
+
+### New Data Flow
+
+```
+WebSocket message → _run_engine()
+  │
+  ├── Build system prompt (includes BUILD_MODE_INSTRUCTIONS)
+  ├── Filter tools (opencode always active — in CORE_TOOL_NAMES)
+  │
+  ├── Call LLM with tools → (content, tool_calls)
+  │
+  └── ITERATIVE LOOP (up to 20 iterations)
+       │
+       while iteration < MAX_ITERATIONS:
+         if no tool_calls → break (LLM is done)
+         │
+         store assistant msg with tool_calls array
+         send intermediate content as token (real-time streaming)
+         │
+         for each tool_call:
+           extract tool_call_id
+           dispatch → result str
+           truncate to 50K chars
+           check duplicate guard (3x same call → [Stuck])
+           store as role:"tool" with tool_call_id
+           run KG sync side effects
+           send tool_call card to frontend
+         │
+         rebuild messages with updated context
+         → loop back to call LLM again
+       │
+       ├── Send final content as token
+       ├── If build completed: fire notification via scheduler
+       └── Send {"type": "done"}
+```
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `backend/api/chat.py` | Replace two-call arch with iterative loop; add BUILD_MODE_INSTRUCTIONS; add OPENCODE_TOOL_NAMES to core; increase MAX_TOOL_RESULT_LENGTH to 50K; add duplicate guard; add completion notification |
+| `backend/core/data_store.py` | `add_message()` accepts `tool_call_id` and `tool_calls` params for proper `role: "tool"` storage |
+| `backend/assistant/memory/conversation_manager.py` | Forwards `tool_call_id` and `tool_calls` to data store |
+| `backend/core/scheduler.py` | New `fire_notification(title, body, category, action_page)` — instantly pushes notification to frontend poll |
+
+### Key Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| **Exit condition** | LLM returns no `tool_calls` | Standard OpenAI tool-use pattern — LLM decides when done |
+| **Intermediate thoughts** | Sent as `token` messages to frontend | Real-time progress visibility |
+| **Tool result format** | `role: "tool"` with `tool_call_id` | Matches OpenAI API spec — LLM parses correctly |
+| **Tool call ID source** | `tc.get("id")` from LLM response | Ollama OpenAI-compatible API returns `id` per tool_call |
+| **MAX_TOOL_RESULT_LENGTH** | 50,000 chars | Previously 3,000 — truncated too aggressively for file reads |
+| **opencode availability** | Always in core group | Never filtered by ToolSelector — always available for builds |
+| **Duplicate guard** | 3× same `(tool, args, result_head)` | Prevents infinite loops on same failing action |
+| **Max iterations** | 20 | Hard cap — any loop exceeding sends warning + partial content |
+| **Completion notification** | `fire_notification()` → `event_reminder` category | Shows green toast + browser notification, no modal |
+
+### Safety Guards
+
+| Guard | Trigger | Behavior |
+|-------|---------|----------|
+| **Duplicate action** | Same `(tool, args, result_head)` 3× | Injects `[Stuck]` prefix, breaks loop |
+| **Max iterations** | 20 tool call rounds | Appends incomplete warning, breaks loop |
+| **LLM error** | Connection/HTTP error | Sends error to frontend, breaks loop |
+| **Tool timeout** | MCP/Bash command >120s | Returns timeout error text, LLM self-corrects |
+| **Context overflow** | Messages near model limit | ConversationManager returns last 20 messages |
+
+### Notification Delivery
+
+When a build completes:
+1. `_run_engine` detects: opencode was used + user message had build intent + final content exists
+2. Calls `get_scheduler().fire_notification("Build Complete", body[:200])`
+3. Frontend's 3-second REST poll picks up the notification
+4. `event_reminder` category → green toast (bottom-right, 4.5s auto-dismiss) + browser notification
+
+### Edge Cases
+
+| Case | Handling |
+|------|----------|
+| **LLM never calls tools** | Loop breaks immediately, content sent normally |
+| **LLM calls tools, fails, tries again, fails again** | Duplicate guard kicks at 3× identical, breaks with stuck message |
+| **Build succeeds on iteration 1 (trivial project)** | Loop breaks immediately, notification fires |
+| **User sends new message mid-build** | WebSocket processes sequentially — previous message's loop is abandoned |
+| **Tool call returns error from MCP server** | Error text returned as result — LLM reads it and adapts |
+| **LLM returns content + tool_calls** | Intermediate content sent as token, tool_calls processed, loop continues |
+| **LLM returns content without tool_calls** | Loop breaks, content sent as final response |
+
+### Test Checklist (Manual)
+
+- [ ] Send `"build a webscraper"` — verify multiple tool calls fire (opencode_bash, opencode_write, opencode_bash for tests)
+- [ ] Verify intermediate thoughts stream as token messages between tool calls
+- [ ] Verify each tool_call card shows in the chat
+- [ ] Verify "Build Complete" toast fires within 3 seconds of completion
+- [ ] Send a duplicate-building query — verify duplicate guard works
+- [ ] Send a non-build query ("what's the weather?") — verify no loop, normal flow
+- [ ] Verify `role: "tool"` messages stored in conversation file
+- [ ] Verify `role: "assistant"` with `tool_calls` array stored in conversation file

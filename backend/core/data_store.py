@@ -510,7 +510,7 @@ class DataStore:
             self._index_conversation(conv)
             return conv
 
-    def add_message(self, conversation_id: str, role: str, content: str) -> dict | None:
+    def add_message(self, conversation_id: str, role: str, content: str, tool_call_id: str | None = None, tool_calls: list | None = None) -> dict | None:
         with self._lock:
             entry = self._conv_idx.get(conversation_id)
             if not entry:
@@ -523,6 +523,10 @@ class DataStore:
                         "content": content,
                         "timestamp": _utcnow(),
                     }
+                    if tool_call_id:
+                        msg["tool_call_id"] = tool_call_id
+                    if tool_calls is not None:
+                        msg["tool_calls"] = tool_calls
                     conv["messages"].append(msg)
                     conv["updated_at"] = _utcnow()
                     if len(conv["messages"]) == 1 and role == "user":
