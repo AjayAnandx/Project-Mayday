@@ -1,5 +1,5 @@
 import { createContext, useContext, ReactNode } from 'react'
-import { useChat, ChatMessage } from '../hooks/useChat'
+import { useChat, ChatMessage, PendingSkill } from '../hooks/useChat'
 
 interface ChatContextValue {
   messages: ChatMessage[]
@@ -8,6 +8,10 @@ interface ChatContextValue {
   sendMessage: (text: string) => void
   newConversation: () => void
   toolCallCount: number
+  pendingSkill: PendingSkill | null
+  activeSkill: string | null
+  confirmSkill: (name: string) => void
+  dismissSkill: () => void
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null)

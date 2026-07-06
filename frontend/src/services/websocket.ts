@@ -60,6 +60,14 @@ export class ChatWebSocket {
     }
   }
 
+  sendConfirmSkill(name: string) {
+    this.send({ type: 'confirm_skill', name })
+  }
+
+  sendDismissSkill() {
+    this.send({ type: 'dismiss_skill' })
+  }
+
   disconnect() {
     this.shouldReconnect = false
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)

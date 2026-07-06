@@ -37,7 +37,7 @@ See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (
 - Vite proxies `/api` → `localhost:8771` and `/ws` → `ws://localhost:8771`
 - Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
-- 33 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status` + `unified_search` + 11 system/file (open/close app, volume, clipboard, system info, active window, read/write/append/list files)
+- 34 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status` + `unified_search` + `suggest_skill` + 11 system/file (open/close app, volume, clipboard, system info, active window, read/write/append/list files)
 - MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`)
 - Tool selection: Inverted group index (TF-IDF weighted, BM25 saturation, group-penalty) — replaces 4 hand-written keyword regexes; **92.2% precision, 90.8% recall**, <<0.01ms per query
 - `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
@@ -92,6 +92,7 @@ mayday/
 │   │   ├── function_registry.py      # 13 tool definitions + dispatch (9 local + 4 memory)
 │   │   ├── mcp_manager.py            # MCP stdio connection, tool discovery, dispatch
 │   │   ├── exa_tools.py              # Static tool defs for 3 Exa search/fetch tools
+│   │   ├── skill_manager.py           # SkillManager — scan SKILL.md files, registry, apply
 │   │   └── memory/
 │   │       └── conversation_manager.py  # Context window (last 20 messages)
 │   ├── functions/
@@ -121,8 +122,9 @@ mayday/
 │       │   │   └── Sidebar.tsx       # Pill-shaped top nav bar (Chat/Todos/Calendar)
 │       │   ├── chat/
 │       │   │   ├── ChatPanel.tsx     # Message list, pill input, send, loading dots
-│       │   │   ├── MessageBubble.tsx # User/assistant/tool pill-shaped bubbles
-│       │   │   └── MarkdownRenderer.tsx # react-markdown styled renderer for LLM output
+│   │   │   ├── MessageBubble.tsx # User/assistant/tool pill-shaped bubbles
+│   │   │   ├── MarkdownRenderer.tsx # react-markdown styled renderer for LLM output
+│   │   │   └── SkillSuggestionCard.tsx # Skill suggestion card with Confirm/Dismiss
 │       │   ├── todos/
 │       │   │   ├── TodoPanel.tsx     # List, search, filter, add button
 │       │   │   ├── TodoItem.tsx      # Single todo row with toggle/edit/delete
@@ -180,6 +182,7 @@ mayday/
 ├── docs/
 │   └── adr.md                       # Architecture Decision Record (15 decisions)
 ├── plan.md                          # MCP integration plan
+├── opencode.json                    # opencode permission config
 ├── main.py                          # Original PyQt6 entry (kept as reference)
 ├── ui/                              # Original PyQt6 widgets (kept as reference)
 ├── data_store.py                    # Original data store (kept as reference)
@@ -312,7 +315,6 @@ yellow:  '#eab308'
 - [x] **Selenium MCP server**: Replaced disabled Playwright with `mcp-server-selenium` (18 browser tools). Patched `normal_chrome.py` for Windows Chrome path. Verified navigate + screenshot + page description works.
 - [x] **Screenshot management system**: ScreenshotStore (index.json CRUD), REST list/delete, 3 LLM tools (`list_screenshots`, `get_screenshot`, `delete_screenshot`), image rendering in chat tool bubbles via `image_url` field
 - [x] Notification system: scheduler + REST polling + in-app modals + toasts
-- [ ] Phase 7: Settings dialog (model selection, API config, voice settings)
 - [x] **Personality system**: Config-driven personality in `config.yaml` (`personality:` section with tone, traits, rules). LLM auto-learns user preferences via `remember("Mayday", "style_feedback", ...)` with `node_type="personality"`. System prompt injects personality + learning instructions on each turn.
 - [x] **Project tracking + context resume**: LLM stores ALL project conversations via `remember(relation="has_conversation", node_type="project")`. New `get_conversation_history` tool loads past conversations by ID. On resume, LLM recalls project → loads ALL linked conversations → presents full context.
 - [x] **delete_entity LLM tool**: `delete_entity(name)` removes an entire node + all its edges from the knowledge graph
@@ -348,7 +350,11 @@ yellow:  '#eab308'
 - [x] **Inverted Group Index design**: TF-IDF weight per term × (k1+1)/k1(1-b+b*L) BM25 saturation × 1/sqrt(groups_containing(term)). Lightweight stemmer (15 suffix rules) + 15-entry alias map + stopword filter. Filter fallback: if select returns empty, all tools passed to LLM. No external dependencies.
 - [x] **plan.md expansion**: Added full Tool Latency Optimization section with strategy, data model, timeline, performance analysis, failed-path alternatives (all 3 evaluated), risk register.
 - [x] **Iterative Tool Loop (Jul 4)**: Replaced two-call architecture (LLM → tools → LLM → text) with Claude Code-style iterative loop. LLM can call tools repeatedly, see results, self-correct. Duplicate guard (3× identical = stuck), max 20 iterations, intermediate thoughts stream in real-time, "Build Complete" notification on finish. `role: "tool"` messages stored properly.
-- [ ] **Proactive Suggestions — PLANNED (Jun 28)**: Chat shows clickable suggestion chips (upcoming events, overdue todos, recent activity, general prompts) when the chat page is empty.
+- [x] **Project Tracking System (Jul 4)**: Dedicated project store (`projects.json`) with CRUD, lifecycle state machine (active/paused/scrapped), fuzzy matching, conversation auto-link. REST API (5 endpoints) + 5 LLM tools (create/resume/list/update_status/add_note). opencode MCP wrapper server with 6 tools (bash/write/read/edit/glob/grep) for autonomous project building.
+- [x] **Skills System (Jul 4)**: opencode-style skill injection. `SkillManager` scans `C:\Users\hp\agent-skills\skills` (23 pre-existing SKILL.md files), `suggest_skill(name, context)` LLM tool, `SkillSuggestionCard` frontend component with Confirm/Dismiss, skill body+tools injected into system prompt on activation, auto-deactivation on completion. All 23 external skills load at startup.
+- [x] **Bug fix: silent response after tool calls (Jul 4)**: When LLM returned `content=None, tool_calls=[...]`, no natural language response was generated. Added final LLM call with `tools=[]` after the iterative loop to force a summary. Fixes the `resume_project → recall_entity → list_directory → (silent)` pattern.
+- [ ] **Proactive Suggestions — Need to Refine Idea**: Chat shows clickable suggestion chips (upcoming events, overdue todos, recent activity, general prompts) when the chat page is empty.
+- [ ] **Data Export/Import — Need to Refine Idea**: `GET /api/export` + `POST /api/import` blob endpoints for full data backup and restore.
 
 ## How to Run
 
@@ -381,7 +387,6 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 ## Known Issues
 - Voice mode requires Chrome or Edge (SpeechRecognition not supported in Firefox/Safari)
 - Deepgram TTS requires internet access; falls back to browser SpeechSynthesis if unavailable
-- No settings dialog yet (model/mic/speaker config via yaml only)
 - Frontend WebSocket connects on mount — reconnection logic is basic (3s retry)
 - Electron dev mode requires FastAPI running separately; production mode serves built frontend from FastAPI
 - MCP playwright server disabled (npx EPERM on Windows npm cache). Enable in `config.yaml` when running on Linux/macOS or after fixing npm permissions
@@ -419,7 +424,7 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `frontend/src/services/api.ts`: Typed REST client
 - `backend/api/chat.py`: WebSocket endpoint with LLM streaming + tool dispatch
 - `backend/assistant/llm_client.py`: Ollama HTTP client
-- `backend/assistant/function_registry.py`: 33 tool definitions + dispatch (9 todo/event + 5 memory + 3 screenshot + 4 conversation/operations + 3 reminders + 11 system/file)
+- `backend/assistant/function_registry.py`: 34 tool definitions + dispatch (9 todo/event + 5 memory + 3 screenshot + 4 conversation/operations + 3 reminders + `suggest_skill` + 11 system/file)
 - `backend/assistant/exa_tools.py`: Static tool definitions for 3 Exa search/fetch tools
 - `config.yaml`: Shared config (Ollama, voice, server)
 - `plan.md`: MCP integration architecture and implementation plan
@@ -449,3 +454,6 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `frontend/src/components/voice/VoiceTranscript.tsx`: Live interim transcript display
 - `docs/adr.md`: Architecture Decision Record (15 decisions — backend, frontend, LLM, voice, search, skills)
 - `backend/core/tool_selector.py`: Inverted group index for LLM tool selection (TF-IDF weighted, BM25 saturation, group-penalty)
+- `backend/assistant/skill_manager.py`: SkillManager — scan SKILL.md files, registry, apply
+- `frontend/src/components/chat/SkillSuggestionCard.tsx`: Skill suggestion card with Confirm/Dismiss
+- `opencode.json`: opencode permission config for MCP tools

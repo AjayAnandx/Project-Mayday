@@ -2,11 +2,12 @@ import { useState, useRef, useEffect } from 'react'
 import { Send } from 'lucide-react'
 import { useChatContext } from '../../context/ChatContext'
 import { MessageBubble } from './MessageBubble'
+import { SkillSuggestionCard } from './SkillSuggestionCard'
 import { useAutoResizeTextarea } from '../../hooks/use-auto-resize-textarea'
 import { cn } from '../../lib/utils'
 
 export function ChatPanel() {
-  const { messages, connected, streaming, sendMessage } = useChatContext()
+  const { messages, connected, streaming, sendMessage, pendingSkill, activeSkill, confirmSkill, dismissSkill } = useChatContext()
   const [input, setInput] = useState('')
   const [isFocused, setIsFocused] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -14,7 +15,7 @@ export function ChatPanel() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [messages, pendingSkill])
 
   const handleSubmit = () => {
     if (!input.trim() || streaming) return
@@ -35,6 +36,14 @@ export function ChatPanel() {
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
+        {pendingSkill && (
+          <SkillSuggestionCard
+            name={pendingSkill.name}
+            context={pendingSkill.context}
+            onConfirm={() => confirmSkill(pendingSkill.name)}
+            onDismiss={dismissSkill}
+          />
+        )}
         {streaming && (
           <div className="flex justify-start my-1">
             <div className="bg-surface0/50 rounded-lg px-4 py-2.5">
@@ -51,6 +60,12 @@ export function ChatPanel() {
 
       <div className="px-4 pb-4 pt-2">
         <div className="mx-auto w-full max-w-2xl">
+          {activeSkill && !pendingSkill && (
+            <div className="mb-2 flex items-center gap-2 rounded-full bg-green/10 border border-green/20 px-4 py-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
+              <span className="text-xs text-green font-medium">Active skill: {activeSkill}</span>
+            </div>
+          )}
           <div
             className={cn(
               'relative flex w-full cursor-text items-end rounded-xl transition-all duration-200 outline-none overflow-hidden',

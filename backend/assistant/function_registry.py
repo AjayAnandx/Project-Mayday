@@ -780,6 +780,21 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "suggest_skill",
+            "description": "Suggest using a named skill for a task. Call when the user's request matches one of the available skills. The user will be asked to confirm before the skill activates.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill name from the available skills list"},
+                    "context": {"type": "string", "description": "Brief description of what the user wants to do, to show in the confirmation"},
+                },
+                "required": ["name", "context"],
+            },
+        },
+    },
 ]
 
 FUNCTION_MAP = {

@@ -18,6 +18,7 @@ from backend.assistant.selenium_tools import SELENIUM_TOOL_DEFINITIONS
 from backend.assistant.exa_tools import EXA_TOOL_DEFINITIONS
 from backend.assistant.fetch_tools import FETCH_TOOL_DEFINITIONS
 from backend.assistant.mcp_server_opencode import STATIC_TOOL_DEFINITIONS as OPENCODE_TOOL_DEFINITIONS
+from backend.assistant.skill_manager import get_skill_manager, SkillManager
 from backend.assistant.memory.conversation_manager import ConversationManager
 from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
 from backend.api.screenshots import get_screenshot_store
@@ -106,6 +107,11 @@ When the user asks you to build, create, make, scaffold, or set up a project:
 You can think out loud between tool calls. Your intermediate thoughts will be shown to the user in real-time.
 Never call the same tool with the same arguments more than 3 times. If you are stuck, explain the issue instead of repeating."""
 
+SKILL_DESCRIPTIONS_TEMPLATE = """
+### Available Skills
+When a user's request matches one of the skills below, call suggest_skill() to offer it:
+{descriptions}"""
+
 CORE_TOOL_NAMES = {
     "create_todo", "update_todo", "delete_todo", "list_todos",
     "create_event", "update_event", "delete_event", "list_events", "query_events",
@@ -127,9 +133,10 @@ CORE_TOOL_NAMES = {
     # File access
     "read_file", "write_file", "append_file", "list_directory",
     "get_weather",
-    # opencode build tools (always available)
     "opencode_bash", "opencode_write", "opencode_read",
     "opencode_edit", "opencode_glob", "opencode_grep",
+    # Skill suggestion
+    "suggest_skill",
 }
 
 GIT_TOOL_NAMES = {
@@ -171,6 +178,7 @@ GROUP_SETS = {
     "browser": SELENIUM_TOOL_NAMES,
     "fetch": FETCH_TOOL_NAMES,
     "opencode": OPENCODE_TOOL_NAMES,
+    "skill": set(),
 }
 
 
@@ -231,6 +239,9 @@ async def _run_engine(
     mcp: MCPManager | None,
     kg: KnowledgeGraph | None = None,
     selector: ToolSelector | None = None,
+    skill_manager: SkillManager | None = None,
+    pending_suggestion: list | None = None,
+    active_skill: list | None = None,
 ):
     now = datetime.now(timezone.utc).astimezone()
     system = SYSTEM_PROMPT.format(
@@ -247,6 +258,15 @@ async def _run_engine(
     system += WEATHER_INSTRUCTIONS
     system += PROJECT_INSTRUCTIONS
     system += BUILD_MODE_INSTRUCTIONS
+
+    if skill_manager:
+        descs = skill_manager.get_skill_descriptions()
+        if descs:
+            system += SKILL_DESCRIPTIONS_TEMPLATE.format(descriptions=descs)
+
+    if active_skill and active_skill[0]:
+        skill = active_skill[0]
+        system += f"\n\n### Active Skill: {skill.name}\n{skill.body}\n###"
 
     if kg:
         keywords = extract_keywords(user_text)
@@ -299,6 +319,13 @@ async def _run_engine(
             filtered_tools = tools
     else:
         filtered_tools = tools
+
+    if active_skill and skill_manager:
+        skill = active_skill[0]
+        body, skill_tool_defs, skill_func_map = skill_manager.apply_skill(skill.name)
+        for sd in skill_tool_defs:
+            if sd not in filtered_tools:
+                filtered_tools.append(sd)
 
     try:
         def first_call(msgs):
@@ -364,6 +391,27 @@ async def _run_engine(
 
             if isinstance(fn_args, str):
                 fn_args = json.loads(fn_args)
+
+            if fn_name == "suggest_skill":
+                skill_name = fn_args.get("name", "")
+                context = fn_args.get("context", "")
+                if skill_manager and skill_manager.get_skill(skill_name):
+                    if pending_suggestion is not None:
+                        pending_suggestion.clear()
+                        pending_suggestion.append(skill_name)
+                        pending_suggestion.append(context)
+                    await _send_json(ws, {
+                        "type": "skill_suggested",
+                        "name": skill_name,
+                        "content": context,
+                    })
+                    result = f"I suggested the '{skill_name}' skill. Waiting for confirmation."
+                else:
+                    avail = skill_manager.list_skills() if skill_manager else []
+                    result = f"Skill '{skill_name}' not found. Available: {', '.join(avail)}"
+                conv.add_message("tool", result, tool_call_id=tool_call_id)
+                await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
+                continue
 
             if fn_name in OPENCODE_TOOL_NAMES:
                 opencode_used = True
@@ -452,6 +500,19 @@ async def _run_engine(
         if iteration >= MAX_ITERATIONS:
             content = (content or "") + "\n\n[Reached maximum iterations — the build may be incomplete.]"
 
+    if not content:
+        messages = [{"role": "system", "content": system}] + conv.get_context()
+        try:
+            def final_call(msgs):
+                resp = llm.chat(msgs, stream=False, tools=[])
+                resp.raise_for_status()
+                return llm.extract_response(resp)
+            summary, _ = await loop.run_in_executor(None, final_call, messages)
+            if summary:
+                content = summary
+        except Exception as e:
+            logger.error("Final summary call failed: %s", e)
+
     if content:
         voice_text = _make_voice_text(content)
         logger.info("Voice: ui=%d chars, voice=%d chars", len(content), len(voice_text))
@@ -462,6 +523,10 @@ async def _run_engine(
         conv_data = get_store().get_conversation(conv.current_id)
         if conv_data:
             kg.sync_conversation(conv_data)
+
+    if active_skill and not tool_calls:
+        active_skill.clear()
+        await _send_json(ws, {"type": "skill_deactivated"})
 
     if opencode_used and _BUILD_REQUEST_KEYWORDS.search(user_text) and content:
         from backend.core.scheduler import get_scheduler
@@ -533,13 +598,54 @@ async def chat_websocket(websocket: WebSocket):
     logger.info("ToolSelector built index for %d tools in %d groups",
                 len(tools), len(GROUP_SETS))
 
+    skill_manager = None
+    skills_cfg = config.get("skills", {})
+    if skills_cfg.get("enabled", True):
+        try:
+            skill_manager = get_skill_manager(skills_cfg.get("directory", ""))
+            logger.info("Loaded %d skills", len(skill_manager.list_skills()))
+        except Exception as e:
+            logger.error("Failed to load skills: %s", e)
+
+    pending_suggestion: list = []
+    active_skill: list = []
+
     try:
         while True:
             data = await websocket.receive_text()
             msg = json.loads(data)
             if msg.get("type") == "message":
                 user_text = msg.get("content", "")
-                await _run_engine(websocket, user_text, conv, llm, tools, mcp, kg, selector=selector)
+                await _run_engine(websocket, user_text, conv, llm, tools, mcp, kg,
+                                  selector=selector, skill_manager=skill_manager,
+                                  pending_suggestion=pending_suggestion,
+                                  active_skill=active_skill)
+            elif msg.get("type") == "confirm_skill":
+                skill_name = msg.get("name", "")
+                if skill_manager:
+                    body, skill_tool_defs, func_map = skill_manager.apply_skill(skill_name)
+                    if body:
+                        pending_suggestion.clear()
+                        skill = skill_manager.get_skill(skill_name)
+                        if active_skill:
+                            active_skill.clear()
+                            active_skill.append(skill)
+                        await _send_json(websocket, {
+                            "type": "skill_activated",
+                            "name": skill_name,
+                        })
+                        await _run_engine(websocket, f"Activate skill: {skill_name}", conv, llm, tools, mcp, kg,
+                                          selector=selector, skill_manager=skill_manager,
+                                          pending_suggestion=pending_suggestion,
+                                          active_skill=active_skill)
+                    else:
+                        await _send_json(websocket, {"type": "error", "content": f"Skill '{skill_name}' not found"})
+                pending_suggestion.clear()
+            elif msg.get("type") == "dismiss_skill":
+                pending_suggestion.clear()
+                if active_skill:
+                    active_skill.clear()
+                    await _send_json(websocket, {"type": "skill_deactivated"})
             elif msg.get("type") == "new_conversation":
                 conv.new_conversation()
                 await _send_json(websocket, {"type": "conversation_created"})

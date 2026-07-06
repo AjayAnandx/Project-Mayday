@@ -724,7 +724,7 @@ New session: remember("project:AGI Personal Assistant", ...)
 ### Goal
 Make Mayday useful for real daily workflows with recurring tasks, cross-type search, notifications, and data portability.
 
-### Status — 3a COMPLETED, 3b COMPLETED, 3d COMPLETED, 3c PLANNED, 2b IMPLEMENTED
+### Status — 3a COMPLETED, 3b COMPLETED, 3d COMPLETED
 
 ---
 
@@ -877,45 +877,7 @@ Scheduler fires reminder
 
 ---
 
-### 3c. Data Export/Import
 
-#### New Backend Endpoints
-
-```
-GET  /api/export   →  JSON blob (download as mayday-backup-YYYY-MM-DD.json)
-POST /api/import   ←  Accept same JSON blob
-```
-
-#### Export Blob Structure
-
-```json
-{
-  "exported_at": "2026-06-18T12:00:00Z",
-  "version": "1.0",
-  "todos": [...],
-  "events": [...],
-  "conversations": { "index": [...], "days": {"YYYY-MM-DD.json": [...]} },
-  "operations": { "months": ["2026-06"], "files": {"2026-06.json": [...]} },
-  "memory_graph": { "nodes": [...], "edges": [...] },
-  "screenshots": { "index": [...] }
-}
-```
-
-#### Backend Changes
-
-| File | Changes |
-|------|---------|
-| `backend/api/export.py` | **CREATE** — `/api/export` collects from all stores + file system; `/api/import` validates and writes all data |
-| `backend/main.py` | Register export router |
-
-#### Frontend Changes
-
-| File | Changes |
-|------|---------|
-| `frontend/src/services/api.ts` | Add `exportData()`, `importData(json)` |
-| `frontend/src/components/settings/SettingsDialog.tsx` | **CREATE** — basic settings modal with Export/Import buttons and model/API config fields (reuses Phase 7 scope) |
-| `frontend/src/App.tsx` | Add settings button to sidebar or header |
-| `frontend/src/components/layout/Sidebar.tsx` | Add gear icon for settings |
 
 ---
 
@@ -976,98 +938,7 @@ Prevent Mayday from creating duplicate todos/events. When the LLM tries to creat
 
 ---
 
-## 5c. Proactive Suggestions — Implementation Plan
 
-### Goal
-When the chat page is empty or idle, Mayday shows clickable suggestion chips — upcoming events, overdue todos, recent activity, and general prompts — so the user discovers features without being asked. No personality gating; suggestions are always active.
-
-### Architecture
-
-```
-SuggestionChips (frontend component)
-    │ polls GET /api/suggestions every 60s
-    ▼
-Backend: /api/suggestions
-    ├── list_events(start_time=now, end_time=now+60min) → "Standup in 15 min"
-    ├── list_todos(include_completed=False, check overdue) → "Buy milk is overdue"
-    ├── operation_log.query(date_from=today) → "3 items created today"
-    └── general prompts (rotated) → "Ask me about your schedule"
-```
-
-### New Files (3)
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `backend/api/suggestions.py` | ~60 | `GET /api/suggestions` endpoint — on-demand computation from event/todo store + operation log + knowledge graph |
-| `frontend/src/hooks/useSuggestions.ts` | ~40 | Polling hook (60s interval), returns `Suggestion[]` |
-| `frontend/src/components/chat/SuggestionChips.tsx` | ~80 | Green pill-shaped buttons below empty chat state |
-
-### Modified Files (2)
-
-| File | Change |
-|------|--------|
-| `backend/main.py` | Register `suggestions.py` router |
-| `frontend/src/components/chat/ChatPanel.tsx` | Import `<SuggestionChips>` — render when `messages.length === 0` |
-
-### Backend: `GET /api/suggestions`
-
-Returns JSON array capped at 5 suggestions, computed on-the-fly:
-
-```json
-[
-  {"id": "evt_abc", "type": "event_upcoming", "label": "Standup in 15 min", "action": {"page": "calendar"}},
-  {"id": "todo_xyz", "type": "todo_overdue", "label": "Buy milk is overdue", "action": {"page": "todos"}},
-  {"id": "recent_3", "type": "recent_activity", "label": "3 items created today", "message": "What did I do today?"},
-  {"id": "general_1", "type": "general", "label": "Ask me about your schedule", "message": "What's on my calendar?"}
-]
-```
-
-Generation order (high to low priority):
-1. **Upcoming events** — `get_store().list_events(start_date=now, end_date=now+60min)` → max 2 chips with `action.page: "calendar"`
-2. **Overdue todos** — `get_store().list_todos(include_completed=False)`, filter past `due_date` → max 2 chips with `action.page: "todos"`
-3. **Recent activity** — `get_operation_log().query(date_from=today)` → 1 chip with `message` for LLM
-4. **General prompts** — rotated static list: "Ask me about your schedule", "Try creating a todo", "Search for anything" → max 2 with `message`
-
-Each suggestion has:
-- `id` — unique string for dedup on frontend
-- `type` — `event_upcoming` | `todo_overdue` | `recent_activity` | `general`
-- `label` — short display text (e.g. "Standup in 15 min")
-- `message` (optional) — text to send as chat message on click
-- `action` (optional) — `{page: "calendar"|"todos"|"brain"}` for navigation on click
-
-### Frontend: SuggestionChips Component
-
-- Rendered inside `ChatPanel.tsx` when `messages.length === 0`
-- Horizontal row of rounded-full pill buttons, horizontally scrollable on overflow
-- Styling: `bg-green/10 text-green border border-green/20` pills with hover `bg-green/20`
-- Click behavior:
-  - If `message` is present → `sendMessage(chip.message)` — sends as user message, triggers LLM
-  - If `action.page` is present → `onNavigate(chip.action.page)` — switches tab
-- Poll every 60s via `useSuggestions()` hook
-- No UI shown while loading (instant local render, no loading state)
-
-### Suggestion Object TypeScript Interface
-
-```typescript
-interface Suggestion {
-  id: string
-  type: 'event_upcoming' | 'todo_overdue' | 'recent_activity' | 'general'
-  label: string
-  message?: string
-  action?: { page: 'chat' | 'todos' | 'calendar' | 'brain' }
-}
-```
-
-### What Is NOT Changed
-
-- **Scheduler** — suggestions are computed on-demand per REST call, not pushed
-- **Notification system** — suggestions are a separate concern (UI chips vs modal/toast popups)
-- **Sidebar / App.tsx** — ChatPanel owns the chips internally
-- **useChat.ts / ChatContext** — no changes needed; ChatPanel already has `sendMessage` and `messages`
-
-### No Personality Gating
-
-Removed from the original 5c spec. Suggestions are always computed and shown regardless of user preferences. If a future settings dialog wants to expose a toggle, it would just stop the polling interval.
 
 ---
 
@@ -1299,97 +1170,7 @@ User can interrupt TTS at any time → state → listening → re-captures mic
 
 ---
 
-## 5c. Proactive Suggestions — Implementation Plan (Tomorrow — Jun 28)
 
-### Goal
-When the chat page is empty or idle, Mayday shows clickable suggestion chips — upcoming events, overdue todos, recent activity, and general prompts — so the user discovers features without being asked. No personality gating; suggestions are always active.
-
-### Status — PLANNED (Jun 28)
-
-### Architecture
-
-```
-SuggestionChips (frontend component)
-    │ polls GET /api/suggestions every 60s
-    ▼
-Backend: /api/suggestions
-    ├── list_events(start_time=now, end_time=now+60min) → "Standup in 15 min"
-    ├── list_todos(include_completed=False, check overdue) → "Buy milk is overdue"
-    ├── operation_log.query(date_from=today) → "3 items created today"
-    └── general prompts (rotated) → "Ask me about your schedule"
-```
-
-### New Files (3)
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `backend/api/suggestions.py` | ~60 | `GET /api/suggestions` endpoint — on-demand computation from event/todo store + operation log + knowledge graph |
-| `frontend/src/hooks/useSuggestions.ts` | ~40 | Polling hook (60s interval), returns `Suggestion[]` |
-| `frontend/src/components/chat/SuggestionChips.tsx` | ~80 | Green pill-shaped buttons below empty chat state |
-
-### Modified Files (2)
-
-| File | Change |
-|------|--------|
-| `backend/main.py` | Register `suggestions.py` router |
-| `frontend/src/components/chat/ChatPanel.tsx` | Import `<SuggestionChips>` — render when `messages.length === 0` |
-
-### Backend: `GET /api/suggestions`
-
-Returns JSON array capped at 5 suggestions, computed on-the-fly:
-
-```json
-[
-  {"id": "evt_abc", "type": "event_upcoming", "label": "Standup in 15 min", "action": {"page": "calendar"}},
-  {"id": "todo_xyz", "type": "todo_overdue", "label": "Buy milk is overdue", "action": {"page": "todos"}},
-  {"id": "recent_3", "type": "recent_activity", "label": "3 items created today", "message": "What did I do today?"},
-  {"id": "general_1", "type": "general", "label": "Ask me about your schedule", "message": "What's on my calendar?"}
-]
-```
-
-Generation order (high to low priority):
-1. **Upcoming events** — `get_store().list_events(start_date=now, end_date=now+60min)` → max 2 chips with `action.page: "calendar"`
-2. **Overdue todos** — `get_store().list_todos(include_completed=False)`, filter past `due_date` → max 2 chips with `action.page: "todos"`
-3. **Recent activity** — `get_operation_log().query(date_from=today)` → 1 chip with `message` for LLM
-4. **General prompts** — rotated static list: "Ask me about your schedule", "Try creating a todo", "Search for anything" → max 2 with `message`
-
-Each suggestion has:
-- `id` — unique string for dedup on frontend
-- `type` — `event_upcoming` | `todo_overdue` | `recent_activity` | `general`
-- `label` — short display text (e.g. "Standup in 15 min")
-- `message` (optional) — text to send as chat message on click
-- `action` (optional) — `{page: "calendar"|"todos"|"brain"}` for navigation on click
-
-### Suggestion Object TypeScript Interface
-
-```typescript
-interface Suggestion {
-  id: string
-  type: 'event_upcoming' | 'todo_overdue' | 'recent_activity' | 'general'
-  label: string
-  message?: string
-  action?: { page: 'chat' | 'todos' | 'calendar' | 'brain' }
-}
-```
-
-### Frontend: SuggestionChips Component
-
-- Rendered inside `ChatPanel.tsx` when `messages.length === 0`
-- Horizontal row of rounded-full pill buttons, horizontally scrollable on overflow
-- Styling: `bg-green/10 text-green border border-green/20` pills with hover `bg-green/20`
-- Click behavior:
-  - If `message` is present → `sendMessage(chip.message)` — sends as user message, triggers LLM
-  - If `action.page` is present → `onNavigate(chip.action.page)` — switches tab
-- Poll every 60s via `useSuggestions()` hook
-
-### Implementation Order
-
-1. Create `backend/api/suggestions.py`
-2. Register router in `backend/main.py`
-3. Create `frontend/src/hooks/useSuggestions.ts`
-4. Create `frontend/src/components/chat/SuggestionChips.tsx`
-5. Update `frontend/src/components/chat/ChatPanel.tsx`
-6. Test: verify chips appear, click navigates/sends, poll updates
 
 ---
 
@@ -1906,237 +1687,7 @@ Unknown city: "Could not find location" ✓
 | `GET` | `/api/location` | Get stored location |
 | `POST` | `/api/location` | Set location browser geolocation data |
 
-## Skills System — Implementation Plan (Designed Jun 28)
 
-### Goal
-Add an opencode-style skill system to Mayday: injectable markdown+tool files that teach the LLM how to perform specific tasks (research, debug, plan, etc.). Skills can add new function tools and follow a suggest→confirm→execute flow.
-
-### Status — DESIGNED, NOT IMPLEMENTED
-
-### Design Decisions
-
-| Dimension | Choice |
-|-----------|--------|
-| Invocation | Model suggests → user confirms (two-turn flow) |
-| Storage | Separate `skills/<name>/SKILL.md` files with YAML frontmatter |
-| Capability | Instructions + optional new tools (via `skills/<name>/tools.py`) |
-| Confirmation | Configurable per skill via `needs_confirm: true/false` in frontmatter |
-
-### Architecture
-
-```
-User: "Research quantum computing"
-  ↓
-LLM sees research skill matches → calls suggest_skill("research", "quantum computing")
-  ↓
-Backend sets pending_suggestion → sends WS tool_call ("Mayday suggests Research skill")
-  ↓
-Frontend shows [Proceed] / [Dismiss] buttons
-  ↓
-User confirms → backend loads skills/research/SKILL.md body
-  + merges any tools from skills/research/tools.py
-  → fresh LLM call with skill context
-  ↓
-LLM executes research steps: search Exa → fetch → cross-reference → synthesize
-```
-
-### New Directory
-
-```
-mayday/skills/
-├── research/
-│   ├── SKILL.md          # YAML frontmatter + markdown instructions
-│   └── tools.py          # Optional: new tool definitions + implementations
-├── plan-day/
-│   └── SKILL.md
-└── ...
-```
-
-### New Files
-
-#### CREATE: `backend/assistant/skill_manager.py`
-
-Core module that:
-- Scans `skills/*/SKILL.md` at startup
-- Parses YAML frontmatter (`name`, `description`, `needs_confirm`)
-- Reads markdown body
-- Optionally imports `tools.py` for skill-specific tools
-- Maintains Skill registry: `dict[str, Skill]`
-- Provides `load_skills()`, `get_skill(name)`, `apply_skill(name)` → `(body, tool_defs)`
-- `reload_skills()` for hot-reload without restart
-
-**Data model:**
-```python
-@dataclass
-class Skill:
-    name: str
-    description: str
-    needs_confirm: bool       # false = auto-execute
-    body: str                 # Full markdown instructions
-    tool_defs: list           # From tools.py (empty if none)
-    func_map: dict            # From tools.py (empty if none)
-    enabled: bool
-    path: str                 # Directory path
-```
-
-### Modified Files
-
-#### MODIFY: `backend/api/chat.py`
-
-**Injection A — Skill descriptions in system prompt:**
-```python
-SKILL_DESCRIPTIONS = """
-## Available Skills
-When a user's request matches a skill below, suggest using it by calling suggest_skill():
-{descriptions}
-"""
-```
-
-**Injection B — `suggest_skill` tool handler:**
-- Receives `suggest_skill(name, context)` from LLM
-- Sets `pending_suggestion = {"skill": name, "context": context}` per session
-- Sends WS tool_call: `"Mayday suggests using the {name} skill"`
-- No second LLM call yet (waiting for user confirmation)
-
-**Injection C — User confirmation handler:**
-- When user message matches "yes/proceed/go ahead" AND pending_suggestion exists:
-- Calls `skill_manager.apply_skill(name)` → gets body + tool_defs
-- Loads skill body into system prompt as active skill block
-- Merges skill tool_defs into available tools
-- Executes fresh LLM call with: identity + personality + skill body + skill tools + context
-- On completion / topic change: clears active_skill
-
-**Session state management:**
-```python
-# Stored per WebSocket session
-active_skill: Skill | None = None
-pending_suggestion: dict | None = None
-```
-
-#### MODIFY: `backend/assistant/function_registry.py`
-
-- Add `suggest_skill` to `LOCAL_TOOL_DEFINITIONS` (always available):
-```python
-{
-    "type": "function",
-    "function": {
-        "name": "suggest_skill",
-        "description": "Suggest using a named skill. Call when user's request matches a skill's purpose.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Skill name"},
-                "context": {"type": "string", "description": "The user's request to apply the skill to"},
-            },
-            "required": ["name", "context"],
-        },
-    },
-}
-```
-- Add `suggest_skill` to `FUNCTION_MAP` → handler in chat.py
-- Add `get_skill_tools()` → merges skill tool_defs when skill is active
-
-#### MODIFY: `config.yaml`
-
-```yaml
-skills:
-  enabled: true
-  directory: skills
-  list:
-    research:
-      enabled: true
-    plan-day:
-      enabled: true
-```
-
-### Modified Frontend Files
-
-#### MODIFY: `frontend/src/components/chat/MessageBubble.tsx`
-
-- Detect `suggest_skill` tool_call type
-- Render suggestion card with skill name + context
-- Add **[Proceed]** and **[Dismiss]** buttons
-- **[Proceed]** → sends `@confirm_skill` message to WebSocket
-- **[Dismiss]** → sends `@dismiss_skill` message to WebSocket
-
-#### MODIFY: `frontend/src/components/chat/ChatPanel.tsx`
-
-- Add active skill banner pill: `🔧 Research skill active`
-- Show when `active_skill` is set in WebSocket state
-- Hide when skill completes or user changes topic
-
-#### MODIFY: `frontend/src/services/websocket.ts`
-
-- Add `confirm_skill` / `dismiss_skill` message types
-
-### SKILL.md Format
-
-```yaml
----
-name: research
-description: |
-  Thorough web research on any topic. Use when user asks to
-  research, investigate, explore, find info, or compare sources.
-needs_confirm: true
----
-
-## Research Skill
-
-When invoked, follow these steps:
-
-1. **Search** — Call `web_search_exa` or `web_search_advanced_exa` with the topic, get 3-5 results
-2. **Fetch** — Call `web_fetch_exa` on the 2-3 most relevant URLs to get full content
-3. **Cross-reference** — Check knowledge graph for existing related facts via `recall`
-4. **Store findings** — Use `remember` to save key facts to the knowledge graph
-5. **Present** — Summarize findings with sources, confidence level, and related topics
-```
-
-### tools.py Format (Optional)
-
-```python
-"""Skill-specific tools. Only available when this skill is active."""
-
-TOOL_DEFINITIONS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "analyze_page",
-            "description": "Analyze a webpage for key entities and facts",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string"},
-                    "question": {"type": "string"},
-                },
-                "required": ["url", "question"],
-            },
-        },
-    },
-]
-
-FUNCTION_MAP = {
-    "analyze_page": lambda url, question: f"Analysis of {url} for '{question}'...",
-}
-```
-
-### Example Skills to Ship
-
-| Skill | Description | Tools Needed | Priority |
-|-------|-------------|:------------:|:--------:|
-| `research` | Web research with citations + knowledge graph storage | Exa (existing) | High |
-| `plan-day` | Check weather + events + todos → daily plan | Weather (existing) | Medium |
-| `memory-audit` | Review, deduplicate, clean knowledge graph | Maybe (bulk ops) | Medium |
-| `compare-sources` | Fetch multiple pages, compare answers on same question | Exa (existing) | Low |
-
-### Implementation Order
-
-| Phase | What | Files | Est. Lines |
-|:-----:|------|-------|:----------:|
-| 1 | Skill manager + SKILL.md format | `skill_manager.py`, `config.yaml` | ~130 |
-| 2 | LLM integration (suggest_confirm tool + system prompt injection) | `function_registry.py`, `chat.py` | ~105 |
-| 3 | Frontend confirmation UI + skill banner | `MessageBubble.tsx`, `ChatPanel.tsx`, `websocket.ts` | ~70 |
-| 4 | Example skills + tools.py support | `skills/research/SKILL.md`, `skills/plan-day/SKILL.md` | ~40 |
-| | **Total** | | **~345** |
 
 ## Tool Latency Optimization — Implementation Complete (Jul 2)
 
@@ -2291,9 +1842,9 @@ Phase 1 (Quick Wins) ──→ Phase 2 (Embedding) ──→ Phase 3 (KV Cache) 
 - No GPU required (CPU inference at <5ms per query is sufficient for 37 tools)
 - No API keys, no cloud services — fully local
 
-## Project Tracking System — Refined (today)
+## Project Tracking System — Implementation Complete (Jul 4)
 
-**Status:** READY TO IMPLEMENT — full architecture complete.
+**Status:** COMPLETED — full architecture implemented.
 
 ### Goal
 Replace the current buggy graph-only project tracking with a dedicated store + REST API + opencode MCP wrapper + auto-pause lifecycle + file system integration. Mayday autonomously creates, researches, and builds projects using two complementary tool sets.
@@ -2803,3 +2354,446 @@ When a build completes:
 - [ ] Send a non-build query ("what's the weather?") — verify no loop, normal flow
 - [ ] Verify `role: "tool"` messages stored in conversation file
 - [ ] Verify `role: "assistant"` with `tool_calls` array stored in conversation file
+
+---
+
+## Skills System — Implementation Complete (Jul 4)
+
+### Goal
+Add an opencode-style skill system: injectable markdown+tool files that teach the LLM how to perform specific tasks. Skills can add new function tools and follow a suggest→confirm→execute flow.
+
+### Status — COMPLETED
+
+All backend and frontend files implemented. Verified: backend Python compiles, frontend TypeScript compiles with zero errors.
+
+### Architecture
+
+```
+Skill loading (startup):
+  config.yaml `skills.directory` → SkillManager.scan_directory()
+    → glob **/SKILL.md → parse YAML frontmatter
+    → Skill(name, description, body, tools_path, needs_confirm)
+
+LLM integration:
+  System prompt gets:
+    1. SKILL_DESCRIPTIONS_TEMPLATE — all skills as numbered list
+    2. Active skill body injected as "### Active Skill: {name}\n{body}\n###"
+
+Tool selection:
+  Active skill's tool defs merged into filtered_tools
+  skill group in GROUP_SETS (populated dynamically)
+
+Suggest → Confirm flow:
+  LLM calls suggest_skill(name, context)
+    → intercepted in iterative loop (not FUNCTION_MAP)
+    → sends {"type":"skill_suggested","name":"...","content":"..."} to frontend
+    → frontend shows SkillSuggestionCard with Confirm/Dismiss
+
+  User clicks "Use Skill"
+    → {"type":"confirm_skill","name":"..."} → backend activates skill
+    → runs _run_engine with active skill body + tools injected
+
+  User clicks "Dismiss"
+    → {"type":"dismiss_skill"} → clears pending suggestion
+
+  Skill auto-deactivation:
+    When LLM returns no tool_calls → skill is complete
+    → {"type":"skill_deactivated"} sent to frontend
+```
+
+### New Backend File
+
+#### CREATE: `backend/assistant/skill_manager.py`
+
+- `Skill` dataclass: `name`, `description`, `body`, `tools_path`, `needs_confirm`
+- `SkillManager` singleton:
+  - `scan_directory(path)` — walks `**/SKILL.md`, parses YAML frontmatter
+  - `get_skill(name)` — case-insensitive lookup
+  - `list_skills()` — returns `[(name, description), ...]`
+  - `apply_skill(name)` — returns `(body, tool_defs, func_map)`
+  - `get_skill_body(name)` — returns raw markdown body
+- Tool loading: imports `skills/<name>/tools.py` if present
+- Error handling: YAML parse errors logged and skipped; tools import errors logged but body kept
+
+### New Frontend File
+
+#### CREATE: `frontend/src/components/chat/SkillSuggestionCard.tsx`
+
+- Pill-shaped card with green accent border
+- Lightbulb icon + "Suggested Skill: {name}" header
+- Context text from LLM
+- Two pill buttons: "Use Skill" (green) + "Dismiss" (gray)
+
+### Modified Files
+
+| File | Changes |
+|------|---------|
+| `config.yaml` | Added `skills.enabled: true` + `skills.directory: C:\Users\hp\agent-skills\skills` |
+| `backend/assistant/function_registry.py` | Added `suggest_skill(name, context)` tool def to `LOCAL_TOOL_DEFINITIONS`; added to `CORE_TOOL_NAMES`; added `"skill"` to `GROUP_SETS` |
+| `backend/api/chat.py` | Imports SkillManager; `SKILL_DESCRIPTIONS_TEMPLATE` system prompt injection; active skill body injection; `suggest_skill` intercepted in iterative loop (skips dispatch); `confirm_skill`/`dismiss_skill` handled in WS message loop with `_run_engine` re-invocation; skill tool defs merged into filtered_tools; auto-deactivation on LLM completion |
+| `frontend/src/types/chat.ts` | Added `confirm_skill`/`dismiss_skill` to WsMessage type; `skill_suggested`/`skill_activated`/`skill_deactivated` to WsResponse type |
+| `frontend/src/services/websocket.ts` | Added `sendConfirmSkill(name)` and `sendDismissSkill()` methods |
+| `frontend/src/hooks/useChat.ts` | Added `pendingSkill`/`activeSkill` state; WS handlers for skill events; `confirmSkill`/`dismissSkill` callbacks |
+| `frontend/src/context/ChatContext.tsx` | Exposed `pendingSkill`, `activeSkill`, `confirmSkill`, `dismissSkill` in context |
+| `frontend/src/components/chat/ChatPanel.tsx` | Renders `SkillSuggestionCard` when `pendingSkill` is set; shows active skill pill banner above input |
+
+### Skill Lifecycle
+
+```
+LLM → suggest_skill(name="research", context="Let me research that topic")
+  → Backend sends skill_suggested WS message
+  → Frontend shows SkillSuggestionCard (name + context + Confirm/Dismiss)
+  → User clicks "Use Skill"
+  → Backend activates: skill body injected into system prompt, tools merged
+  → _run_engine fires → LLM works with skill context
+  → LLM completes (no more tool_calls)
+  → skill_deactivated sent to frontend
+  → Skill body removed from system prompt on next message
+```
+
+### Edge Cases
+
+| Case | Handling |
+|------|----------|
+| Skill not found by name | Returns "Skill '{name}' not found. Available: [...]" |
+| Multiple skills suggested back-to-back | `pending_suggestion.clear()` before new append |
+| User dismisses without confirming | `pending_suggestion.clear()` → no re-invocation |
+| LLM completes skill without deactivation | Auto-deactivated on `not tool_calls` |
+| Skill directory missing/empty | SkillManager returns empty list, warning logged |
+| YAML parse error in SKILL.md | Logged and skipped — other skills still load |
+| tools.py import error | Logged but skill body still usable |
+
+---
+
+## Bug Fix: Silent Response After Tool Calls — Implementation Complete (Jul 4)
+
+### Problem
+When the LLM returned tool_calls without generating text (e.g., `resume_project`, `recall_entity`, `list_directory`), the iterative loop processed all tool calls but the final LLM call returned `content=None, tool_calls=None`. The loop exited with no content, so no token was sent to the frontend. The user saw tool_call cards but no natural language response.
+
+### Root Cause
+The iterative loop passes `tools=filtered_tools` on every iteration. When the LLM finishes its tool work, it may return `content=None, tool_calls=None` instead of generating a summary — it still "sees" tools available and chooses not to respond. The old two-call architecture had solved this with `tools=[]` on the final call, but the iterative loop lost that guard.
+
+### Fix
+In `backend/api/chat.py`, after the iterative loop exits, if `content` is None or empty, make one final LLM call with `tools=[]` (empty list) to force a natural language response:
+
+```python
+if not content:
+    # Tools were called without generating text — force a summary
+    messages = [{"role": "system", "content": system}] + conv.get_context()
+    try:
+        def final_call(msgs):
+            resp = llm.chat(msgs, stream=False, tools=[])
+            resp.raise_for_status()
+            return llm.extract_response(resp)
+        summary, _ = await loop.run_in_executor(None, final_call, messages)
+        if summary:
+            content = summary
+    except Exception as e:
+        logger.error("Final summary call failed: %s", e)
+```
+
+The key detail: `tools=[]` prevents further tool invocations, forcing the LLM to generate text.
+
+### Flow After Fix
+```
+User: "what we had done in the API project"
+  → LLM: content=None, tool_calls=[resume_project, recall_entity, list_directory]
+  → Iterative loop processes all 3 tool calls, adds results to context
+  → Loop calls LLM again → content=None, tool_calls=None
+  → not tool_calls: break
+  → not content: True → makes final call with tools=[]
+  → LLM returns "I found the AI-Chatbot-API project..."
+  → Content sent as tokens → done
+```
+
+---
+
+## Need to Refine Idea
+
+### 3c. Data Export/Import
+
+#### New Backend Endpoints
+
+```
+GET  /api/export   →  JSON blob (download as mayday-backup-YYYY-MM-DD.json)
+POST /api/import   ←  Accept same JSON blob
+```
+
+#### Export Blob Structure
+
+```json
+{
+  "exported_at": "2026-06-18T12:00:00Z",
+  "version": "1.0",
+  "todos": [...],
+  "events": [...],
+  "conversations": { "index": [...], "days": {"YYYY-MM-DD.json": [...]} },
+  "operations": { "months": ["2026-06"], "files": {"2026-06.json": [...]} },
+  "memory_graph": { "nodes": [...], "edges": [...] },
+  "screenshots": { "index": [...] }
+}
+```
+
+#### Backend Changes
+
+| File | Changes |
+|------|---------|
+| `backend/api/export.py` | **CREATE** — `/api/export` collects from all stores + file system; `/api/import` validates and writes all data |
+| `backend/main.py` | Register export router |
+
+#### Frontend Changes
+
+| File | Changes |
+|------|---------|
+| `frontend/src/services/api.ts` | Add `exportData()`, `importData(json)` |
+| `frontend/src/App.tsx` | Add export/import button to sidebar or header |
+
+### 5c. Proactive Suggestions
+
+#### Goal
+When the chat page is empty or idle, Mayday shows clickable suggestion chips — upcoming events, overdue todos, recent activity, and general prompts — so the user discovers features without being asked.
+
+#### Architecture
+
+```
+SuggestionChips (frontend component)
+    │ polls GET /api/suggestions every 60s
+    ▼
+Backend: /api/suggestions
+    ├── list_events(start_time=now, end_time=now+60min) → "Standup in 15 min"
+    ├── list_todos(include_completed=False, check overdue) → "Buy milk is overdue"
+    ├── operation_log.query(date_from=today) → "3 items created today"
+    └── general prompts (rotated) → "Ask me about your schedule"
+```
+
+#### New Files (3)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `backend/api/suggestions.py` | ~60 | `GET /api/suggestions` endpoint |
+| `frontend/src/hooks/useSuggestions.ts` | ~40 | Polling hook (60s interval) |
+| `frontend/src/components/chat/SuggestionChips.tsx` | ~80 | Green pill-shaped buttons below empty chat state |
+
+#### Modified Files (2)
+
+| File | Change |
+|------|--------|
+| `backend/main.py` | Register `suggestions.py` router |
+| `frontend/src/components/chat/ChatPanel.tsx` | Import `<SuggestionChips>` — render when `messages.length === 0` |
+
+#### Backend: `GET /api/suggestions`
+
+Returns JSON array capped at 5 suggestions:
+- Upcoming events (next 60min) → max 2 chips
+- Overdue todos → max 2 chips
+- Recent activity (today) → 1 chip
+- General prompts (rotated) → max 2 chips
+
+### Skill Restrictive Mode — Need to Refine Idea
+
+#### Goal
+When a skill with `mode: restrictive` is active, Mayday blocks unrelated tools (`create_todo`, `remember`, `open_application`, etc.) so the LLM can only use tools relevant to the skill's purpose (file I/O, browser, search, git). Skills declare this in YAML frontmatter.
+
+#### Proposed Frontmatter
+```yaml
+---
+name: impeccably-designed-ui
+description: Design and refine UI components
+mode: restrictive  # NEW — default is "advisory" (current behavior, no change)
+---
+```
+
+#### Behavior
+| Mode | Tool Access | Use Case |
+|------|------------|----------|
+| `advisory` (default) | All 34+ tools available | General-purpose skills like "interview-me" |
+| `restrictive` | Only file, browser, search, git + skill's own tools | Design/build skills like "frontend-ui-engineering" |
+
+#### Files to Modify
+| File | Change |
+|------|--------|
+| `backend/assistant/skill_manager.py` | Add `mode: str = "advisory"` to `Skill` dataclass; parse from frontmatter |
+| `backend/api/chat.py` | Define `RESTRICTIVE_ALLOWED_TOOLS` whitelist; filter `filtered_tools` when active skill has `mode == "restrictive"` |
+
+#### Whitelist (Restrictive Mode)
+File tools, screenshot tools, browser/selenium tools, web search tools, unified search, git/github MCP tools, opencode MCP tools, weather — all core CRUD tools blocked.
+
+#### Why Not Implemented Yet
+No evidence the LLM is calling wrong tools during skill execution. Restrictive mode would be a ~20 line change. Waiting for real data before building.
+
+### Skills System — COMPLETED — see full section above
+
+### Dashboard + Project Tasks — Refine Tomorrow
+
+#### Goal
+Add task tracking directly to existing projects (no separate Goal store). Tasks break a project into discrete steps (research, plan, implement, test). New Dashboard panel gives a snapshot of time, weather, todos, events, and project progress.
+
+---
+
+#### Part 1 — Project Tasks (Backend)
+
+**Modify**: `backend/core/project_store.py` — Add 4 methods to ProjectStore:
+
+| Method | What it does |
+|--------|-------------|
+| `add_task(project_id, title, type, depends_on)` | Appends `{id, title, type, status:"pending", depends_on, result:"", created_at, updated_at}` to project's `tasks` array. Saves. |
+| `update_task_status(project_id, task_id, status, result)` | Updates task's status + result. `completed`/`blocked`/`failed` transitions only. Sets `updated_at`. Saves. Auto-records to operation log. |
+| `list_tasks(project_id, status_filter)` | Returns tasks. Optionally filtered by status. |
+| `get_active_task(project_id)` | Returns first task with `status="in_progress"`, or first `pending` whose dependencies are all completed. |
+
+No new data store — tasks live inline in each project dict inside `projects.json`.
+
+**Modify**: `backend/functions/project_functions.py` — 3 new functions + 2 modified:
+
+New:
+```python
+def add_project_task(name: str, title: str, type: str = "general", depends_on: list[str] = None) -> str:
+    """Add a task to a project. Returns task ID + project progress."""
+    store = get_project_store()
+    project = store.find_project_by_name(name)
+    task = store.add_task(project["id"], title, type, depends_on or [])
+    # sync to KG: task node → edge to project
+    return f"Task '{title}' added to '{name}'. ({count_done}/{count_total} tasks complete)"
+
+def update_task_status(name: str, task_title: str, status: str, result: str = "") -> str:
+    """Update task status. Logs to op log. If completed + type=research, syncs to KG."""
+    store = get_project_store()
+    project = store.find_project_by_name(name)
+    store.update_task_status(project["id"], task_id, status, result)
+    # if completed & type=research → kg.add_node("concept", ...) with edge to project
+    return f"Task '{task_title}' → {status}. Progress: {done}/{total}"
+
+def list_project_tasks(name: str, status: str = "") -> str:
+    """List tasks with progress."""
+    # returns formatted: "Tasks (4): ✅ Research APIs, ⏳ Design, ⬜ Build, ⬜ Test"
+```
+
+Modified:
+```python
+def create_project(name: str, tasks: list[dict] = None) -> str:
+    """Now accepts optional tasks list. Each task: {title, type?, depends_on?}"""
+    # creates project, then adds each task
+    # returns: "Project 'X' created with 4 tasks. Progress: 0/4"
+
+def resume_project(name: str) -> str:
+    """Now includes task progress in output."""
+    # adds line: "Tasks: 2/4 complete — next: Build app"
+```
+
+**Modify**: `backend/assistant/function_registry.py`
+- Add 3 new tool defs to `LOCAL_TOOL_DEFINITIONS`
+- Add 3 entries to `FUNCTION_MAP`
+- Add 3 names to `CORE_TOOL_NAMES` (always available — tasks are core functionality)
+- Add `tasks` optional param to `create_project` tool definition
+
+**Modify**: `backend/api/chat.py` — Inject active project block when a project with incomplete tasks exists:
+
+```python
+def _build_active_project_block() -> str:
+    store = get_project_store()
+    active = [p for p in store.list_projects(status="active") if p.get("tasks")]
+    if not active:
+        return ""
+    p = active[0]  # most recently active
+    tasks = p["tasks"]
+    done = sum(1 for t in tasks if t["status"] == "completed")
+    lines = [f"### Active Project: {p['name']}", f"Progress: {done}/{len(tasks)} tasks"]
+    for i, t in enumerate(tasks):
+        icon = {"completed":"✅","in_progress":"⏳","pending":"⬜","blocked":"🚫"}.get(t["status"], "⬜")
+        deps = f" (depends on: {', '.join(t['depends_on'])})" if t.get("depends_on") else ""
+        lines.append(f"{i+1}. {icon} {t['title']} {deps}")
+    lines.append("###")
+    return "\n".join(lines)
+```
+
+Inject after skill descriptions, before memory context:
+```python
+system += _build_active_project_block()
+```
+
+---
+
+#### Part 2 — Dashboard (Backend + Frontend)
+
+**New**: `backend/api/dashboard.py`
+
+```
+GET /api/dashboard → {
+  "server_time": "2026-07-04T14:30:00",
+  "date": "Saturday, July 4, 2026",
+  "timezone": "Asia/Kolkata",
+  "weather": { "temp": 32, "description": "Sunny", "icon": "☀️", "location": "Chennai" },
+  "pending_todos": [{ "id","title","due_date","priority" }],
+  "upcoming_events": [{ "id","title","start_time","end_time" }],
+  "projects": {
+    "total": 4,
+    "active": [{ "name":"Stock Analyzer","tasks_done":2,"tasks_total":4 }],
+    "paused": 1
+  }
+}
+```
+
+**Frontend**: New Components (5 files)
+
+| Component | What it shows | Data source |
+|-----------|-------------|-----------|
+| `DashboardPanel.tsx` | 2×2 grid layout | calls `useDashboard()` |
+| `TimeCard.tsx` | Live clock (1s tick), date, tz | `server_time` + JS `setInterval` |
+| `WeatherCard.tsx` | Temp + icon + description + location | `navigator.geolocation` → `POST /api/location` → `get_weather()` |
+| `TodoPreview.tsx` | Top 5 pending, checkbox toggles | `/api/dashboard` + `PUT /api/todos/:id` |
+| `EventPreview.tsx` | Next 5 events, click→Calendar nav | `/api/dashboard` |
+
+**New hook**: `frontend/src/hooks/useDashboard.ts` — polls `/api/dashboard` every 30s
+
+**Modified files**: `Sidebar.tsx` (add Dashboard pill, 0th position with `LayoutDashboard` icon), `App.tsx` (add route), `api.ts` (add `fetchDashboard()`)
+
+**Components**: All use existing `bg-surface0/60 rounded-2xl border border-white/5 p-4` card style + `lucide-react` icons. No new UI primitives needed.
+
+---
+
+#### Part 3 — Research → KG Sync
+
+When a research-type task is marked `completed` with a result:
+
+```python
+if type == "research" and status == "completed" and result:
+    kg.add_node("concept", f"research:{task_title}", {
+        "project_id": project_id,
+        "task_id": task_id,
+        "result": result,
+    })
+    project_node = kg.get_node_by_label(f"project:{project_name}")
+    kg.add_edge_if_missing(project_node["id"], research_node["id"], "has_finding")
+```
+
+This makes all research findings searchable via `recall` and visible in the Brain tab.
+
+---
+
+#### Implementation Order
+
+```
+Phase 1: Project Tasks (backend only)
+  ├── backend/core/project_store.py      — 4 new methods
+  ├── backend/functions/project_functions.py — 3 new + 2 modified
+  ├── backend/assistant/function_registry.py — register
+  └── backend/api/chat.py                — inject active project block
+
+Phase 2: Dashboard Backend
+  ├── backend/api/dashboard.py           — new endpoint
+  └── backend/main.py                    — register router
+
+Phase 3: Dashboard Frontend
+  ├── frontend/src/hooks/useDashboard.ts
+  ├── frontend/src/services/api.ts
+  ├── frontend/src/components/dashboard/
+  │   ├── DashboardPanel.tsx
+  │   ├── TimeCard.tsx
+  │   ├── WeatherCard.tsx
+  │   ├── TodoPreview.tsx
+  │   └── EventPreview.tsx
+  ├── frontend/src/components/layout/Sidebar.tsx
+  └── frontend/src/App.tsx
+```
+
+**Total**: 2 new backend files, 5 new frontend components, ~6 modified files.

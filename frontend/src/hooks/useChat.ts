@@ -11,6 +11,11 @@ export interface ChatMessage {
   image_url?: string
 }
 
+export interface PendingSkill {
+  name: string
+  context: string
+}
+
 let msgId = 0
 const nextId = () => `msg-${++msgId}`
 
@@ -19,6 +24,8 @@ export function useChat() {
   const [connected, setConnected] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [toolCallCount, setToolCallCount] = useState(0)
+  const [pendingSkill, setPendingSkill] = useState<PendingSkill | null>(null)
+  const [activeSkill, setActiveSkill] = useState<string | null>(null)
   const wsRef = useRef<ChatWebSocket | null>(null)
   const currentAssistantId = useRef<string | null>(null)
 
@@ -80,6 +87,16 @@ export function useChat() {
             addMessage({ id: nextId(), role: 'assistant', content: `Error: ${data.content}` })
             setStreaming(false)
             break
+          case 'skill_suggested':
+            setPendingSkill({ name: data.name || '', context: data.content || '' })
+            break
+          case 'skill_activated':
+            setPendingSkill(null)
+            setActiveSkill(data.name || '')
+            break
+          case 'skill_deactivated':
+            setActiveSkill(null)
+            break
           case 'conversation_loaded':
             if (data.conversation) {
               const msgs = data.conversation.messages.map((m) => ({
@@ -113,7 +130,19 @@ export function useChat() {
 
   const newConversation = useCallback(() => {
     setMessages([])
+    setPendingSkill(null)
+    setActiveSkill(null)
     wsRef.current?.send({ type: 'new_conversation' })
+  }, [])
+
+  const confirmSkill = useCallback((name: string) => {
+    setPendingSkill(null)
+    wsRef.current?.sendConfirmSkill(name)
+  }, [])
+
+  const dismissSkill = useCallback(() => {
+    setPendingSkill(null)
+    wsRef.current?.sendDismissSkill()
   }, [])
 
   return {
@@ -123,5 +152,9 @@ export function useChat() {
     sendMessage,
     newConversation,
     toolCallCount,
+    pendingSkill,
+    activeSkill,
+    confirmSkill,
+    dismissSkill,
   }
 }
