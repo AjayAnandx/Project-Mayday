@@ -2,9 +2,9 @@
 
 ## Overview
 
-Run Mayday 24/7 on a Windows laptop and access it from a phone anywhere via Tailscale.
+Run Mayday 24/7 on a Windows laptop and access it from a phone browser anywhere via Tailscale.
 
-**Architecture:** Single self-contained FastAPI server (port 8770) serving both the API and the built frontend as static files. Registered as a Windows service that starts on boot and auto-restarts on crash.
+**Architecture:** Single self-contained FastAPI server (port 8771) serving both the API and the built frontend. Registered as a Windows service via NSSM that starts on boot and auto-restarts on crash. Ollama runs as its own Windows service for the LLM backend.
 
 ---
 
@@ -14,43 +14,44 @@ Run Mayday 24/7 on a Windows laptop and access it from a phone anywhere via Tail
 |------|---------|
 | Python 3.11+ | FastAPI backend |
 | Node.js 18+ | Frontend build |
+| Google Chrome | Selenium screenshots |
 | NSSM | Windows service manager (`winget install nssm`) |
 | Tailscale | Secure remote access (phone + laptop) |
+| Ollama | Local LLM server (download — auto-registers service) |
 
 ---
 
-## Step 1 — Serve frontend from FastAPI
+## Step 1 — Install dependencies
 
-Modify `backend/main.py` to mount the built frontend as static files with an SPA catch-all:
-
-1. Add `from fastapi.staticfiles import StaticFiles` and `from fastapi.responses import FileResponse` imports
-2. Mount `frontend/dist/` at the root path
-3. Add a catch-all route that serves `index.html` for any unmatched path (so page refreshes and direct navigation work)
-
-### Code changes
-
-```python
-# At the top with other imports
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-
-# After all API routers are mounted
-FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
-
-# Only serve static files if the build exists
-if os.path.isdir(FRONTEND_DIST):
-    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
-
-    @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        if full_path.startswith("api/") or full_path.startswith("ws"):
-            from fastapi.responses import JSONResponse
-            return JSONResponse({"detail": "Not Found"}, status_code=404)
-        index_path = os.path.join(FRONTEND_DIST, "index.html")
-        return FileResponse(index_path)
+```powershell
+pip install -r requirements.txt
+cd frontend
+npm install
 ```
 
-## Step 2 — Build the frontend
+---
+
+## Step 2 — Set up environment variables
+
+Copy the template and fill in your API keys:
+
+```powershell
+copy .env.example .env
+```
+
+Edit `.env` with your keys:
+
+| Variable | Required? | Get it at |
+|----------|-----------|-----------|
+| `DEEPGRAM_API_KEY` | Yes (voice) | https://console.deepgram.com/ |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | Yes (GH tools) | https://github.com/settings/tokens |
+| `EXA_API_KEY` | Yes (web search) | https://dashboard.exa.ai/api-keys |
+
+`.env` is already in `.gitignore` — your keys stay local.
+
+---
+
+## Step 3 — Build the frontend
 
 ```powershell
 cd frontend
@@ -59,7 +60,36 @@ npm run build
 
 Output goes to `frontend/dist/`. Only needs repeating when frontend code changes.
 
-## Step 3 — Create the log directory
+---
+
+## Step 4 — Install Ollama and pull the model
+
+Download from https://ollama.com/download/windows — the installer auto-registers a Windows service so it starts on boot.
+
+```powershell
+ollama pull gemma4:31b-cloud
+```
+
+Verify it works:
+
+```powershell
+curl http://localhost:11434/api/tags
+→ {"models":[{"name":"gemma4:31b-cloud", ...}]}
+```
+
+---
+
+## Step 5 — Install NSSM
+
+```powershell
+winget install nssm
+```
+
+Or download from https://nssm.cc and place `nssm.exe` in `C:\Windows\System32\`.
+
+---
+
+## Step 6 — Create the log directory
 
 ```powershell
 mkdir logs
@@ -67,15 +97,9 @@ mkdir logs
 
 Service stdout/stderr will be written here.
 
-## Step 4 — Install NSSM
+---
 
-```powershell
-winget install nssm
-```
-
-Or download from [nssm.cc](https://nssm.cc) and place `nssm.exe` in `C:\Windows\System32\`.
-
-## Step 5 — Register the Windows service
+## Step 7 — Register the FastAPI Windows service
 
 ```powershell
 nssm install MaydayBackend
@@ -86,7 +110,7 @@ In the NSSM GUI that opens, set:
 | Field | Value |
 |-------|-------|
 | **Path** | `C:\Users\hp\AppData\Local\Programs\Python\Python311\python.exe` |
-| **Arguments** | `-m uvicorn backend.main:app --host 0.0.0.0 --port 8770` |
+| **Arguments** | `-m uvicorn backend.main:app --host 0.0.0.0 --port 8771` |
 | **Startup directory** | `C:\Users\hp\Projects\Mayday` |
 
 In the **Details** tab:
@@ -114,7 +138,7 @@ nssm start MaydayBackend
 Verify it's running:
 
 ```powershell
-curl http://localhost:8770/api/health
+curl http://localhost:8771/api/health
 → {"status":"ok"}
 ```
 
@@ -129,16 +153,18 @@ curl http://localhost:8770/api/health
 | Remove | `nssm remove MaydayBackend confirm` |
 | Edit GUI | `nssm edit MaydayBackend` |
 
-## Step 6 — Install Tailscale
+---
 
-1. Download from [tailscale.com/download/windows](https://tailscale.com/download/windows)
+## Step 8 — Install Tailscale
+
+1. Download from https://tailscale.com/download/windows
 2. Install and sign in with a Google/Microsoft/GitHub account
-3. Enable **Run as system service on Windows** during install (or in settings after) — this keeps the tailnet connection alive even when no user is logged in
+3. Enable **Run as system service on Windows** during install — keeps the tailnet connection alive even when no user is logged in
 
 ### On your phone
 
-1. Install Tailscale (iOS App Store / Google Play)
-2. Sign in with the same account
+1. Install Tailscale (Google Play / App Store)
+2. Sign in with the **same account**
 3. Both devices are now on the same tailnet
 
 ### Find your laptop's Tailscale IP
@@ -150,22 +176,27 @@ tailscale status
 
 ### Access Mayday from phone
 
-Open `http://100.x.x.x:8770` in the phone browser — the full app loads.
+Open `http://100.x.x.x:8771` in the phone browser — the full app loads.
 
 For convenience, note the **MagicDNS name** (e.g. `my-laptop.tailXXXXX.ts.net`) shown in the Tailscale admin console:
 
 ```
-http://my-laptop.tailXXXXX.ts.net:8770
+http://my-laptop.tailXXXXX.ts.net:8771
 ```
 
 ---
 
 ## Daily reboots — what to expect
 
-1. Laptop boots → Windows starts → NSSM launches `MaydayBackend` service (delayed start, ~30-60s after boot)
-2. FastAPI starts → scheduler begins checking reminders/todos/events every 60s
-3. Phone connects via Tailscale → `http://100.x.x.x:8770` → full Mayday is available
-4. If the process crashes → NSSM auto-restarts after 10s
+1. Laptop boots → Windows starts
+2. Ollama service starts (auto, ~10s)
+3. Tailscale connects (system service, ~15s)
+4. NSSM launches `MaydayBackend` (delayed start, ~30-60s after boot)
+5. FastAPI starts → serves API + frontend
+6. Phone connects via Tailscale → `http://100.x.x.x:8771` → full Mayday
+7. If the process crashes → NSSM auto-restarts after 10s
+
+**Total time from power button to usable:** ~60 seconds.
 
 ---
 
@@ -188,6 +219,23 @@ Same as frontend changes — just rebuild and restart the service.
 
 ---
 
+## What works on phone
+
+| Feature | Works? |
+|---------|--------|
+| Chat (LLM) | ✅ Full markdown rendering |
+| Todos CRUD | ✅ Full search/filter |
+| Calendar | ✅ Month grid, events CRUD |
+| Knowledge Graph | ✅ View + search |
+| Unified Search | ✅ Ctrl+K (tap) overlay |
+| Project tracking | ✅ Create projects, tasks, folders |
+| Screenshots | ✅ View captured screenshots |
+| Voice tab | ❌ Chrome/Edge only; not on iOS Safari |
+
+Voice tab is limited to Chrome/Edge on desktop. On phone, use text chat instead.
+
+---
+
 ## Troubleshooting
 
 ### Service won't start
@@ -199,17 +247,18 @@ type logs\stderr.log
 ```
 
 Common issues:
-- **Port 8770 already in use**: `netstat -ano | findstr :8770` then kill the process
+- **Port 8771 already in use**: `netstat -ano | findstr :8771` then kill the process
 - **Python module not found**: Verify the working directory is `C:\Users\hp\Projects\Mayday`
 - **Missing dependencies**: `pip install -r requirements.txt`
+- **Ollama not running**: `curl http://localhost:11434/api/tags`
 
 ### Cannot reach from phone
 
 - Verify Tailscale is connected on both devices: `tailscale status`
 - Verify the service is running: `nssm status MaydayBackend`
-- Check Windows Firewall: ensure port 8770 is allowed for private networks
-- Try from laptop: `curl http://localhost:8770/api/health`
-- Try from laptop's Tailscale IP: `curl http://100.x.x.x:8770/api/health`
+- Check Windows Firewall: ensure port 8771 is allowed for private networks
+- Try from laptop: `curl http://localhost:8771/api/health`
+- Try from laptop's Tailscale IP: `curl http://100.x.x.x:8771/api/health`
 
 ### Frontend is outdated
 
@@ -221,6 +270,16 @@ npm run build
 nssm restart MaydayBackend
 ```
 
+### Ollama issues
+
+```powershell
+# Check if Ollama is running
+curl http://localhost:11434/api/tags
+
+# Restart Ollama service
+nssm restart Ollama  # or use Windows Services GUI (services.msc)
+```
+
 ---
 
 ## Files involved
@@ -229,7 +288,16 @@ nssm restart MaydayBackend
 |------|---------|
 | `backend/main.py` | FastAPI app — serves API + frontend static files |
 | `frontend/dist/` | Built frontend (generated by `npm run build`) |
-| `config.yaml` | Server config (`host: 0.0.0.0`, port 8770) |
+| `config.yaml` | Server config (port 8771, model, MCP servers) |
+| `.env` | API keys (not in git) |
 | `logs/stdout.log` | Service stdout |
 | `logs/stderr.log` | Service stderr |
-| `install-service.ps1` | (Optional) Helper script for service management |
+| `data.json` | Todos and events data |
+| `conversations/` | Per-day conversation files |
+| `projects.json` | Project tracking store |
+
+## Known limitations
+
+- **Voice tab** — Browser SpeechRecognition API is Chrome/Edge only. iOS Safari and Firefox do not support it. Use text chat on phone.
+- **Selenium screenshots** — Requires Google Chrome installed on the server. ChromeDriver is managed automatically by `mcp-server-selenium`.
+- **Ollama model** — `gemma4:31b-cloud` routes through a cloud proxy via local Ollama. Expect higher latency than fully local models.
