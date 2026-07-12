@@ -3868,3 +3868,170 @@ Phase 4: Test
 | `backend/main.py` | Add Telegram bot startup task in lifespan |
 | `config.yaml` | Add `telegram:` section (enabled, bot_token, allowed_user_id) |
 | `requirements.txt` | Add `python-telegram-bot>=21.0` |
+
+---
+
+## PDF Document Parser — Implementation Plan
+
+### Goal
+Upload PDF documents → extract text with PyMuPDF (fitz) → index for search → query via LLM tools. Fast CPU-native parsing, no OCR needed for text-native PDFs.
+
+### Why PyMuPDF (fitz)
+- **Speed**: 5,000–15,000 pages/sec on CPU (native C++ bindings, memory-mapped I/O)
+- **Accuracy**: Perfect text extraction for native PDFs; metadata (title, author, dates) included
+- **Lightweight**: No system dependencies (unlike pdfplumber/poppler/tesseract)
+- **Windows-friendly**: Pure pip install, no DLL hell
+- **Features**: Page-by-page text, table extraction (`page.find_tables()`), links, annotations
+
+### Architecture
+
+```
+POST /api/documents (multipart/form-data)
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  PDFStore (backend/core/pdf_store.py)                        │
+│  - Save to /pdfs/{doc_id}.pdf                                │
+│  - fitz.open() → extract page text + metadata                │
+│  - Store per-page text in /pdfs/{doc_id}_meta.json           │
+│  - Index into NgramIndex + SearchTrie (reuse search_index.py)│
+│  - Add KnowledgeGraph node (type="document")                 │
+│  - Log to OperationLog                                       │
+└─────────────────────────────────────────────────────────────┘
+         │
+         ▼
+GET /api/documents/search?q=query&limit=10
+         │
+         ▼
+LLM Tools (function_registry.py)
+  - upload_pdf(file_path, filename) → doc_id
+  - read_pdf(doc_id, pages=[1,2,3]) → text
+  - search_pdfs(query, limit=5) → [snippets]
+  - list_pdfs() → [metadata]
+  - delete_pdf(doc_id)
+```
+
+### Data Model
+
+```
+/pdfs/
+  index.json              # [{"id", "filename", "pages", "title", "author", "created_at", "size", "sha256"}]
+  {doc_id}.pdf            # Original file
+  {doc_id}_meta.json      # {"pages": [{"num": 1, "text": "..."}], "metadata": {...}}
+```
+
+**Document Node in KnowledgeGraph:**
+```json
+{
+  "id": "doc:abc123",
+  "label": "Attention Is All You Need.pdf",
+  "type": "document",
+  "properties": {
+    "doc_id": "abc123",
+    "filename": "Attention Is All You Need.pdf",
+    "pages": 15,
+    "author": "Vaswani et al.",
+    "created_at": "2026-07-12T10:30:00Z",
+    "sha256": "e3b0c44..."
+  }
+}
+```
+
+### Performance Targets
+
+| Operation | Target Latency | Notes |
+|-----------|----------------|-------|
+| Upload 50-page PDF | < 2s | Extraction: ~100ms, Indexing: ~50ms |
+| Search query | < 5ms | Trigram index O(1) |
+| Read page range | < 10ms | Cached per-page text |
+| List 1000 docs | < 10ms | In-memory index |
+
+### Files to Create
+
+| File | Purpose |
+|------|---------|
+| `backend/core/pdf_store.py` | PDFStore class — upload, extract, index, search |
+| `backend/functions/document_functions.py` | LLM tool implementations |
+| `backend/api/documents.py` | REST endpoints (upload, list, search, read, delete) |
+| `frontend/src/types/document.ts` | TypeScript interfaces |
+| `frontend/src/hooks/useDocuments.ts` | React hook for CRUD + search |
+| `frontend/src/components/documents/DocumentPanel.tsx` | List + upload UI |
+| `frontend/src/components/documents/UploadDialog.tsx` | Drag-drop upload modal |
+| `frontend/src/components/documents/DocumentViewer.tsx` | Page-by-page viewer |
+
+### Dependencies
+
+```
+# requirements.txt — add:
+pymupdf>=1.24.0
+```
+
+### Phase 1: Core Backend (Week 1)
+
+1. **`pdf_store.py`**
+   - `PDFStore` class with `upload(file_bytes, filename)`, `get_text(doc_id, pages)`, `search(query, limit)`, `list()`, `delete(doc_id)`
+   - SHA256 deduplication
+   - Per-page text extraction with `page.get_text("text")`
+   - Metadata extraction via `doc.metadata`
+   - Table extraction via `page.find_tables()` (optional, Phase 2)
+
+2. **`document_functions.py`**
+   - `upload_pdf(file_path: str, filename: str) → str`
+   - `read_pdf(doc_id: str, pages: list[int] | None) → str`
+   - `search_pdfs(query: str, limit: int = 5) → str`
+   - `list_pdfs() → str`
+   - `delete_pdf(doc_id: str) → str`
+
+3. **Register in `function_registry.py`**
+   - Add tool definitions + add to `FUNCTION_MAP`
+   - Import in `function_registry.py`
+
+4. **`api/documents.py`**
+   - `POST /api/documents` (multipart upload)
+   - `GET /api/documents` (list)
+   - `GET /api/documents/{id}` (metadata)
+   - `GET /api/documents/{id}/text?pages=1,2,3` (extracted text)
+   - `GET /api/documents/search?q=&limit=` (search)
+   - `DELETE /api/documents/{id}` (delete)
+
+5. **`main.py`** — Register router
+
+### Phase 2: Search & Graph Integration (Week 1-2)
+
+- Extend `DataStore` or create `DocumentIndex` using `NgramIndex` + `SearchTrie` from `search_index.py`
+- Auto-chunk large PDFs into ~500 token segments for granular search results
+- KnowledgeGraph: add `document` node type with properties
+- OperationLog: record `upload`, `read`, `delete` actions
+
+### Phase 3: Frontend (Week 2)
+
+- Document types (`document.ts`)
+- Hook (`useDocuments.ts`) — mirrors `useTodos` pattern
+- `DocumentPanel.tsx` — list with search, delete, open viewer
+- `UploadDialog.tsx` — drag-drop, progress, multi-file
+- `DocumentViewer.tsx` — page navigator, text selection, copy
+
+### Phase 4: Polish (Week 2-3)
+
+- Progress indicator for large uploads (WebSocket or polling)
+- OCR fallback detection (if extracted text < 50 chars/page → flag)
+- Embeddings for semantic search (future: `sentence-transformers`)
+- Batch upload, folder organization, tags
+
+### Edge Cases
+
+| Scenario | Handling |
+|----------|----------|
+| Encrypted PDF | Return error "Password-protected PDF not supported" |
+| Image-only (scanned) PDF | Extract returns empty → flag `needs_ocr: true` in metadata |
+| Corrupted PDF | `fitz.open` raises → catch, return 400 |
+| Duplicate upload | SHA256 check → return existing doc_id |
+| Huge file (>100MB) | Stream to disk, chunked extraction, background task |
+| Memory pressure | Page-by-page extraction, not full-doc in memory |
+
+### Testing
+
+- Unit: `pdf_store.py` with sample PDFs (text, tables, metadata)
+- Integration: Upload → search → read → delete cycle
+- Load: 100 concurrent 50-page uploads
+- Accuracy: Compare extracted text vs. ground truth
