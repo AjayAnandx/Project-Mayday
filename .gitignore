@@ -19,3 +19,6 @@ operations/
 reminders.json
 projects.json
 projects/
+bin/
+*.tsbuildinfo
+python-installer.exe
