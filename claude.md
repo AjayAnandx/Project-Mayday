@@ -5,6 +5,7 @@ Desktop AI personal assistant with:
 - **Todo app** (visual panel with CRUD, search, filter)
 - **Calendar app** (visual month grid, click-to-add events)
 - **LLM chat** (Ollama with tool calling via OpenAI-compatible API)
+- **Dashboard** (default landing page with stats, upcoming events, weather, recent activity, AI news)
 - **Real-time voice** (speech-in/speech-out, interruptible — functional, browser SpeechRecognition + Deepgram/SpeechSynthesis TTS)
 
 See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (architecture, data model, phase plan, edge cases).
@@ -36,8 +37,10 @@ See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (
 - **Two-process**: FastAPI backend (uvicorn) + React frontend (Vite dev / Electron)
 - Vite proxies `/api` → `localhost:8771` and `/ws` → `ws://localhost:8771`
 - Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
+- Vite proxies `/api` → `localhost:8771` and `/ws` → `ws://localhost:8771`
+- **Dashboard** is the default landing page (stats summary, upcoming events, recent activity, weather widget, AI news feed)
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
-- 43 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status` + `unified_search` + `suggest_skill` + `capture_page_screenshot` + 11 system/file + 8 project/task (create_project, resume_project, list_projects, update_project_status, add_project_note, add_project_task, update_task_status, list_project_tasks)
+- 45 built-in function tools: 8 project/task + 5 todo/event CRUD + 2 event query + 5 memory + 2 conversation + 3 screenshot + 3 notifications/reminder + 3 misc (set_status, suggest_skill, capture_page_screenshot) + 11 system/file + query_operations + unified_search + get_weather
 - MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`), Selenium browser (`mcp-server-selenium`), opencode wrapper (`mcp_server_opencode` — bash, write, read, edit, glob, grep, stop)
 - Tool selection: Inverted group index (TF-IDF weighted, BM25 saturation, group-penalty) — replaces 4 hand-written keyword regexes; **92.2% precision, 90.8% recall**, <<0.01ms per query
 - `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
@@ -76,6 +79,7 @@ mayday/
 │   │   ├── events.py                 # Event CRUD routes
 │   │   ├── conversations.py          # Conversation routes
 │   │   ├── search.py                 # Unified search across all stores
+│   │   ├── dashboard.py              # Dashboard aggregation, weather, AI news
 │   │   └── chat.py                   # WebSocket endpoint (streaming)
 │   ├── core/
 │   │   ├── data_store.py             # JSON persistence (thread-safe)
@@ -142,18 +146,26 @@ mayday/
 │       │       ├── Modal.tsx         # rounded-2xl backdrop blur
 │       │       └── Badge.tsx
 │       ├── brain/
-│       │   ├── BrainPanel.tsx       # Main graph page with search bar
-│       │   ├── GraphCanvas.tsx      # Cytoscape.js force-directed graph
-│       │   └── NodeDetail.tsx       # Side panel for selected node info
-│       ├── search/
+│   │   ├── BrainPanel.tsx       # Main graph page with search bar
+│   │   ├── GraphCanvas.tsx      # Cytoscape.js force-directed graph
+│   │   └── NodeDetail.tsx       # Side panel for selected node info
+│   ├── dashboard/
+│   │   ├── DashboardPanel.tsx   # Main container with layout grid
+│   │   ├── StatsSummary.tsx     # Open/overdue todos, events, projects
+│   │   ├── UpcomingEvents.tsx   # Next 7 days of events
+│   │   ├── RecentActivity.tsx   # Last 10 operation log entries
+│   │   ├── WeatherWidget.tsx    # Chennai weather from wttr.in
+│   │   └── AINewsWidget.tsx     # Exa API AI news feed
+│   ├── search/
 │       │   └── SearchOverlay.tsx    # Ctrl+K search modal with categorized results
 │       ├── hooks/
 │       │   ├── useChat.ts           # WebSocket hook (token streaming)
 │       │   ├── useTodos.ts          # REST CRUD with search/filter
 │       │   ├── useEvents.ts         # REST CRUD
-│       │   ├── useGraph.ts          # Memory graph data fetching
-│       │   ├── useSearch.ts         # Debounced unified search hook
-│       │   ├── useVoice.ts          # Browser SpeechRecognition + SpeechSynthesis hook
+│   │   ├── useGraph.ts          # Memory graph data fetching
+│   │   ├── useDashboard.ts      # Dashboard aggregation + weather + AI news
+│   │   ├── useSearch.ts         # Debounced unified search hook
+│   │   ├── useVoice.ts          # Browser SpeechRecognition + SpeechSynthesis hook
 │   │   ├── useBackendVoice.ts   # Voice mode hook (SpeechRecognition STT + Deepgram/SpeechSynthesis TTS)
 │       │   └── use-auto-resize-textarea.ts
 │       ├── services/
@@ -167,6 +179,7 @@ mayday/
 │           ├── conversation.ts
 │           ├── chat.ts
 │           └── search.ts
+│           └── dashboard.ts
 │
 ├── electron/                         # Electron main process
 │   ├── main.ts                      # BrowserWindow + spawn uvicorn
@@ -193,9 +206,9 @@ mayday/
 └── CLAUDE.md                        # This file
 ```
 
-## API Endpoints (29 total)
+## API Endpoints (32 total)
 
-### REST (29 total)
+### REST (32 total)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Health check |
@@ -224,6 +237,9 @@ mayday/
 | `POST` | `/api/memory/repair` | One-time cleanup of junk nodes + stale projects |
 | `GET` | `/api/search` | Unified search across todos, events, conversations, graph, operations `?q=&limit=` |
 | `GET` | `/api/search/prefix` | Prefix/autocomplete search `?q=&limit=` (trie-based) |
+| `GET` | `/api/dashboard` | Aggregate stats, upcoming events, recent activity |
+| `GET` | `/api/dashboard/weather` | Live weather from wttr.in |
+| `GET` | `/api/dashboard/ai-news` | AI news from Exa API (cached 1h) |
 | `GET` | `/api/voice/status` | Backend voice status (STT/TTS engine info) |
 | `POST` | `/api/voice/transcribe` | Upload audio blob for transcription (stub) |
 
@@ -356,6 +372,9 @@ yellow:  '#eab308'
 - [x] **Project Task System + Auto-Skill Loading (Jul 12)**: 3 new LLM tools (`add_project_task`, `update_task_status`, `list_project_tasks`) for task lifecycle (pending → in_progress → completed/blocked/failed). Dependency tracking with cycle detection. `get_active_task()` auto-picks next eligible task. Auto-skill loading: when a task with `type: "research"` or `type: "build"` is set to `in_progress`, the matching skill auto-loads (Point A at engine start, Point B mid-iterative-loop). Active project block injected into system prompt shows real-time task progress. See `backend/core/project_store.py`, `backend/functions/project_functions.py`.
 - [x] **Dev Server + Screenshot Testing (Jul 12)**: `opencode_bash` now supports `background=True` to launch persistent dev servers (returns PID). New `opencode_stop(pid)` tool terminates background processes via `taskkill`. New `capture_page_screenshot(url)` tool navigates to a URL via Selenium, takes a screenshot, and displays it in chat with `image_url`. LLM can now build → start dev server → screenshot → stop server — all autonomous. See `backend/assistant/mcp_server_opencode.py`.
 - [x] **Production Deployment (Jul 12)**: Frontend served as static files from FastAPI (SPA catch-all). API keys moved to `.env` with `python-dotenv` loading + env var fallback. Production CORS allows Tailscale IPs. NSSM Windows service with auto-restart. Ollama as auto-start service. Tailscale 24/7 tunnel. See `docs/deployment.md`.
+- [x] **Dashboard (Jul 12)**: Default landing page with StatsSummary (todos, events, projects, conversations, graph), UpcomingEvents (next 7 days), RecentActivity (last 10 operations), WeatherWidget (wttr.in Chennai), AINewsWidget (Exa API, cached 1h). 3 new REST endpoints (`GET /api/dashboard`, `/weather`, `/ai-news`). 6 new React components under `dashboard/`. Dashboard is the default page on app load. 6th nav item in Sidebar.
+- [x] **Bug fix: AI news Exa API 400**: Dashboard AI news was returning HTTP 400. Removed invalid `"type": "article"` field from Exa API request — Exa v2 `type` parameter expects search algorithm (`neural`/`keyword`/`auto`), not content category. See `backend/api/dashboard.py`.
+- [x] **Bug fix: weather `available: false`**: `WeatherWidget` showed weather unavailable because `startswith("Weather")` matched valid response `"Weather for Chennai:..."`. Changed to `startswith("Weather data not available")`. See `backend/api/dashboard.py`.
 - [ ] **Proactive Suggestions — Need to Refine Idea**: Chat shows clickable suggestion chips (upcoming events, overdue todos, recent activity, general prompts) when the chat page is empty.
 - [ ] **Data Export/Import — Need to Refine Idea**: `GET /api/export` + `POST /api/import` blob endpoints for full data backup and restore.
 
@@ -443,6 +462,7 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `backend/functions/system_functions.py`: 11 LLM functions for system control + file access (open_application, close_application, set_volume, get_volume, copy_to_clipboard, get_system_info, get_active_window, read_file, write_file, append_file, list_directory)
 - `backend/api/memory.py`: REST API for graph visualization (GET/DELETE nodes)
 - `backend/api/search.py`: Unified search across all 5 data stores
+- `backend/api/dashboard.py`: Dashboard aggregation, weather, AI news
 - `frontend/src/components/brain/BrainPanel.tsx`: Graph page with search/refresh
 - `frontend/src/components/brain/GraphCanvas.tsx`: Cytoscape.js force-directed graph canvas
 - `frontend/src/components/brain/NodeDetail.tsx`: Node detail side panel with connections

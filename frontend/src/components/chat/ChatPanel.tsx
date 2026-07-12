@@ -26,11 +26,11 @@ export function ChatPanel() {
 
   return (
     <div className="flex flex-col h-full bg-crust">
-      <div className="flex-1 overflow-y-auto p-4 space-y-1">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-1">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-overlay0">
-            <p className="text-2xl font-bold bg-gradient-to-r from-green to-green/60 bg-clip-text text-transparent mb-2">Mayday</p>
-            <p className="text-sm text-overlay0">Ask me to create todos, events, or anything else!</p>
+            <p className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-green to-green/60 bg-clip-text text-transparent mb-2">Mayday</p>
+            <p className="text-xs sm:text-sm text-overlay0 px-4 sm:px-0 text-center">Ask me to create todos, events, or anything else!</p>
           </div>
         )}
         {messages.map((msg) => (
@@ -58,7 +58,7 @@ export function ChatPanel() {
         <div ref={bottomRef} />
       </div>
 
-      <div className="px-4 pb-4 pt-2">
+      <div className="px-3 sm:px-4 pb-3 sm:pb-4 pt-2">
         <div className="mx-auto w-full max-w-2xl">
           {activeSkill && !pendingSkill && (
             <div className="mb-2 flex items-center gap-2 rounded-full bg-green/10 border border-green/20 px-4 py-1.5">
@@ -96,7 +96,7 @@ export function ChatPanel() {
               }}
               placeholder={connected ? 'Type a message...' : 'Connecting...'}
               disabled={!connected || streaming}
-              className="flex-1 resize-none bg-transparent px-5 py-3.5 pr-14 text-sm text-text placeholder-overlay0 outline-none border-none leading-snug"
+              className="flex-1 resize-none bg-transparent px-4 sm:px-5 py-3 sm:py-3.5 pr-14 text-sm text-text placeholder-overlay0 outline-none border-none leading-snug"
               rows={1}
             />
 

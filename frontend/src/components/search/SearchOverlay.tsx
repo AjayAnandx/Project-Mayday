@@ -49,9 +49,9 @@ export function SearchOverlay({ open, onClose, onNavigate }: SearchOverlayProps)
   const hasResults = results && sections.some(s => results[s.key].length > 0)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]">
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[10vh] sm:pt-[15vh]">
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-xl mx-4 bg-surface0 border border-surface2 rounded-2xl shadow-2xl shadow-black/40 overflow-hidden">
+      <div className="relative w-full max-w-xl mx-2 sm:mx-4 bg-surface0 border border-surface2 rounded-2xl shadow-2xl shadow-black/40 overflow-hidden">
         <div className="flex items-center gap-3 px-4 py-3 border-b border-surface2">
           <Search className="h-4 w-4 text-overlay0 shrink-0" />
           <input

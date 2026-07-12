@@ -159,8 +159,8 @@ export function TodoDialog({ open, onClose, onSave, todo }: TodoDialogProps) {
             ]}
           />
           {recPattern && (
-            <div className="flex gap-2 mt-2">
-              <div className="w-24 flex flex-col gap-1.5">
+            <div className="flex flex-col sm:flex-row gap-2 mt-2">
+              <div className="w-full sm:w-24 flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-subtext0">Interval</label>
                 <input
                   type="number"
@@ -179,7 +179,7 @@ export function TodoDialog({ open, onClose, onSave, todo }: TodoDialogProps) {
                   className="w-full rounded-xl bg-surface0/50 px-3 py-2.5 text-sm text-text placeholder-overlay0 border border-surface1 focus:border-green/50 focus:outline-none focus:ring-1 focus:ring-green/20 transition-all outline-none"
                 />
               </div>
-              <div className="w-24 flex flex-col gap-1.5">
+              <div className="w-full sm:w-24 flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-subtext0">Max Count</label>
                 <input
                   type="number"
@@ -194,10 +194,10 @@ export function TodoDialog({ open, onClose, onSave, todo }: TodoDialogProps) {
         </div>
 
         <div className="flex justify-end gap-2 mt-2">
-          <Button type="button" variant="secondary" onClick={onClose}>
+          <Button type="button" variant="secondary" onClick={onClose} className="flex-1 sm:flex-none">
             Cancel
           </Button>
-          <Button type="submit">{todo ? 'Update' : 'Create'}</Button>
+          <Button type="submit" className="flex-1 sm:flex-none">{todo ? 'Update' : 'Create'}</Button>
         </div>
       </form>
     </Modal>

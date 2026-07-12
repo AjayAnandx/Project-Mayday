@@ -15,8 +15,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
   if (isTool) {
     return (
-      <div className="flex justify-center my-1.5">
-        <div className="bg-surface0/40 border border-surface1/50 rounded-lg px-3 py-1.5 text-[11px] text-subtext0 min-w-0">
+      <div className="flex justify-center my-1.5 mx-2 sm:mx-0">
+        <div className="bg-surface0/40 border border-surface1/50 rounded-lg px-2 sm:px-3 py-1.5 text-[11px] text-subtext0 min-w-0 w-full sm:w-auto">
           <div className="flex items-center gap-1.5 max-w-full">
             <span className="text-green font-mono text-[9px] uppercase tracking-wider font-semibold shrink-0">
               {message.tool_name}
@@ -41,8 +41,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} my-1`}>
       <div
         className={`${
-          isUser ? 'max-w-[65%]' : 'max-w-[80%]'
-        } px-3.5 py-2 text-[13px] leading-snug rounded-lg ${
+          isUser ? 'max-w-[75%] sm:max-w-[65%]' : 'max-w-[90%] sm:max-w-[80%]'
+        } px-3 sm:px-3.5 py-2 text-[13px] leading-snug rounded-lg ${
           isUser
             ? 'bg-green/15 text-text'
             : 'bg-surface0/50 text-text'

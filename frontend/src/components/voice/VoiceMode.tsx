@@ -140,23 +140,23 @@ export function VoiceMode({ onExit }: VoiceModeProps) {
 
   return (
     <div className="flex flex-col h-full bg-crust relative">
-      <div className="absolute top-0 left-0 right-0 z-10 p-4 flex items-center justify-between">
+      <div className="absolute top-0 left-0 right-0 z-10 p-3 sm:p-4 flex items-center justify-between">
         <button
           onClick={onExit}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-full text-sm text-overlay0 hover:text-text hover:bg-white/5 transition-colors"
+          className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm text-overlay0 hover:text-text hover:bg-white/5 transition-colors"
         >
-          <ArrowLeft className="h-4 w-4" />
-          Exit Voice
+          <ArrowLeft className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
+          <span className="hidden sm:inline">Exit Voice</span>
         </button>
         {engine && (
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 text-[10px] text-overlay1 uppercase tracking-wider">
-            <Radio className="h-3 w-3" />
+          <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1 rounded-full bg-white/5 text-[9px] sm:text-[10px] text-overlay1 uppercase tracking-wider">
+            <Radio className="h-2.5 sm:h-3 w-2.5 sm:w-3" />
             {engine}
           </div>
         )}
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
+      <div className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 pb-16">
         {voice.state === 'idle' && voice.micPermission === 'granted' ? (
           <div className="flex flex-col items-center gap-4">
             <p className="text-overlay0 text-sm">Microphone ready</p>
@@ -181,9 +181,9 @@ export function VoiceMode({ onExit }: VoiceModeProps) {
         )}
 
         {recentMessages.length > 0 && (
-          <div className="mt-8 w-full max-w-lg mx-auto space-y-1 opacity-60">
-            <div className="border-t border-white/5 pt-3 mb-2">
-              <span className="text-[10px] uppercase tracking-widest text-overlay0">Recent</span>
+          <div className="mt-6 sm:mt-8 w-full max-w-lg mx-auto space-y-1 opacity-60 px-2 sm:px-0">
+            <div className="border-t border-white/5 pt-2 sm:pt-3 mb-1 sm:mb-2">
+              <span className="text-[9px] sm:text-[10px] uppercase tracking-widest text-overlay0">Recent</span>
             </div>
             {recentMessages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} />
