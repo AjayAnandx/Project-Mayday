@@ -3409,6 +3409,58 @@ Telegram User → Bot API polling
 | `config.yaml` | Add `telegram:` section with `enabled`, `bot_token`, `allowed_user_id` |
 | `requirements.txt` | Add `python-telegram-bot>=21.0` |
 
+---
+
+## Production Deployment — Implementation Complete (Jul 12)
+
+### Goal
+Run Mayday 24/7 on a Windows laptop and access it from a phone browser anywhere via Tailscale.
+
+### Architecture
+
+```
+Windows Laptop (always on)
+├── Ollama (auto-start service) — Port 11434
+├── FastAPI (NSSM service) — Port 8771
+│   ├── API endpoints (29 REST + WebSocket)
+│   └── Built frontend (SPA static files)
+├── Tailscale (system service) — 100.x.x.x
+└── Selenium (on-demand) — Screenshots
+        │
+        │ Tailscale tunnel
+        ▼
+Phone browser → http://100.x.x.x:8771
+```
+
+### Changes
+
+| File | Change |
+|------|--------|
+| `backend/main.py` | Frontend static serving + SPA catch-all + production CORS (Tailscale IP regex) |
+| `backend/core/config.py` | `.env` loading via `python-dotenv`, env var fallback for API keys, projects_dir fallback |
+| `config.yaml` | API keys scrubbed → empty strings (secrets moved to `.env`); removed from `.gitignore` |
+| `.env.example` | **CREATE** — template for all env vars (Deepgram, GitHub, Exa) |
+| `.gitignore` | Removed `config.yaml` (track template); added `bin/`, `*.tsbuildinfo`, `python-installer.exe` |
+| `backend/requirements.txt` | Added `python-dotenv`, `mcp-server-git`, `mcp-server-selenium`, `selenium` |
+| `docs/deployment.md` | **CREATE** — full guide: env setup, frontend build, NSSM service, Ollama, Tailscale, troubleshooting |
+
+### 24/7 Behavior
+
+| Event | What happens |
+|-------|-------------|
+| Laptop boots | Windows starts (~10s) |
+| Ollama service | Auto-starts (~10s) |
+| Tailscale | Connects (~15s) |
+| MaydayBackend (NSSM) | Delayed auto-start (~30-60s) |
+| Phone → `100.x.x.x:8771` | App loads (~60s total) |
+| Process crash | NSSM auto-restarts (10s delay) |
+
+### Known Limitations
+
+- **Voice tab**: Chrome/Edge only; not on iOS Safari or Firefox
+- **Selenium**: Requires Google Chrome installed on the server
+- **Frontend build**: `npm run build` must be re-run on frontend changes
+
 ### Configuration (`config.yaml`)
 
 ```yaml
