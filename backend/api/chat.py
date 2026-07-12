@@ -84,28 +84,41 @@ WEATHER_INSTRUCTIONS = """
 
 PROJECT_INSTRUCTIONS = """
 ### Project Tracking
-- You have dedicated project tools: create_project, resume_project, list_projects, update_project_status, add_project_note. Use these instead of remember/recall for projects.
-- When RESUME is called, resume_project(name) returns full project state (status, files, conversations, graph edges). If fuzzy match succeeds it says "Found it!" — otherwise it suggests similar names.
+- You have dedicated project tools: create_project, resume_project, list_projects, update_project_status, add_project_note, add_project_task, update_task_status, list_project_tasks. Use these instead of remember/recall for projects.
+- When RESUME is called, resume_project(name) returns full project state (status, files, conversations, graph edges, task progress). If fuzzy match succeeds it says "Found it!" — otherwise it suggests similar names.
 - To LIST active projects, call list_projects(status="active"). Filters: active, paused, scrapped.
 - To UPDATE status, call update_project_status(name, status). Valid statuses: active, paused, scrapped.
 - To add research notes, call add_project_note(name, filename, content). This writes a .md to the project folder.
 - Projects auto-pause after 30 days of no activity.
 - Conversation IDs are auto-linked to the project — no need to call remember() for that.
 - To BUILD code, use opencode tools (opencode_write, opencode_bash, opencode_read, opencode_edit, opencode_glob, opencode_grep).
-- After EVERY project tool call, tell the user what happened."""
+
+### Task Lifecycle
+- add_project_task(project, title, type, depends_on): Add a task. Type options: research, general, build.
+- update_task_status(project, task_id, status, result): Transition through pending → in_progress → completed | blocked | failed.
+  Use task_id (preferred) or task_title (fallback) to identify the task.
+  For blocked/failed, set status and explain why. For completed, include a result summary.
+- list_project_tasks(project, status): View tasks. Use status filter (in_progress, pending, etc.) to focus.
+- When status transitions to "completed", check get_active_task for what to do next.
+- When a task type is 'research', the research skill will be auto-loaded. When type is 'build', the build skill will be auto-loaded.
+- CRITICAL: After EVERY opencode tool call (opencode_write, opencode_bash, opencode_read, opencode_edit, opencode_glob, opencode_grep), you MUST call update_task_status() to mark progress — 'completed' on success, 'blocked' or 'failed' on error.
+- After EVERY project/task tool call, tell the user what happened.
+- IMPORTANT: Do NOT ask the user for permission or confirmation between steps. Collect all the information you need upfront, then execute autonomously. The user has already given you full authority to execute project tasks. Just inform them of what you're doing and the results."""
 
 BUILD_MODE_INSTRUCTIONS = """
 ### Build Mode — Iterative Project Building
 When the user asks you to build, create, make, scaffold, or set up a project:
-1. Plan — briefly describe your approach
-2. Create — use opencode_bash (mkdir, git init, npm init) and opencode_write to create files
-3. Install — run dependency installers (npm install, pip install, etc.)
-4. Code — write the actual source files
-5. Test — run the test command (npm test, pytest, etc.)
-6. Fix — if tests fail, read the error output, fix the code, and re-run tests
-7. Complete — when ALL tests pass, stop calling tools and describe what was built
+1. Collect all requirements upfront — ask clarifying questions once, then proceed.
+2. Plan — briefly describe your approach.
+3. Create — use opencode_bash (mkdir, git init, npm init) and opencode_write to create files.
+4. Install — run dependency installers (npm install, pip install, etc.).
+5. Code — write the actual source files.
+6. Test — run the test command (npm test, pytest, etc.).
+7. Fix — if tests fail, read the error output, fix the code, and re-run tests.
+8. Complete — when ALL tests pass, stop calling tools and describe what was built.
 You can think out loud between tool calls. Your intermediate thoughts will be shown to the user in real-time.
-Never call the same tool with the same arguments more than 3 times. If you are stuck, explain the issue instead of repeating."""
+Never call the same tool with the same arguments more than 3 times. If you are stuck, explain the issue instead of repeating.
+CRITICAL: Do NOT ask the user "can I proceed?", "should I continue?", or "do you approve?" between steps. Once you understand the requirements, execute everything autonomously. Just inform the user of progress and results."""
 
 SKILL_DESCRIPTIONS_TEMPLATE = """
 ### Available Skills
@@ -125,6 +138,7 @@ CORE_TOOL_NAMES = {
     # Project tools (always available)
     "create_project", "resume_project", "list_projects",
     "update_project_status", "add_project_note",
+    "add_project_task", "update_task_status", "list_project_tasks",
     # System commands
     "open_application", "close_application",
     "set_volume", "get_volume",
@@ -135,6 +149,9 @@ CORE_TOOL_NAMES = {
     "get_weather",
     "opencode_bash", "opencode_write", "opencode_read",
     "opencode_edit", "opencode_glob", "opencode_grep",
+    "opencode_stop",
+    # Screenshot tools
+    "capture_page_screenshot",
     # Skill suggestion
     "suggest_skill",
 }
@@ -169,6 +186,7 @@ FETCH_TOOL_NAMES = {"fetch"}
 OPENCODE_TOOL_NAMES = {
     "opencode_bash", "opencode_write", "opencode_read",
     "opencode_edit", "opencode_glob", "opencode_grep",
+    "opencode_stop",
 }
 
 GROUP_SETS = {
@@ -230,6 +248,45 @@ def _make_voice_text(text: str) -> str:
     return short
 
 
+def _build_active_project_block():
+    from backend.core.project_store import get_project_store
+    store = get_project_store()
+    active_projects = store.list_projects(status="active")
+    if not active_projects:
+        return ""
+    lines = ["### Active Projects"]
+    for p in active_projects[:5]:
+        tasks = p.get("tasks", [])
+        done = sum(1 for t in tasks if t["status"] == "completed")
+        total = len(tasks)
+        progress = f"{done}/{total}" if total else "no tasks"
+        active_task = store.get_active_task(p["id"])
+        next_line = f" — next: {active_task['title']}" if active_task else ""
+        lines.append(f"- {p['name']} ({progress}){next_line}")
+    lines.append("###")
+    return "\n".join(lines)
+
+
+def _auto_load_skill_for_active_task(kg, active_skill, skill_manager):
+    if not kg or not skill_manager:
+        return
+    if active_skill and active_skill[0]:
+        return
+    from backend.core.project_store import get_project_store
+    store = get_project_store()
+    active_projects = store.list_projects(status="active")
+    if not active_projects:
+        return
+    for p in active_projects:
+        task = store.get_active_task(p["id"])
+        if task:
+            skill = skill_manager.get_skill_by_task_type(task["type"])
+            if skill:
+                active_skill.append(skill)
+                logger.info("Auto-loaded skill '%s' for task '%s'", skill.name, task["title"])
+                return
+
+
 async def _run_engine(
     ws: WebSocket,
     user_text: str,
@@ -264,9 +321,15 @@ async def _run_engine(
         if descs:
             system += SKILL_DESCRIPTIONS_TEMPLATE.format(descriptions=descs)
 
+    active_block = _build_active_project_block()
+    if active_block:
+        system += "\n\n" + active_block
+
     if active_skill and active_skill[0]:
         skill = active_skill[0]
         system += f"\n\n### Active Skill: {skill.name}\n{skill.body}\n###"
+    elif kg and not (active_skill and active_skill[0]):
+        _auto_load_skill_for_active_task(kg, active_skill, skill_manager)
 
     if kg:
         keywords = extract_keywords(user_text)
@@ -394,24 +457,68 @@ async def _run_engine(
 
             if fn_name == "suggest_skill":
                 skill_name = fn_args.get("name", "")
-                context = fn_args.get("context", "")
                 if skill_manager and skill_manager.get_skill(skill_name):
-                    if pending_suggestion is not None:
-                        pending_suggestion.clear()
-                        pending_suggestion.append(skill_name)
-                        pending_suggestion.append(context)
+                    skill = skill_manager.get_skill(skill_name)
+                    if active_skill is not None:
+                        active_skill.clear()
+                        active_skill.append(skill)
+                    body, skill_tool_defs, _ = skill_manager.apply_skill(skill_name)
+                    for sd in skill_tool_defs:
+                        if sd not in filtered_tools:
+                            filtered_tools.append(sd)
+                    system += f"\n\n### Active Skill: {skill.name}\n{body}\n###"
                     await _send_json(ws, {
-                        "type": "skill_suggested",
+                        "type": "skill_activated",
                         "name": skill_name,
-                        "content": context,
                     })
-                    result = f"I suggested the '{skill_name}' skill. Waiting for confirmation."
+                    result = f"Auto-activated skill '{skill_name}' for this task."
                 else:
                     avail = skill_manager.list_skills() if skill_manager else []
                     result = f"Skill '{skill_name}' not found. Available: {', '.join(avail)}"
                 conv.add_message("tool", result, tool_call_id=tool_call_id)
                 await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
-                continue
+
+            if fn_name == "capture_page_screenshot":
+                url = fn_args.get("url", "")
+                if not url:
+                    result = "Error: No URL provided."
+                else:
+                    try:
+                        await mcp.call_tool("navigate", {"url": url})
+                    except Exception as e:
+                        result = f"navigate error: {e}"
+                        tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
+                        await _send_json(ws, tool_msg)
+                        conv.add_message("tool", result, tool_call_id=tool_call_id)
+                        continue
+                    await asyncio.sleep(1.5)
+                    ss_dir = os.path.join(os.path.dirname(__file__), "..", "..", "screenshots")
+                    os.makedirs(ss_dir, exist_ok=True)
+                    try:
+                        ss_result = await mcp.call_tool("take_screenshot", {"save_path": ss_dir})
+                    except Exception as e:
+                        result = f"screenshot error: {e}"
+                        tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
+                        await _send_json(ws, tool_msg)
+                        conv.add_message("tool", result, tool_call_id=tool_call_id)
+                        continue
+                    import re as _scr
+                    _scr_match = _scr.search(r"Screenshot saved to (.+\.png)", ss_result)
+                    ss_path = _scr_match.group(1) if _scr_match else ""
+                    if ss_path and os.path.exists(ss_path):
+                        ss_store = get_screenshot_store()
+                        saved = ss_store.add_screenshot(ss_path)
+                        if saved:
+                            tool_msg = {
+                                "type": "tool_call", "name": fn_name,
+                                "result": f"Screenshot captured at {url}",
+                                "image_url": f"/screenshots/{saved}",
+                            }
+                            await _send_json(ws, tool_msg)
+                            conv.add_message("tool", f"Screenshot captured at {url}", tool_call_id=tool_call_id)
+                            seen_calls.append((fn_name, json.dumps(fn_args, sort_keys=True), ""))
+                            continue
+                    result = "Screenshot taken but could not be registered in store."
 
             if fn_name in OPENCODE_TOOL_NAMES:
                 opencode_used = True
@@ -419,6 +526,32 @@ async def _run_engine(
             result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
             if len(result) > MAX_TOOL_RESULT_LENGTH:
                 result = result[:MAX_TOOL_RESULT_LENGTH] + "\n...[truncated]"
+
+            if fn_name == "update_task_status" and skill_manager and not (active_skill and active_skill[0]):
+                new_status = fn_args.get("status", "")
+                if new_status == "in_progress":
+                    task_title = fn_args.get("task_title", "")
+                    proj_name = fn_args.get("name", "")
+                    if proj_name:
+                        from backend.core.project_store import get_project_store
+                        pstore = get_project_store()
+                        project = pstore.find_project_by_name(proj_name)
+                        if project:
+                            target_task = None
+                            for t in project.get("tasks", []):
+                                if t["id"] == fn_args.get("task_id", ""):
+                                    target_task = t
+                                    break
+                                if task_title and t["title"].lower() == task_title.lower():
+                                    target_task = t
+                                    break
+                            if target_task:
+                                skill = skill_manager.get_skill_by_task_type(target_task["type"])
+                                if skill:
+                                    if active_skill is not None:
+                                        active_skill.clear()
+                                        active_skill.append(skill)
+                                        logger.info("Point B: Auto-loaded skill '%s' for task '%s'", skill.name, target_task["title"])
 
             args_hash = json.dumps(fn_args, sort_keys=True)
             result_head = result[:100]
@@ -473,11 +606,18 @@ async def _run_engine(
             tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
 
             if fn_name == "take_screenshot":
-                path_start = result.find("screenshot_")
-                if path_start != -1:
-                    raw_filename = result[path_start:].split()[0].rstrip(". \n")
+                import re as _re
+                _path_match = _re.search(r"Screenshot saved to (.+\.png)", result)
+                if _path_match:
+                    src_path = _path_match.group(1)
+                else:
+                    _start = result.find("screenshot_")
+                    if _start != -1:
+                        src_path = result[_start:].split()[0].rstrip(". \n")
+                    else:
+                        src_path = ""
+                if src_path and os.path.exists(src_path):
                     ss_store = get_screenshot_store()
-                    src_path = os.path.join(os.path.dirname(__file__), "..", "..", raw_filename)
                     saved = ss_store.add_screenshot(src_path)
                     if saved:
                         tool_msg["image_url"] = f"/screenshots/{saved}"
@@ -523,6 +663,13 @@ async def _run_engine(
         conv_data = get_store().get_conversation(conv.current_id)
         if conv_data:
             kg.sync_conversation(conv_data)
+        from backend.core.project_store import get_project_store
+        pstore = get_project_store()
+        active_projects = pstore.list_projects(status="active")
+        for proj in active_projects:
+            if conv.current_id not in proj.get("conversation_ids", []):
+                pstore.link_conversation(proj["id"], conv.current_id)
+                logger.info("Auto-linked conversation %s to project '%s'", conv.current_id, proj["name"])
 
     if active_skill and not tool_calls:
         active_skill.clear()

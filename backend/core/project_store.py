@@ -41,7 +41,11 @@ class ProjectStore:
         if not Path(path).is_absolute():
             path = str(Path(__file__).resolve().parent.parent.parent / path)
         self._path = Path(path)
-        self._projects_dir = Path(__file__).resolve().parent.parent.parent / "projects"
+        cfg_projects = cfg.get("data", {}).get("projects_dir", "")
+        if cfg_projects:
+            self._projects_dir = Path(cfg_projects).resolve()
+        else:
+            self._projects_dir = Path(__file__).resolve().parent.parent.parent / "projects"
         self._lock = threading.Lock()
         self._projects: list[dict] = []
         self._load()
@@ -61,6 +65,10 @@ class ProjectStore:
             json.dumps({"projects": self._projects}, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    @property
+    def projects_dir(self) -> Path:
+        return self._projects_dir
 
     def _init_projects_dir(self):
         self._projects_dir.mkdir(parents=True, exist_ok=True)
@@ -88,7 +96,7 @@ class ProjectStore:
             pass
         return False
 
-    def create_project(self, name: str) -> dict:
+    def create_project(self, name: str, tasks: list[dict] | None = None) -> dict:
         with self._lock:
             name = name.strip()
             if not name:
@@ -109,8 +117,9 @@ class ProjectStore:
                 "status": "active",
                 "created_at": _utcnow(),
                 "last_activity": _utcnow(),
-                "folder": f"projects/{folder_name}/",
+                "folder": folder_name,
                 "conversation_ids": [],
+                "tasks": [],
             }
             self._projects.append(project)
             self._save()
@@ -124,6 +133,10 @@ class ProjectStore:
                 "create", "project", project_id, name,
                 details={"folder": project["folder"]},
             )
+
+            if tasks:
+                for t in tasks:
+                    self._add_task_inner(project_id, t.get("title", ""), t.get("type", "general"), t.get("depends_on", []))
 
             return project
 
@@ -206,6 +219,153 @@ class ProjectStore:
             self._projects[idx]["name"] = new_name.strip()
             self._save()
             return dict(self._projects[idx])
+
+    def _find_task_index(self, project: dict, task_id: str) -> int | None:
+        for i, t in enumerate(project.get("tasks", [])):
+            if t["id"] == task_id:
+                return i
+        return None
+
+    def _find_task_by_title(self, project: dict, title: str) -> dict | None:
+        title_lower = title.strip().lower()
+        for t in project.get("tasks", []):
+            if t["title"].lower() == title_lower:
+                return t
+        return None
+
+    def _check_circular_dep(self, project: dict, title: str, depends_on: list[str], depth: int = 0) -> bool:
+        if depth > 10:
+            return True
+        for dep_title in depends_on:
+            dep = self._find_task_by_title(project, dep_title)
+            if dep and dep.get("depends_on"):
+                if title.lower() == dep_title.lower():
+                    return True
+                if self._check_circular_dep(project, title, dep["depends_on"], depth + 1):
+                    return True
+        return False
+
+    def _add_task_inner(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None) -> dict | None:
+        idx = self._find_index(project_id)
+        if idx is None:
+            return {"error": "Project not found"}
+        project = self._projects[idx]
+        if project.get("tasks") is None:
+            project["tasks"] = []
+
+        title = title.strip()
+        if not title:
+            return {"error": "Task title cannot be empty"}
+
+        valid_types = ("research", "general", "build")
+        if type not in valid_types:
+            return {"error": f"Invalid type '{type}'. Must be one of {valid_types}"}
+
+        deps = depends_on or []
+        for dep_title in deps:
+            if not self._find_task_by_title(project, dep_title):
+                return {"error": f"Dependency '{dep_title}' not found. Create it first."}
+
+        if self._check_circular_dep(project, title, deps):
+            return {"error": "Circular dependency detected"}
+
+        task = {
+            "id": "task_" + uuid.uuid4().hex[:8],
+            "title": title,
+            "type": type,
+            "status": "pending",
+            "depends_on": deps,
+            "result": "",
+            "created_at": _utcnow(),
+            "updated_at": _utcnow(),
+        }
+        project["tasks"].append(task)
+        project["last_activity"] = _utcnow()
+        self._save()
+
+        get_operation_log().record(
+            "add_task", "project_task", task["id"], title,
+            details={"project_id": project_id, "type": type},
+        )
+        return task
+
+    def add_task(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None) -> dict | None:
+        with self._lock:
+            return self._add_task_inner(project_id, title, type, depends_on)
+
+    def update_task_status(self, project_id: str, task_id: str, status: str, result: str = "") -> dict | None:
+        VALID_TRANSITIONS = {
+            "pending": ["in_progress"],
+            "in_progress": ["completed", "blocked", "failed"],
+        }
+        with self._lock:
+            idx = self._find_index(project_id)
+            if idx is None:
+                return {"error": "Project not found"}
+            project = self._projects[idx]
+            t_idx = self._find_task_index(project, task_id)
+            if t_idx is None:
+                return {"error": f"Task '{task_id}' not found"}
+            task = project["tasks"][t_idx]
+            old_status = task["status"]
+            allowed = VALID_TRANSITIONS.get(old_status, [])
+            if status not in allowed:
+                return {"error": f"Cannot transition from '{old_status}' to '{status}'. Allowed: {allowed}"}
+            task["status"] = status
+            if result:
+                task["result"] = result
+            task["updated_at"] = _utcnow()
+            project["last_activity"] = _utcnow()
+            self._save()
+
+            get_operation_log().record(
+                status, "project_task", task_id, task["title"],
+                details={"project_id": project_id, "from": old_status, "to": status},
+            )
+
+            if result:
+                kg = get_graph()
+                node_label = f"task:{project['name']}/{task['title']}"
+                kg.add_node("concept", node_label, {"type": "task_result", "project": project["name"], "task_title": task["title"]})
+                project_node = kg.get_node_by_label(f"project:{project['name']}")
+                task_node = kg.get_node_by_label(node_label)
+                if project_node and task_node:
+                    kg.add_edge_if_missing(project_node["id"], task_node["id"], "has_task_result")
+
+            return dict(task)
+
+    def list_tasks(self, project_id: str, status_filter: str | None = None) -> list[dict]:
+        with self._lock:
+            idx = self._find_index(project_id)
+            if idx is None:
+                return []
+            project = self._projects[idx]
+            tasks = project.get("tasks", [])
+            if status_filter:
+                tasks = [t for t in tasks if t["status"] == status_filter]
+            return [dict(t) for t in tasks]
+
+    def get_active_task(self, project_id: str) -> dict | None:
+        with self._lock:
+            idx = self._find_index(project_id)
+            if idx is None:
+                return None
+            project = self._projects[idx]
+            tasks = project.get("tasks", [])
+            for t in tasks:
+                if t["status"] == "in_progress":
+                    return dict(t)
+            for t in tasks:
+                if t["status"] == "pending":
+                    deps_met = True
+                    for dep_title in t.get("depends_on", []):
+                        dep = self._find_task_by_title(project, dep_title)
+                        if not dep or dep["status"] != "completed":
+                            deps_met = False
+                            break
+                    if deps_met:
+                        return dict(t)
+            return None
 
     def link_conversation(self, project_id: str, conversation_id: str):
         with self._lock:

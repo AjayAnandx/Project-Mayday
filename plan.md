@@ -2589,211 +2589,1178 @@ Returns JSON array capped at 5 suggestions:
 - Recent activity (today) → 1 chip
 - General prompts (rotated) → max 2 chips
 
-### Skill Restrictive Mode — Need to Refine Idea
-
-#### Goal
-When a skill with `mode: restrictive` is active, Mayday blocks unrelated tools (`create_todo`, `remember`, `open_application`, etc.) so the LLM can only use tools relevant to the skill's purpose (file I/O, browser, search, git). Skills declare this in YAML frontmatter.
-
-#### Proposed Frontmatter
-```yaml
----
-name: impeccably-designed-ui
-description: Design and refine UI components
-mode: restrictive  # NEW — default is "advisory" (current behavior, no change)
----
-```
-
-#### Behavior
-| Mode | Tool Access | Use Case |
-|------|------------|----------|
-| `advisory` (default) | All 34+ tools available | General-purpose skills like "interview-me" |
-| `restrictive` | Only file, browser, search, git + skill's own tools | Design/build skills like "frontend-ui-engineering" |
-
-#### Files to Modify
-| File | Change |
-|------|--------|
-| `backend/assistant/skill_manager.py` | Add `mode: str = "advisory"` to `Skill` dataclass; parse from frontmatter |
-| `backend/api/chat.py` | Define `RESTRICTIVE_ALLOWED_TOOLS` whitelist; filter `filtered_tools` when active skill has `mode == "restrictive"` |
-
-#### Whitelist (Restrictive Mode)
-File tools, screenshot tools, browser/selenium tools, web search tools, unified search, git/github MCP tools, opencode MCP tools, weather — all core CRUD tools blocked.
-
-#### Why Not Implemented Yet
-No evidence the LLM is calling wrong tools during skill execution. Restrictive mode would be a ~20 line change. Waiting for real data before building.
-
 ### Skills System — COMPLETED — see full section above
 
-### Dashboard + Project Tasks — Refine Tomorrow
+---
 
-#### Goal
-Add task tracking directly to existing projects (no separate Goal store). Tasks break a project into discrete steps (research, plan, implement, test). New Dashboard panel gives a snapshot of time, weather, todos, events, and project progress.
+## Project Task System + Auto-Skill Loading — Implementation Complete
+
+### Goal
+1. **Task tracking for projects**: Break a project into discrete steps (research, plan, build, test) with dependency tracking, status lifecycle, and system prompt visibility.
+2. **Auto-skill loading by task type**: When an `in_progress` task has a `type` that matches a skill's `task_type`, that skill auto-loads without user interaction.
+
+### Gaps Identified & Resolved
+
+| # | Gap | Resolution |
+|---|-----|-----------|
+| 1 | Conversation auto-link never called | `link_conversation()` called from `chat.py` after each `_run_engine` completes |
+| 2 | No `in_progress` transition | Required explicit step between `pending` and `completed`. Valid transitions: `pending → in_progress → completed | blocked | failed`. Rejects invalid skips. |
+| 3 | `task_id` vs `task_title` | Store method uses `task_id`. LLM function accepts `task_id` (preferred) with `task_title` fuzzy fallback. |
+| 4 | Task ordering | `get_active_task` returns in array index order (insertion order). |
+| 5 | Circular dependencies | `add_task` traverses dep graph to 10 depth — rejects cycles. |
+| 6 | Undefined `depends_on` titles | Validated at add time — all dependency titles must exist in project's existing tasks. |
+| 7 | KG sync for all task types | All completed tasks with a result create KG concept node `task:<project>/<title>` with edge `has_task_result` to project. |
+| 8 | Operation log for `add_task` | Recorded on every task add. |
 
 ---
 
-#### Part 1 — Project Tasks (Backend)
+### Files Modified (7 total)
 
-**Modify**: `backend/core/project_store.py` — Add 4 methods to ProjectStore:
+| File | Changes |
+|------|---------|
+| `backend/core/project_store.py` | +4 store methods (`add_task`, `update_task_status`, `list_tasks`, `get_active_task`); `create_project` accepts optional `tasks` param |
+| `backend/functions/project_functions.py` | +3 new LLM functions (`add_project_task`, `update_task_status`, `list_project_tasks`); +2 modified (`create_project`, `resume_project`) |
+| `backend/assistant/function_registry.py` | +3 tool defs + 3 FUNCTION_MAP entries; modified `create_project` def (+tasks param); +3 CORE_TOOL_NAMES |
+| `backend/assistant/skill_manager.py` | +`task_type` field to `Skill` dataclass; parse from YAML frontmatter; +`get_skill_by_task_type()` lookup method |
+| `backend/api/chat.py` | +`_build_active_project_block()` injected into system prompt; +auto-skill loading at 2 trigger points; +conversation auto-link fix; +project names to CORE_TOOL_NAMES |
+| `backend/api/chat.py` — PROJECT_INSTRUCTIONS | Updated with task lifecycle docs |
+| *No frontend changes* | Task progress visible via system prompt injection; skills auto-load silently |
 
-| Method | What it does |
-|--------|-------------|
-| `add_task(project_id, title, type, depends_on)` | Appends `{id, title, type, status:"pending", depends_on, result:"", created_at, updated_at}` to project's `tasks` array. Saves. |
-| `update_task_status(project_id, task_id, status, result)` | Updates task's status + result. `completed`/`blocked`/`failed` transitions only. Sets `updated_at`. Saves. Auto-records to operation log. |
-| `list_tasks(project_id, status_filter)` | Returns tasks. Optionally filtered by status. |
-| `get_active_task(project_id)` | Returns first task with `status="in_progress"`, or first `pending` whose dependencies are all completed. |
+---
 
-No new data store — tasks live inline in each project dict inside `projects.json`.
+### 1. `backend/core/project_store.py` — Data Layer
 
-**Modify**: `backend/functions/project_functions.py` — 3 new functions + 2 modified:
+#### 1a. `create_project` — modified
 
-New:
 ```python
-def add_project_task(name: str, title: str, type: str = "general", depends_on: list[str] = None) -> str:
-    """Add a task to a project. Returns task ID + project progress."""
-    store = get_project_store()
-    project = store.find_project_by_name(name)
-    task = store.add_task(project["id"], title, type, depends_on or [])
-    # sync to KG: task node → edge to project
-    return f"Task '{title}' added to '{name}'. ({count_done}/{count_total} tasks complete)"
+def create_project(self, name: str, tasks: list[dict] | None = None) -> dict:
+```
+- Appends `tasks: []` to project dict (existing code unchanged)
+- If tasks provided, calls `self.add_task(project_id, t["title"], t.get("type", "general"), t.get("depends_on", []))` for each
+- Returns project dict with tasks included
 
-def update_task_status(name: str, task_title: str, status: str, result: str = "") -> str:
-    """Update task status. Logs to op log. If completed + type=research, syncs to KG."""
-    store = get_project_store()
-    project = store.find_project_by_name(name)
-    store.update_task_status(project["id"], task_id, status, result)
-    # if completed & type=research → kg.add_node("concept", ...) with edge to project
-    return f"Task '{task_title}' → {status}. Progress: {done}/{total}"
+#### 1b. `add_task` — new method
 
+```python
+def add_task(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None) -> dict | None:
+```
+- Validates project exists
+- Validates all `depends_on` titles exist in project's existing tasks (reject with error if missing)
+- Cycle detection: traverses dependency graph up to 10 depth — rejects cycles
+- Creates task dict:
+  ```json
+  {
+    "id": "task_" + uuid4().hex[:8],
+    "title": "Survey papers",
+    "type": "research",
+    "status": "pending",
+    "depends_on": [],
+    "result": "",
+    "created_at": "2026-07-06T...",
+    "updated_at": "2026-07-06T..."
+  }
+  ```
+- Appends to project["tasks"], saves, touches activity
+- Records operation log: `"add_task", "project_task", task_id, title`
+- Returns task dict
+
+#### 1c. `update_task_status` — new method
+
+```python
+def update_task_status(self, project_id: str, task_id: str, status: str, result: str = "") -> dict | None:
+```
+- Valid transitions: `pending → in_progress → completed | blocked | failed`
+- Rejects invalid transitions with error message
+- Updates `task["status"]`, `task["result"]` (if result provided), `task["updated_at"]`
+- Saves, touches activity, records operation log
+- **KG sync**: if result provided, creates concept node:
+  - Label: `task:<project_name>/<task_title>`
+  - Type: `concept`, property: `type: "task_result"`
+  - Edge: project → `has_task_result` → concept node
+- Returns updated task dict
+
+#### 1d. `list_tasks` — new method
+
+```python
+def list_tasks(self, project_id: str, status_filter: str | None = None) -> list[dict]:
+```
+- Filters project["tasks"] by status if provided, else all
+- Returns empty list if project not found
+
+#### 1e. `get_active_task` — new method
+
+```python
+def get_active_task(self, project_id: str) -> dict | None:
+```
+- Ordered by array index (insertion order)
+- Returns first task with `status == "in_progress"` if any
+- Else returns first task with `status == "pending"` where all `depends_on` titles have matching task with `status == "completed"`
+- Cycle safety: if dependency chain exceeds 10 depth, returns None
+- Returns None if no eligible task
+
+---
+
+### 2. `backend/functions/project_functions.py` — LLM Functions
+
+#### 2a. `create_project` — modified
+
+```python
+def create_project(name: str, tasks: list[dict] | None = None) -> str:
+```
+- Calls `store.create_project(name, tasks)`
+- With tasks: `"Project '{name}' created with {n} tasks. Progress: 0/{n}."`
+- Without tasks: `"Project '{name}' created (status: active)."`
+
+#### 2b. `resume_project` — modified
+
+Append after graph edges (before return):
+```python
+tasks = project.get("tasks", [])
+if tasks:
+    done = sum(1 for t in tasks if t["status"] == "completed")
+    blocked = sum(1 for t in tasks if t["status"] == "blocked")
+    lines.append(f"Tasks: {done}/{len(tasks)} complete" + (f" ({blocked} blocked)" if blocked else ""))
+    active_task = store.get_active_task(project["id"])
+    if active_task:
+        lines.append(f"Next: {active_task['title']}")
+```
+
+#### 2c. `add_project_task` — new
+
+```python
+def add_project_task(name: str, title: str, type: str = "general", depends_on: list[str] | None = None) -> str:
+```
+- Validates type in `("research", "general", "build")`
+- Gets project via `find_project_by_name`
+- Calls `store.add_task(project["id"], title, type, depends_on or [])`
+- Returns: `"Task '{title}' added to '{name}'. Progress: {done}/{total}."`
+
+#### 2d. `update_task_status` — new
+
+```python
+def update_task_status(name: str, task_id: str, status: str, result: str = "", task_title: str | None = None) -> str:
+```
+- **Gap #3 resolved**: Finds task by `task_id` first, then falls back to `task_title` fuzzy match
+- Calls `store.update_task_status(project["id"], task["id"], status, result)`
+- Returns: `"Task '{title}' → {status}. Progress: {done}/{total}."`
+- If completed: appends `" Next: {next_task_title}"`
+
+#### 2e. `list_project_tasks` — new
+
+```python
 def list_project_tasks(name: str, status: str = "") -> str:
-    """List tasks with progress."""
-    # returns formatted: "Tasks (4): ✅ Research APIs, ⏳ Design, ⬜ Build, ⬜ Test"
+```
+- Gets project, calls `store.list_tasks(project["id"], status or None)`
+- Formatted output:
+  ```
+  Tasks (4) for RAG Research:
+  1. ✅ Survey papers (research)
+  2. ⏳ Design arch (general) — depends on: Survey papers
+  3. ⬜ Build proto (build) — depends on: Design arch
+  4. 🚫 Write doc (general) — blocked: Need API key
+
+  Progress: 1/4
+  Next: Design arch
+  ```
+
+---
+
+### 3. `backend/assistant/function_registry.py` — Tool Definitions
+
+#### 3a. Add 3 tool defs (after `add_project_note`)
+
+| Tool | Key Params |
+|------|-----------|
+| `add_project_task` | `name` (str), `title` (str), `type` (enum: research/general/build, optional), `depends_on` (array of str, optional) |
+| `update_task_status` | `name` (str), `task_id` (str), `status` (enum: in_progress/completed/blocked/failed), `result` (str, optional), `task_title` (str, optional — fallback) |
+| `list_project_tasks` | `name` (str), `status` (str, enum: pending/in_progress/completed/blocked/failed, optional) |
+
+#### 3b. Modify `create_project` tool def
+
+Add optional param:
+```json
+"tasks": {
+  "type": "array",
+  "description": "Optional task list. Each: {title: str, type?: 'research'|'general'|'build', depends_on?: string[]}"
+}
 ```
 
-Modified:
+#### 3c. Add to FUNCTION_MAP
+
 ```python
-def create_project(name: str, tasks: list[dict] = None) -> str:
-    """Now accepts optional tasks list. Each task: {title, type?, depends_on?}"""
-    # creates project, then adds each task
-    # returns: "Project 'X' created with 4 tasks. Progress: 0/4"
-
-def resume_project(name: str) -> str:
-    """Now includes task progress in output."""
-    # adds line: "Tasks: 2/4 complete — next: Build app"
+"add_project_task": add_project_task,
+"update_task_status": update_task_status,
+"list_project_tasks": list_project_tasks,
 ```
 
-**Modify**: `backend/assistant/function_registry.py`
-- Add 3 new tool defs to `LOCAL_TOOL_DEFINITIONS`
-- Add 3 entries to `FUNCTION_MAP`
-- Add 3 names to `CORE_TOOL_NAMES` (always available — tasks are core functionality)
-- Add `tasks` optional param to `create_project` tool definition
+---
 
-**Modify**: `backend/api/chat.py` — Inject active project block when a project with incomplete tasks exists:
+### 4. `backend/assistant/skill_manager.py` — Task Type Integration
+
+#### 4a. Skill dataclass — add field
+
+```python
+@dataclass
+class Skill:
+    name: str
+    description: str
+    mode: str = "advisory"
+    group: str = "skill"
+    body: str = ""
+    tool_defs: list = field(default_factory=list)
+    func_map: dict = field(default_factory=dict)
+    path: str = ""
+    task_type: str = ""          # NEW: "research" | "build" | ""
+```
+
+#### 4b. Parse from YAML frontmatter — `_parse_skill`
+
+```python
+task_type = (meta.get("task_type") or "").strip()
+
+skill = Skill(
+    name=name,
+    description=description,
+    mode=mode,
+    group=group,
+    body=body,
+    path=str(skill_dir),
+    task_type=task_type,       # NEW
+)
+```
+
+#### 4c. New lookup method
+
+```python
+def get_skill_by_task_type(self, task_type: str) -> Skill | None:
+    for skill in self._skills.values():
+        if skill.task_type == task_type:
+            return skill
+    return None
+```
+
+#### 4d. Example SKILL.md frontmatter
+
+```yaml
+---
+name: research-methodology
+description: Structured paper survey methodology
+task_type: research
+---
+```
+
+```yaml
+---
+name: frontend-ui-engineering
+description: Build production-quality UIs
+task_type: build
+---
+```
+
+---
+
+### 5. `backend/api/chat.py` — System Prompt + Auto-Link + Auto-Skill
+
+#### 5a. Add 3 names to `CORE_TOOL_NAMES` (after line 127)
+
+```python
+"add_project_task", "update_task_status", "list_project_tasks",
+```
+
+#### 5b. `_build_active_project_block()` — new function
 
 ```python
 def _build_active_project_block() -> str:
+    from backend.core.project_store import get_project_store
     store = get_project_store()
     active = [p for p in store.list_projects(status="active") if p.get("tasks")]
     if not active:
         return ""
-    p = active[0]  # most recently active
+    p = active[0]
     tasks = p["tasks"]
     done = sum(1 for t in tasks if t["status"] == "completed")
-    lines = [f"### Active Project: {p['name']}", f"Progress: {done}/{len(tasks)} tasks"]
-    for i, t in enumerate(tasks):
-        icon = {"completed":"✅","in_progress":"⏳","pending":"⬜","blocked":"🚫"}.get(t["status"], "⬜")
+    lines = [f"\n### Active Project: {p['name']}", f"Progress: {done}/{len(tasks)} tasks"]
+    for t in tasks:
+        icons = {"completed": "✅", "in_progress": "⏳", "pending": "⬜", "blocked": "🚫", "failed": "❌"}
+        icon = icons.get(t["status"], "⬜")
         deps = f" (depends on: {', '.join(t['depends_on'])})" if t.get("depends_on") else ""
-        lines.append(f"{i+1}. {icon} {t['title']} {deps}")
+        lines.append(f"{icon} {t['title']}{deps}")
     lines.append("###")
     return "\n".join(lines)
 ```
 
-Inject after skill descriptions, before memory context:
+#### 5c. Inject into system prompt (after line 269, after active skill block)
+
 ```python
 system += _build_active_project_block()
 ```
 
+#### 5d. Auto-skill loading — Point A (start of `_run_engine`, after line 265)
+
+```python
+# Auto-load skill for active project's in-progress task type
+if skill_manager and not (active_skill and active_skill[0]):
+    from backend.core.project_store import get_project_store
+    pstore = get_project_store()
+    active_projects = [p for p in pstore.list_projects(status="active") if p.get("tasks")]
+    if active_projects:
+        active_task = pstore.get_active_task(active_projects[0]["id"])
+        if active_task and active_task.get("status") == "in_progress" and active_task.get("type"):
+            skill = skill_manager.get_skill_by_task_type(active_task["type"])
+            if skill:
+                active_skill.clear()
+                active_skill.append(skill)
+                logger.info("Auto-loaded skill '%s' for task type '%s'", skill.name, active_task["type"])
+```
+
+#### 5e. Auto-skill loading — Point B (iterative loop, after `update_task_status` dispatch)
+
+After the existing KG sync block (around line 472), add:
+
+```python
+if fn_name == "update_task_status" and fn_args.get("status") == "in_progress" and skill_manager:
+    from backend.core.project_store import get_project_store
+    pstore = get_project_store()
+    project = pstore.find_project_by_name(fn_args.get("name", ""))
+    if project:
+        task_id = fn_args.get("task_id", "")
+        task = next((t for t in project.get("tasks", []) if t["id"] == task_id), None)
+        if task and task.get("type"):
+            skill = skill_manager.get_skill_by_task_type(task["type"])
+            if skill:
+                current_name = active_skill[0].name if active_skill and active_skill[0] else None
+                if current_name != skill.name:
+                    active_skill.clear()
+                    active_skill.append(skill)
+                    # Rebuild system prompt with new skill
+                    new_system = system + f"\n\n### Active Skill: {skill.name}\n{skill.body}\n###"
+                    messages[0] = {"role": "system", "content": new_system}
+                    # Add skill tools to filtered_tools
+                    body, skill_tool_defs, skill_func_map = skill_manager.apply_skill(skill.name)
+                    for sd in skill_tool_defs:
+                        if sd not in filtered_tools:
+                            filtered_tools.append(sd)
+                    logger.info("Auto-loaded skill '%s' for task type '%s' (mid-loop)", skill.name, task["type"])
+```
+
+#### 5f. Conversation auto-link fix — after KG sync (line 525)
+
+```python
+# Auto-link conversation to active project
+if conv.current_id:
+    from backend.core.project_store import get_project_store
+    pstore = get_project_store()
+    for p in pstore.list_projects(status="active"):
+        pstore.link_conversation(p["id"], conv.current_id)
+```
+
+#### 5g. Update PROJECT_INSTRUCTIONS
+
+```python
+PROJECT_INSTRUCTIONS = """
+### Project Tracking
+- You have dedicated project tools: create_project, resume_project, list_projects, update_project_status, add_project_note.
+- Use create_project(name, tasks=[...]) to create a project WITH tasks upfront.
+- Task lifecycle: pending → in_progress → completed | blocked | failed.
+- Call add_project_task(name, title, type, depends_on) to add tasks mid-project.
+- Call update_task_status(name, task_id, status, result) to advance tasks.
+- Call list_project_tasks(name) to see full status.
+- The active project's task progress is shown at the top of each response.
+- Dependencies: if task B depends on A, A must be 'completed' before B can start.
+- When RESUME is called, resume_project(name) returns full state including task progress.
+- To LIST active projects, call list_projects(status="active").
+- To UPDATE status, call update_project_status(name, status).
+- To add research notes, call add_project_note(name, filename, content).
+- Projects auto-pause after 30 days of no activity.
+- Conversation IDs are auto-linked to the project.
+- To BUILD code, use opencode tools (opencode_write, opencode_bash, ...).
+- After EVERY tool call, tell the user what happened."""
+```
+
 ---
 
-#### Part 2 — Dashboard (Backend + Frontend)
-
-**New**: `backend/api/dashboard.py`
+### 6. End-to-End Workflow
 
 ```
-GET /api/dashboard → {
-  "server_time": "2026-07-04T14:30:00",
-  "date": "Saturday, July 4, 2026",
-  "timezone": "Asia/Kolkata",
-  "weather": { "temp": 32, "description": "Sunny", "icon": "☀️", "location": "Chennai" },
-  "pending_todos": [{ "id","title","due_date","priority" }],
-  "upcoming_events": [{ "id","title","start_time","end_time" }],
-  "projects": {
-    "total": 4,
-    "active": [{ "name":"Stock Analyzer","tasks_done":2,"tasks_total":4 }],
-    "paused": 1
-  }
+User: "Research RAG architectures and build a prototype"
+```
+
+**Step 1** — LLM creates project with tasks:
+
+```python
+create_project(name="RAG Research", tasks=[
+    {"title": "Survey existing RAG papers", "type": "research"},
+    {"title": "Design architecture", "type": "general", "depends_on": ["Survey existing RAG papers"]},
+    {"title": "Build prototype", "type": "build", "depends_on": ["Design architecture"]},
+])
+```
+
+→ `"Project 'RAG Research' created with 3 tasks. Progress: 0/3."`
+
+**Step 2** — System prompt auto-injects:
+
+```
+### Active Project: RAG Research
+Progress: 0/3 tasks
+⬜ Survey existing RAG papers
+⬜ Design architecture (depends on: Survey existing RAG papers)
+⬜ Build prototype (depends on: Design architecture)
+###
+```
+
+**Step 3** — LLM starts task 1:
+
+```python
+update_task_status(name="RAG Research", task_id="task_abc1", status="in_progress")
+```
+
+**Point B triggers** → `get_skill_by_task_type("research")` returns skill with `task_type: research`. Skill body + tools injected into system prompt + filtered_tools.
+
+Next LLM iteration sees:
+
+```
+### Active Skill: research-methodology
+...structured paper survey instructions...
+
+### Active Project: RAG Research
+Progress: 0/3 tasks
+⏳ Survey existing RAG papers
+⬜ Design architecture (depends on: Survey existing RAG papers)
+⬜ Build prototype (depends on: Design architecture)
+###
+```
+
+**Step 4** — LLM does research with skill guidance, completes task:
+
+```python
+web_search_exa("RAG survey 2026")
+add_project_note("RAG Research", "survey.md", "## Papers found...")
+update_task_status(name="RAG Research", task_id="task_abc1", status="completed",
+    result="Surveyed 12 papers: RAPTOR, Self-RAG...")
+```
+
+→ `"Task 'Survey existing RAG papers' → completed. Progress: 1/3. Next: Design architecture"`
+
+KG auto-syncs: concept node `task:RAG Research/Survey existing RAG papers` with edge to project.
+
+**Step 5** — LLM starts task 2:
+
+```python
+update_task_status(name="RAG Research", task_id="task_abc2", status="in_progress")
+```
+
+**Point B triggers** → skill type is `general` (no match) → old `research-methodology` skill deactivated → no new skill loaded. LLM uses generic context.
+
+**Step 6** — LLM starts task 3:
+
+```python
+update_task_status(name="RAG Research", task_id="task_abc3", status="in_progress")
+```
+
+**Point B triggers** → `get_skill_by_task_type("build")` returns `frontend-ui-engineering` → auto-loaded.
+
+Next iteration sees:
+
+```
+### Active Skill: frontend-ui-engineering
+...UI build instructions...
+
+### Active Project: RAG Research
+Progress: 2/3 tasks
+✅ Survey existing RAG papers
+✅ Design architecture
+⏳ Build prototype
+###
+```
+
+**Step 7** — User returns next session:
+
+```
+User: "Continue the RAG research"
+```
+
+**Point A triggers** → `_build_active_project_block()` shows task 3 is `in_progress` with type `build` → `get_skill_by_task_type("build")` returns `frontend-ui-engineering` → auto-loaded without LLM or user action.
+
+`resume_project("RAG Research")` returns:
+
+```
+Found it! The RAG Research project (started 2026-07-01).
+Status: active
+Tasks: 2/3 complete
+Next: Build prototype
+Linked conversations: 2
+Files: survey.md, architecture.md
+```
+
+---
+
+### 7. Implementation Order
+
+```
+Phase 1: Project Store (data + functions)
+  ├── backend/core/project_store.py          4 new methods + create_project mod
+  ├── backend/functions/project_functions.py 3 new + 2 modified
+  ├── backend/assistant/function_registry.py 3 tool defs + 3 map entries + mod
+  └── backend/api/chat.py                    CORE_TOOL_NAMES + PROJECT_INSTRUCTIONS
+
+Phase 2: System Prompt Integration
+  ├── backend/api/chat.py                    _build_active_project_block() + inject
+  └── backend/assistant/function_registry.py create_project tool def tasks param
+
+Phase 3: Conversation Auto-Link Fix
+  └── backend/api/chat.py                    link_conversation() call after KG sync
+
+Phase 4: Auto-Skill Loading
+  ├── backend/assistant/skill_manager.py     task_type field + parse + lookup method
+  └── backend/api/chat.py                    Point A + Point B trigger logic
+
+Phase 5: Dashboard Backend + Frontend (separate, after Phase 1-4)
+  ├── backend/api/dashboard.py               New
+  ├── backend/main.py                        Register router
+  ├── frontend/src/hooks/useDashboard.ts     New
+  ├── frontend/src/services/api.ts           Modified
+  └── frontend/src/components/dashboard/     5 new components
+```
+
+### 8. Edge Cases Summary
+
+| Scenario | Behavior |
+|----------|----------|
+| Task created with missing dependency titles | `add_task` returns error: "Dependency 'X' not found" |
+| Circular dependency detected | `add_task` returns error: "Circular dependency detected" |
+| `update_task_status` skips `in_progress` | Rejected: "Cannot transition from 'pending' to 'completed'" |
+| No skill matches `task_type` | No auto-load, LLM works with generic context |
+| User manually loaded a different skill | Point A guard `not (active_skill and active_skill[0])` prevents override |
+| Multiple skills same `task_type` | First found wins; LLM can `load_skill` to override |
+| Skill auto-loads mid-iterative-loop | Skill body injected into `messages[0]`, tools added to `filtered_tools`, next LLM iteration sees them |
+| Multiple active projects | `active[0]` picks most recently active; LLM can `list_projects` for others |
+| `type: "general"` on in_progress task | No skill auto-loaded — general is too broad |
+| Conversation not linked | Fixed: `link_conversation()` called after every `_run_engine` completion |
+| Project scrapped with tasks | Tasks preserved in JSON; `get_project()` returns them as-is |
+
+---
+
+## Dev Server + Screenshot Testing — Implementation Complete (Jul 12)
+
+### Goal
+The LLM builds a frontend project → starts a dev server → uses Selenium to navigate to `localhost` → takes a screenshot → displays it in chat. All automated in the iterative tool loop.
+
+### Resolved Blockers
+
+| Blocker | Status | Implementation |
+|---------|--------|---------------|
+| `opencode_bash` waits for process exit | ✅ Solved | Added `background=True` flag → `subprocess.Popen` with PID tracking |
+| No way to stop background server | ✅ Solved | `opencode_stop(pid)` tool with `taskkill /F` fallback |
+| No direct live screenshot tool | ✅ Solved | `capture_page_screenshot(url)` tool navigates via Selenium, screenshots, displays `image_url` |
+
+### Architecture (Actual Implementation)
+
+```
+LLM iterative loop:
+
+  opencode_bash("npm run build", background=False)
+    → subprocess.run → waits for build → returns output
+
+  opencode_bash("npx serve dist -p 5173", background=True)
+    → subprocess.Popen → returns "Server started (PID 12345)"
+
+  capture_page_screenshot(url="http://localhost:5173")
+    → chat.py interception → MCP: navigate(url) → 1.5s wait → MCP: take_screenshot(save_path=screenshots/)
+    → ScreenshotStore.add_screenshot() → image_url rendered in chat
+
+  opencode_stop(pid=12345)
+    → taskkill /PID 12345 → process terminated
+```
+
+### File Changes (Status: All Implemented)
+
+#### 1. `backend/assistant/mcp_server_opencode.py` — Add `background` mode + `opencode_stop`
+
+**1a. Add `background` param to `opencode_bash`**
+
+```python
+STATIC_TOOL_DEFINITIONS: Modify `opencode_bash`:
+- Add param: "background": {"type": "boolean", "description": "If true, run in background (don't wait for exit). Returns PID.", "default": false}
+```
+
+```python
+@server.call_tool() → opencode_bash handler:
+if arguments.get("background"):
+    proc = subprocess.Popen(
+        cmd, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+    )
+    _background_processes[proc.pid] = proc
+    import time; time.sleep(2)  # brief wait for server to start
+    return [TextContent(type="text", text=f"Started server (PID {proc.pid})")]
+else:
+    result = subprocess.run(cmd, shell=True, ..., timeout=COMMAND_TIMEOUT)
+```
+
+**1b. Add `opencode_stop` tool definition + handler**
+
+```python
+STATIC_TOOL_DEFINITIONS: append:
+{
+    "name": "opencode_stop",
+    "description": "Stop a background process by PID.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "pid": {"type": "integer", "description": "Process ID to stop"}
+        },
+        "required": ["pid"],
+    },
+},
+```
+
+```python
+elif name == "opencode_stop":
+    pid = arguments["pid"]
+    if pid in _background_processes:
+        _background_processes[pid].terminate()
+        del _background_processes[pid]
+        return [TextContent(type="text", text=f"Process {pid} terminated")]
+    # Fallback: try OS-level kill
+    try:
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=5)
+        return [TextContent(type="text", text=f"Process {pid} terminated via taskkill")]
+    except:
+        return [TextContent(type="text", text=f"Process {pid} not found")]
+```
+
+**1c. Add module-level dict for background processes**
+
+```python
+_background_processes: dict[int, subprocess.Popen] = {}
+```
+
+**1d. Update tool descriptions in `STATIC_TOOL_DEFINITIONS`**
+
+Change "project root" → "projects directory" across all 6 tool descriptions for consistency with the new `PROJECTS_DIR` default.
+
+#### 2. `backend/assistant/mcp_server_opencode.py` — Register `opencode_stop` in `list_tools()`
+
+Add to both `@server.list_tools()` and `STATIC_TOOL_DEFINITIONS`:
+
+```python
+Tool(
+    name="opencode_stop",
+    description="Stop a background process by PID. Used to terminate dev servers.",
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "pid": {"type": "integer", "description": "Process ID to stop"}
+        },
+        "required": ["pid"],
+    },
+),
+```
+
+#### 3. `backend/api/chat.py` — Add `opencode_stop` to `CORE_TOOL_NAMES` + `OPENCODE_TOOL_NAMES`
+
+```python
+OPENCODE_TOOL_NAMES = {
+    "opencode_bash", "opencode_write", "opencode_read",
+    "opencode_edit", "opencode_glob", "opencode_grep",
+    "opencode_stop",  # NEW
 }
 ```
 
-**Frontend**: New Components (5 files)
+#### 4. `backend/assistant/function_registry.py` — No changes (MCP tool, not local)
 
-| Component | What it shows | Data source |
-|-----------|-------------|-----------|
-| `DashboardPanel.tsx` | 2×2 grid layout | calls `useDashboard()` |
-| `TimeCard.tsx` | Live clock (1s tick), date, tz | `server_time` + JS `setInterval` |
-| `WeatherCard.tsx` | Temp + icon + description + location | `navigator.geolocation` → `POST /api/location` → `get_weather()` |
-| `TodoPreview.tsx` | Top 5 pending, checkbox toggles | `/api/dashboard` + `PUT /api/todos/:id` |
-| `EventPreview.tsx` | Next 5 events, click→Calendar nav | `/api/dashboard` |
+`opencode_stop` is an MCP tool (routed through `mcp_manager.call_tool()`), not a local function. No FUNCTION_MAP entry needed.
 
-**New hook**: `frontend/src/hooks/useDashboard.ts` — polls `/api/dashboard` every 30s
+### End-to-End Flow
 
-**Modified files**: `Sidebar.tsx` (add Dashboard pill, 0th position with `LayoutDashboard` icon), `App.tsx` (add route), `api.ts` (add `fetchDashboard()`)
+```
+User: "build a car showroom landing page and show me a screenshot of it running"
 
-**Components**: All use existing `bg-surface0/60 rounded-2xl border border-white/5 p-4` card style + `lucide-react` icons. No new UI primitives needed.
+LLM Iteration 1:
+  create_project("Car Showroom", tasks=[...])
+  → Project created with 7 tasks
+
+LLM Iteration 2:
+  update_task_status(status="in_progress", task="Scaffold React")
+  → Skill auto-loaded (task type: build)
+
+LLM Iteration 3:
+  opencode_write("index.html", "...")
+  opencode_write("src/App.jsx", "...hero...")
+  opencode_write("tailwind.config.js", "...")
+  → Files created in C:\Users\hp\Projects\madays projects\car-showroom\
+
+LLM Iteration 4:
+  opencode_bash("npm install", background=False)
+  → Dependencies installed
+
+LLM Iteration 5:
+  opencode_bash("npm run build", background=False)
+  → dist/ built
+
+LLM Iteration 6:
+  opencode_bash("npx serve dist -p 5173", background=True)
+  → "Started server (PID 12345)"
+
+LLM Iteration 7:
+  capture_page_screenshot(url="http://localhost:5173")
+  → chat.py intercepts → navigate(url) → 1.5s wait → take_screenshot()
+  → Screenshot saved + registered → image_url in chat
+  → User sees the site in a tool_call bubble
+
+LLM Iteration 8:
+  opencode_stop(pid=12345)
+  → Server terminated
+
+LLM Iteration 9:
+  update_task_status(status="completed", result="Screenshot verified")
+  → "Task 'Scaffold React' → completed. Progress: 1/7."
+
+LLM final:
+  "✅ Car Showroom landing page is built and running. Here's the screenshot:"
+  → Done
+```
+
+### Error Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| Dev server fails to start (`serve` not found) | `Popen` raises `FileNotFoundError` → "Command not found: npx. Try `npm install -g serve` first" |
+| Port already in use | `serve` logs "port 5173 in use" to stderr → `Popen` captures it → returned as result text → LLM retries with different port |
+| Server starts but URL is unreachable | `capture_page_screenshot` navigate step fails with timeout → LLM retries or tries `http://localhost:3000` |
+| Screenshot shows blank/loading page | LLM can retry `capture_page_screenshot(url)` with a longer implicit wait |
+| Process already dead when `opencode_stop` called | `taskkill` exit code 1 → "Process not found" — LLM accepts it |
+| Multiple background processes | `_background_processes` dict tracks all PIDs; `opencode_stop(pid)` targets specific one |
+
+### Implementation Order (All Done — Jul 12)
+
+```
+Phase 1: Backend — opencode server
+  ├── backend/assistant/mcp_server_opencode.py   Add background mode to opencode_bash
+  ├── backend/assistant/mcp_server_opencode.py   Add opencode_stop tool def + handler
+  └── backend/assistant/mcp_server_opencode.py   Update STATIC_TOOL_DEFINITIONS
+
+Phase 2: Backend — chat.py + function_registry
+  ├── backend/api/chat.py                        Add opencode_stop to CORE/OPENCODE_TOOL_NAMES
+  ├── backend/api/chat.py                        Add capture_page_screenshot interception (navigate → wait → screenshot → register → image_url)
+  └── backend/assistant/function_registry.py     Add capture_page_screenshot tool definition
+
+Phase 3: Test
+  └── Verified: build → dev server → screenshot → stop → flow works
+```
+
+### Files Summary
+
+| File | Change |
+|------|--------|
+| `backend/assistant/mcp_server_opencode.py` | Add `background` param to `opencode_bash`; add `opencode_stop` tool; add `_background_processes` dict; update tool descriptions |
+| `backend/assistant/function_registry.py` | Add `capture_page_screenshot` tool definition (43rd built-in tool) |
+| `backend/api/chat.py` | Add `opencode_stop` to `OPENCODE_TOOL_NAMES` and `CORE_TOOL_NAMES`; add `capture_page_screenshot` interception block (navigate → sleep → screenshot → register) |
 
 ---
 
-#### Part 3 — Research → KG Sync
+## Telegram Bot Integration — Implementation Plan (Jul 10)
 
-When a research-type task is marked `completed` with a result:
+### Goal
+Allow the user to interact with Mayday from Telegram — send messages, create/check todos and events, manage projects, search, get weather, and access all other LLM tools — via a Telegram bot powered by `python-telegram-bot`.
+
+### Design Decisions
+
+| Decision | Choice |
+|----------|--------|
+| **Bot framework** | `python-telegram-bot` v21+ (async) |
+| **Update method** | Polling (no public HTTPS URL needed) |
+| **Access control** | Single Telegram user ID from `config.yaml` |
+| **Feature scope** | Full access — all tools available (including system/file) |
+| **Message format** | Telegram-compatible Markdown (bold, italic, code, inline URLs) |
+| **Image handling** | `send_photo` for screenshot/image_url results |
+
+### Architecture
+
+```
+Telegram User → Bot API polling
+  → backend/telegram/bot.py          (polling loop, message dispatch)
+  → backend/telegram/engine.py       (runs ChatEngine with Telegram output adapter)
+  → backend/chat_engine.py           (shared core extracted from chat.py)
+     → LLMClient.chat()              (Ollama)
+     → dispatch_call()               (function_registry.py)
+     → MCPManager.call_tool()        (MCP servers)
+     → ConversationManager           (per-day JSON conversation storage)
+  → backend/telegram/output_adapter.py  (converts engine output → Telegram API calls)
+```
+
+### Files to Create
+
+| File | Purpose |
+|------|---------|
+| `backend/chat_engine.py` | Transport-agnostic chat core — extract from `chat.py:_run_engine`, replace `_send_json(ws, ...)` with `output_handler(type, data)` callbacks |
+| `backend/telegram/__init__.py` | Empty package init |
+| `backend/telegram/bot.py` | Telegram bot setup, polling lifecycle, message dispatch, per-chat-id ConversationManager state |
+| `backend/telegram/engine.py` | Creates ChatEngine, wires Telegram output adapter |
+| `backend/telegram/output_adapter.py` | Converts ChatEngine output dicts to `telegram.Bot.send_message`, `send_photo`, etc. |
+
+### Files to Change
+
+| File | Change |
+|------|--------|
+| `backend/main.py` | Import `run_telegram_bot` from `telegram.bot`; start as asyncio task in lifespan if config `telegram.enabled` |
+| `backend/api/chat.py` | Refactor `_run_engine` → delegate to `ChatEngine` (preserve backward compat) |
+| `config.yaml` | Add `telegram:` section with `enabled`, `bot_token`, `allowed_user_id` |
+| `requirements.txt` | Add `python-telegram-bot>=21.0` |
+
+### Configuration (`config.yaml`)
+
+```yaml
+telegram:
+  enabled: false              # Off by default — opt-in
+  bot_token: ""               # From BotFather (https://t.me/botfather)
+  allowed_user_id: 0          # Only this Telegram user can interact. 0 = disabled.
+```
+
+### ChatEngine — Extraction Design
+
+Extract the core from `chat.py:_run_engine` (currently lines 286–631) into a reusable class:
 
 ```python
-if type == "research" and status == "completed" and result:
-    kg.add_node("concept", f"research:{task_title}", {
-        "project_id": project_id,
-        "task_id": task_id,
-        "result": result,
-    })
-    project_node = kg.get_node_by_label(f"project:{project_name}")
-    kg.add_edge_if_missing(project_node["id"], research_node["id"], "has_finding")
+# backend/chat_engine.py
+
+class ChatEngine:
+    def __init__(self, llm, tools, mcp, kg, selector, skill_manager):
+        self.llm = llm
+        self.tools = tools
+        self.mcp = mcp
+        self.kg = kg
+        self.selector = selector
+        self.skill_manager = skill_manager
+
+    async def process_message(
+        self,
+        user_text: str,
+        conv: ConversationManager,
+        active_skill: list | None,
+        system_extra: str = "",
+        output_handler: Callable[[dict], Awaitable[None]] | None = None,
+    ) -> str | None:
+        # Returns final content string (or None)
+        # Sends intermediate messages via output_handler(data_dict)
 ```
 
-This makes all research findings searchable via `recall` and visible in the Brain tab.
+Then `chat.py:_run_engine` becomes:
 
----
+```python
+async def _run_engine(ws, user_text, conv, llm, tools, mcp, kg, selector, skill_manager, pending_suggestion, active_skill):
+    engine = ChatEngine(llm, tools, mcp, kg, selector, skill_manager)
 
-#### Implementation Order
+    async def ws_output(data: dict):
+        await _send_json(ws, data)
 
-```
-Phase 1: Project Tasks (backend only)
-  ├── backend/core/project_store.py      — 4 new methods
-  ├── backend/functions/project_functions.py — 3 new + 2 modified
-  ├── backend/assistant/function_registry.py — register
-  └── backend/api/chat.py                — inject active project block
-
-Phase 2: Dashboard Backend
-  ├── backend/api/dashboard.py           — new endpoint
-  └── backend/main.py                    — register router
-
-Phase 3: Dashboard Frontend
-  ├── frontend/src/hooks/useDashboard.ts
-  ├── frontend/src/services/api.ts
-  ├── frontend/src/components/dashboard/
-  │   ├── DashboardPanel.tsx
-  │   ├── TimeCard.tsx
-  │   ├── WeatherCard.tsx
-  │   ├── TodoPreview.tsx
-  │   └── EventPreview.tsx
-  ├── frontend/src/components/layout/Sidebar.tsx
-  └── frontend/src/App.tsx
+    return await engine.process_message(user_text, conv, active_skill, output_handler=ws_output)
 ```
 
-**Total**: 2 new backend files, 5 new frontend components, ~6 modified files.
+### Output Adapter — ChatEngine → Telegram
+
+| `output_handler` dict | Telegram action |
+|---|---|
+| `{"type":"token","content":"..."}` | `bot.send_message(chat_id, text, parse_mode="MarkdownV2")` — complete message |
+| `{"type":"tool_call","name":"n","result":"..."}` | `bot.send_message(chat_id, "🛠 *{name}*\n\n{result}", parse_mode="MarkdownV2")` |
+| `{"type":"tool_call","name":"n","result":"...","image_url":"/screenshots/x.png"}` | `bot.send_photo(chat_id, photo=full_url, caption=result)` |
+| `{"type":"skill_activated","name":"..."}` | `bot.send_message(chat_id, "📚 *Skill activated:* {name}")` |
+| `{"type":"skill_deactivated"}` | No action (silent) |
+| `{"type":"done"}` | No action (silent) |
+| `{"type":"error","content":"..."}` | `bot.send_message(chat_id, "⚠️ *Error:* {content}")` |
+
+### Polling Lifecycle
+
+Inside `backend/main.py` lifespan:
+
+```python
+from backend.telegram.bot import run_telegram_bot
+
+telegram_task = None
+config = load_config()
+if config.get("telegram", {}).get("enabled") and config.get("telegram", {}).get("bot_token"):
+    telegram_task = asyncio.create_task(run_telegram_bot())
+    logger.info("Telegram bot started")
+
+yield  # app runs
+
+if telegram_task:
+    telegram_task.cancel()
+    try:
+        await telegram_task
+    except asyncio.CancelledError:
+        pass
+```
+
+`run_telegram_bot()` inside `bot.py`:
+
+```python
+async def run_telegram_bot():
+    config = load_config().get("telegram", {})
+    application = Application.builder().token(config["bot_token"]).build()
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CommandHandler("start", handle_start))
+    application.add_handler(CommandHandler("help", handle_help))
+
+    # Shared state
+    application.bot_data["conversations"] = {}   # chat_id → ConversationManager
+    application.bot_data["active_skills"] = {}   # chat_id → [skill]
+    application.bot_data["allowed_user_id"] = config.get("allowed_user_id", 0)
+
+    # Start polling (runs forever until cancelled)
+    await application.run_polling(allowed_updates=Update.MESSAGE)
+```
+
+### Per-Chat-ID State
+
+```python
+conversations: dict[int, ConversationManager] = {}  # chat_id → conv
+active_skills: dict[int, list] = {}                  # chat_id → [skill] or []
+
+def get_or_create_conv(chat_id: int) -> ConversationManager:
+    if chat_id not in conversations:
+        conv = ConversationManager()
+        conv.new_conversation(title=f"Telegram {chat_id}")
+        conversations[chat_id] = conv
+    return conversations[chat_id]
+```
+
+Each `chat_id` gets its own `ConversationManager` instance. Since Mayday already stores conversations per-day in `conversations/YYYY-MM-DD.json`, cross-session persistence works automatically — the manager just stores messages in the same JSON store. On restart, the ConversationManager starts fresh but past conversations remain searchable.
+
+### Message Handler Flow
+
+```python
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    text = update.message.text
+
+    # Access control
+    if user_id != context.bot_data["allowed_user_id"]:
+        return  # silently ignore
+
+    # Get or create conversation state
+    conv = context.bot_data["conversations"].setdefault(chat_id, ConversationManager())
+    if not conv.current_id:
+        conv.new_conversation(title=f"Telegram {chat_id}")
+    active_skill = context.bot_data["active_skills"].setdefault(chat_id, [])
+
+    # Build shared components (singletons from backend)
+    llm = LLMClient()
+    mcp = get_mcp_manager()       # shared across all sessions
+    kg = get_graph()
+    selector = get_tool_selector()
+    skill_manager = get_skill_manager()
+    tools = get_tool_definitions()
+
+    # Send typing indicator
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    # Create engine and process
+    engine = ChatEngine(llm, tools, mcp, kg, selector, skill_manager)
+    adapter = TelegramOutputAdapter(context.bot, chat_id)
+
+    async def output_handler(data: dict):
+        await adapter.send(data)
+
+    # Process message (runs LLM + tools + loop)
+    await engine.process_message(text, conv, active_skill, output_handler=output_handler)
+    await adapter.flush()  # ensures all pending messages sent
+```
+
+### TelegramOutputAdapter — Batching & Rate Limits
+
+Telegram has rate limits (~30 messages/sec per chat). The adapter handles:
+
+1. **Message queue**: Collect all output messages before sending
+2. **Max length**: Split messages >4096 chars into multiple `send_message` calls
+3. **Markdown escaping**: Escape Telegram MarkdownV2 special chars (`_*[]()~>#+-=|{}.!`) in tool results
+4. **Image dedup**: Only one `send_photo` per tool_call (if `image_url` present, skip text and send as caption)
+
+```python
+class TelegramOutputAdapter:
+    def __init__(self, bot: telegram.Bot, chat_id: int):
+        self.bot = bot
+        self.chat_id = chat_id
+        self._pending: list[dict] = []
+
+    async def send(self, data: dict):
+        self._pending.append(data)
+
+    async def flush(self):
+        for msg in self._pending:
+            await self._send_one(msg)
+        self._pending.clear()
+
+    async def _send_one(self, data: dict):
+        t = data.get("type")
+        if t == "token":
+            text = data.get("content", "")
+            await self._send_text(text)
+        elif t == "tool_call":
+            name = data.get("name", "")
+            result = data.get("result", "")
+            image_url = data.get("image_url")
+            if image_url:
+                full_url = f"http://localhost:8771{image_url}"  # or config.base_url
+                await self.bot.send_photo(chat_id=self.chat_id, photo=full_url,
+                                          caption=f"🛠 *{name}*\n\n{result}",
+                                          parse_mode="MarkdownV2")
+            else:
+                await self._send_text(f"🛠 *{name}*\n\n{result}")
+        elif t == "skill_activated":
+            await self.bot.send_message(chat_id=self.chat_id,
+                                        text=f"📚 *Skill activated:* {data.get('name', '')}",
+                                        parse_mode="MarkdownV2")
+        elif t == "error":
+            await self.bot.send_message(chat_id=self.chat_id,
+                                        text=f"⚠️ *Error:* {data.get('content', '')}",
+                                        parse_mode="MarkdownV2")
+        # skill_deactivated, done → silent
+
+    async def _send_text(self, text: str):
+        if not text:
+            return
+        splitter = _TelegramSplitter()
+        for chunk in splitter.split(text):
+            await self.bot.send_message(chat_id=self.chat_id, text=chunk,
+                                        parse_mode="MarkdownV2")
+```
+
+### Telegram Markdown Splitter
+
+Telegram MarkdownV2 has a 4096-char limit per message and requires correct escaping. The splitter must not split inside a formatted block:
+
+```python
+class _TelegramSplitter:
+    def split(self, text: str) -> list[str]:
+        """Split text into ≤4096-char chunks, preserving Markdown blocks."""
+        chunks = []
+        while text:
+            if len(text) <= 4096:
+                chunks.append(text)
+                break
+            # Find safe split point — don't split inside ```...```
+            split_at = text.rfind("\n", 0, 4096)
+            if split_at == -1:
+                split_at = 4096
+                # Avoid splitting inside code block markers
+                if "```" in text[:split_at] and "```" not in text[:split_at].rstrip("`"):
+                    # Find start of code block and adjust
+                    backticks = text[:split_at].rfind("```")
+                    split_at = backticks - 1
+            chunks.append(text[:split_at].strip())
+            text = text[split_at:].strip()
+        return chunks or [""]
+```
+
+### Shared Components — Singleton Management
+
+The Telegram bot needs access to the same singleton components as the WebSocket endpoint. Currently these are created inside `chat_websocket`:
+
+```python
+llm = LLMClient()
+mcp = MCPManager()
+kg = get_graph()
+```
+
+For the Telegram bot, these need to be accessible as module-level singletons or created once. Since `MCPManager` is per-WebSocket-session (manages stdio subprocesses per session), we need a **shared MCPManager** for the Telegram bot:
+
+```python
+# backend/telegram/bot.py
+
+_llm: LLMClient | None = None
+_mcp: MCPManager | None = None
+_kg: KnowledgeGraph | None = None
+_selector: ToolSelector | None = None
+_skill_manager: SkillManager | None = None
+_tools: list[dict] | None = None
+
+def get_shared_mcp() -> MCPManager:
+    global _mcp
+    if _mcp is None:
+        _mcp = MCPManager()
+        # Same init logic as chat.py lines 643-678
+        config = load_config()
+        mcp_servers = config.get("mcp", {}).get("servers", {})
+        for name, cfg in mcp_servers.items():
+            if cfg.get("lazy"):
+                ...
+            else:
+                ...
+    return _mcp
+```
+
+### Dependency
+
+```
+# requirements.txt — add:
+python-telegram-bot>=21.0
+```
+
+### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| Bot token empty / disabled | Skip bot startup entirely, log "Telegram bot disabled" |
+| Telegram API down | `python-telegram-bot` retries with exponential backoff; logs warning |
+| User not in `allowed_user_id` | Bot silently ignores the message (no reply) |
+| LLM call hangs (>120s) | Same `httpx.Client(timeout=120)` — error returned to Telegram as message |
+| Long response >4096 chars | Split into multiple `send_message` calls by `_TelegramSplitter` |
+| Screenshot image in response | Send as `send_photo` with caption; needs `base_url` config for image access |
+| Telegram markdown in tool results (`_`, `*`, `[`, etc.) | `_escape_markdown()` helper escapes all special chars before sending |
+| Bot crashes mid-conversation | Current context lost in-memory; next message starts fresh `ConversationManager`; past conversations still in `conversations/` files |
+| User sends `/start` | Returns welcome message with available command list |
+| `/help` command | Lists available Mayday commands (create todo, check events, etc.) |
+| MCP server fails during Telegram request | Same error handling as WebSocket path — error string returned to user |
+| Multiple concurrent Telegram messages | `python-telegram-bot` handles via `Application.run_polling()` — single-process async; messages processed sequentially per chat |
+| `/cancel` command | Clears current conversation context |
+| Non-text messages (stickers, photos, voice) | Ignored with "Sorry, I can only process text messages" |
+
+### Commands
+
+| Command | Action |
+|---------|--------|
+| `/start` | Welcome + brief intro |
+| `/help` | List capabilities |
+| `/cancel` | Reset conversation context |
+| `/new` | Start new conversation |
+
+All other text messages go through the ChatEngine (LLM + tools).
+
+### Implementation Order
+
+```
+Phase 1: ChatEngine extraction (refactor)
+  ├── backend/chat_engine.py                Extract core from _run_engine into class
+  └── backend/api/chat.py                   Refactor _run_engine → ChatEngine wrapper
+
+Phase 2: Telegram package
+  ├── backend/telegram/__init__.py
+  ├── backend/telegram/output_adapter.py    Telegram output adapter (send, split, escape)
+  ├── backend/telegram/engine.py            ChatEngine + Telegram adapter wrapper
+  └── backend/telegram/bot.py               Polling loop, message dispatch, per-chat state
+
+Phase 3: Wiring
+  ├── backend/main.py                       Start bot in lifespan
+  ├── config.yaml                           Add telegram section
+  └── requirements.txt                      Add python-telegram-bot
+
+Phase 4: Test
+  └── Manual: /start → add todo → create project → check weather → screenshot → verify
+```
+
+### Files Summary
+
+| File | Change |
+|------|--------|
+| `backend/chat_engine.py` | **CREATE** — Transport-agnostic ChatEngine class extracted from `chat.py` |
+| `backend/api/chat.py` | Refactor `_run_engine` → delegate to ChatEngine with WebSocket output adapter |
+| `backend/telegram/__init__.py` | **CREATE** — Empty package init |
+| `backend/telegram/bot.py` | **CREATE** — Polling loop, message handler, per-chat state, shared component getters |
+| `backend/telegram/engine.py` | **CREATE** — Wires ChatEngine + TelegramOutputAdapter |
+| `backend/telegram/output_adapter.py` | **CREATE** — Sends messages/photos, splits long text, escapes markdown |
+| `backend/main.py` | Add Telegram bot startup task in lifespan |
+| `config.yaml` | Add `telegram:` section (enabled, bot_token, allowed_user_id) |
+| `requirements.txt` | Add `python-telegram-bot>=21.0` |

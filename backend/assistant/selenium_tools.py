@@ -112,11 +112,11 @@ SELENIUM_TOOL_DEFINITIONS = [
     },
     {
         "name": "take_screenshot",
-        "description": "Take a screenshot of the current browser window and save it as a PNG file.",
+        "description": "Take a screenshot of the current browser window and save it as a PNG file. The screenshot file is auto-detected and shown in the chat. Optionally pass save_path to choose the directory.",
         "parameters": {
             "type": "object",
             "properties": {
-                "save_path": {"type": "string", "description": "Optional path where the screenshot should be saved. If not provided, saves to the current project directory."},
+                "save_path": {"type": "string", "description": "Optional directory path where the screenshot should be saved. If not provided, saves to the current project directory."},
             },
             "required": [],
         },

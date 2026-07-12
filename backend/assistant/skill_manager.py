@@ -23,6 +23,7 @@ class Skill:
     tool_defs: list = field(default_factory=list)
     func_map: dict = field(default_factory=dict)
     path: str = ""
+    task_type: str = ""
 
 
 def _parse_skill(filepath: Path) -> Optional[Skill]:
@@ -56,6 +57,7 @@ def _parse_skill(filepath: Path) -> Optional[Skill]:
     description = (meta.get("description") or "").strip()
     needs_confirm = meta.get("needs_confirm", True)
     group = meta.get("group", "skill")
+    task_type = (meta.get("task_type") or "").strip()
     body = parts[2].strip()
 
     skill_dir = filepath.parent
@@ -66,6 +68,7 @@ def _parse_skill(filepath: Path) -> Optional[Skill]:
         group=group,
         body=body,
         path=str(skill_dir),
+        task_type=task_type,
     )
 
     tools_py = skill_dir / "tools.py"
@@ -135,6 +138,12 @@ class SkillManager:
 
     def list_skills(self) -> list[str]:
         return sorted(self._skills.keys())
+
+    def get_skill_by_task_type(self, task_type: str):
+        for skill in self._skills.values():
+            if skill.task_type == task_type:
+                return skill
+        return None
 
 
 _SKILL_MANAGER: Optional[SkillManager] = None

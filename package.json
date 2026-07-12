@@ -9,6 +9,7 @@
     "install:frontend": "cd frontend && npm install"
   },
   "devDependencies": {
+    "@tailwindcss/cli": "^4.3.2",
     "@types/express": "^5.0.6",
     "@types/node": "^26.1.0",
     "concurrently": "^9.1.0",

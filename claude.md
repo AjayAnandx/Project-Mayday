@@ -37,8 +37,8 @@ See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (
 - Vite proxies `/api` → `localhost:8771` and `/ws` → `ws://localhost:8771`
 - Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
-- 34 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status` + `unified_search` + `suggest_skill` + 11 system/file (open/close app, volume, clipboard, system info, active window, read/write/append/list files)
-- MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`)
+- 43 built-in function tools: 9 todo/event CRUD + 5 memory + 3 screenshot + 2 conversation + `query_operations` + `set_status` + `unified_search` + `suggest_skill` + `capture_page_screenshot` + 11 system/file + 8 project/task (create_project, resume_project, list_projects, update_project_status, add_project_note, add_project_task, update_task_status, list_project_tasks)
+- MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`), Selenium browser (`mcp-server-selenium`), opencode wrapper (`mcp_server_opencode` — bash, write, read, edit, glob, grep, stop)
 - Tool selection: Inverted group index (TF-IDF weighted, BM25 saturation, group-penalty) — replaces 4 hand-written keyword regexes; **92.2% precision, 90.8% recall**, <<0.01ms per query
 - `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
 - `mcp_server_git` — 12 tools for local git operations (status, log, diff, commit, branch)
@@ -353,6 +353,8 @@ yellow:  '#eab308'
 - [x] **Project Tracking System (Jul 4)**: Dedicated project store (`projects.json`) with CRUD, lifecycle state machine (active/paused/scrapped), fuzzy matching, conversation auto-link. REST API (5 endpoints) + 5 LLM tools (create/resume/list/update_status/add_note). opencode MCP wrapper server with 6 tools (bash/write/read/edit/glob/grep) for autonomous project building.
 - [x] **Skills System (Jul 4)**: opencode-style skill injection. `SkillManager` scans `C:\Users\hp\agent-skills\skills` (23 pre-existing SKILL.md files), `suggest_skill(name, context)` LLM tool, `SkillSuggestionCard` frontend component with Confirm/Dismiss, skill body+tools injected into system prompt on activation, auto-deactivation on completion. All 23 external skills load at startup.
 - [x] **Bug fix: silent response after tool calls (Jul 4)**: When LLM returned `content=None, tool_calls=[...]`, no natural language response was generated. Added final LLM call with `tools=[]` after the iterative loop to force a summary. Fixes the `resume_project → recall_entity → list_directory → (silent)` pattern.
+- [x] **Project Task System + Auto-Skill Loading (Jul 12)**: 3 new LLM tools (`add_project_task`, `update_task_status`, `list_project_tasks`) for task lifecycle (pending → in_progress → completed/blocked/failed). Dependency tracking with cycle detection. `get_active_task()` auto-picks next eligible task. Auto-skill loading: when a task with `type: "research"` or `type: "build"` is set to `in_progress`, the matching skill auto-loads (Point A at engine start, Point B mid-iterative-loop). Active project block injected into system prompt shows real-time task progress. See `backend/core/project_store.py`, `backend/functions/project_functions.py`.
+- [x] **Dev Server + Screenshot Testing (Jul 12)**: `opencode_bash` now supports `background=True` to launch persistent dev servers (returns PID). New `opencode_stop(pid)` tool terminates background processes via `taskkill`. New `capture_page_screenshot(url)` tool navigates to a URL via Selenium, takes a screenshot, and displays it in chat with `image_url`. LLM can now build → start dev server → screenshot → stop server — all autonomous. See `backend/assistant/mcp_server_opencode.py`.
 - [ ] **Proactive Suggestions — Need to Refine Idea**: Chat shows clickable suggestion chips (upcoming events, overdue todos, recent activity, general prompts) when the chat page is empty.
 - [ ] **Data Export/Import — Need to Refine Idea**: `GET /api/export` + `POST /api/import` blob endpoints for full data backup and restore.
 
@@ -424,7 +426,7 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `frontend/src/services/api.ts`: Typed REST client
 - `backend/api/chat.py`: WebSocket endpoint with LLM streaming + tool dispatch
 - `backend/assistant/llm_client.py`: Ollama HTTP client
-- `backend/assistant/function_registry.py`: 34 tool definitions + dispatch (9 todo/event + 5 memory + 3 screenshot + 4 conversation/operations + 3 reminders + `suggest_skill` + 11 system/file)
+- `backend/assistant/function_registry.py`: 43 tool definitions + dispatch (9 todo/event + 5 memory + 3 screenshot + 4 conversation/operations + 3 reminders + `suggest_skill` + `capture_page_screenshot` + 11 system/file + 8 project/task)
 - `backend/assistant/exa_tools.py`: Static tool definitions for 3 Exa search/fetch tools
 - `config.yaml`: Shared config (Ollama, voice, server)
 - `plan.md`: MCP integration architecture and implementation plan
@@ -435,6 +437,8 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `backend/core/tool_selector.py`: Inverted group index for LLM tool selection (TF-IDF weighted, BM25 saturation, group-penalty)
 - `backend/memory/knowledge_graph.py`: KnowledgeGraph singleton (JSON persistence, thread-safe)
 - `backend/memory/memory_tools.py`: 5 LLM functions for memory (remember, recall, recall_entity, forget, delete_entity)
+- `backend/core/project_store.py`: Project store with CRUD, lifecycle state machine (active/paused/scrapped), fuzzy matching, task CRUD (add/update/list/get_active), dependency cycle detection, conversation auto-link
+- `backend/functions/project_functions.py`: 8 LLM functions for project + task management (create_project, resume_project, list_projects, update_project_status, add_project_note, add_project_task, update_task_status, list_project_tasks)
 - `backend/functions/system_functions.py`: 11 LLM functions for system control + file access (open_application, close_application, set_volume, get_volume, copy_to_clipboard, get_system_info, get_active_window, read_file, write_file, append_file, list_directory)
 - `backend/api/memory.py`: REST API for graph visualization (GET/DELETE nodes)
 - `backend/api/search.py`: Unified search across all 5 data stores
@@ -456,4 +460,6 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `backend/core/tool_selector.py`: Inverted group index for LLM tool selection (TF-IDF weighted, BM25 saturation, group-penalty)
 - `backend/assistant/skill_manager.py`: SkillManager — scan SKILL.md files, registry, apply
 - `frontend/src/components/chat/SkillSuggestionCard.tsx`: Skill suggestion card with Confirm/Dismiss
+- `backend/assistant/mcp_server_opencode.py`: opencode wrapper MCP server (bash, write, read, edit, glob, grep, stop tools) with background process management
+- `backend/assistant/selenium_tools.py`: Selenium browser tools (navigate, screenshot, page description) used by `capture_page_screenshot` interception
 - `opencode.json`: opencode permission config for MCP tools

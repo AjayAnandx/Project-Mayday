@@ -11,8 +11,14 @@ from mcp.server.stdio import stdio_server
 from mcp.server import InitializationOptions
 from mcp.types import Tool, TextContent, ServerCapabilities, ToolsCapability
 
+from backend.core.config import load_config
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+_config = load_config()
+_cfg_projects = _config.get("data", {}).get("projects_dir", "")
+PROJECTS_DIR = Path(_cfg_projects).resolve() if _cfg_projects else (PROJECT_ROOT / "projects")
 
 ALLOWED_COMMANDS = {
     "pip", "npm", "npx", "python", "python3", "node",
@@ -32,19 +38,20 @@ BLOCKED_PATTERNS = [
 STATIC_TOOL_DEFINITIONS = [
     {
         "name": "opencode_bash",
-        "description": "Run a shell command inside the project directory. Whitelisted commands: pip, npm, npx, python, node, git, bun, cargo, go, make, poetry, uv.",
+        "description": "Run a shell command inside the projects directory. Uses background=True to start a persistent dev server. Whitelisted commands: pip, npm, npx, python, node, git, bun, cargo, go, make, poetry, uv.",
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Shell command to run"},
-                "cwd": {"type": "string", "description": "Working directory relative to project root (optional)"},
+                "cwd": {"type": "string", "description": "Working directory relative to projects directory (optional)"},
+                "background": {"type": "boolean", "description": "If true, run in background (don't wait for exit). Returns PID. Use to start dev servers.", "default": False},
             },
             "required": ["command"],
         },
     },
     {
         "name": "opencode_write",
-        "description": "Create or overwrite a file. Path must be under project root.",
+        "description": "Create or overwrite a file. Path must be under projects directory.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -101,14 +108,30 @@ STATIC_TOOL_DEFINITIONS = [
             "required": ["pattern"],
         },
     },
+    {
+        "name": "opencode_stop",
+        "description": "Stop a background process by PID. Used to terminate dev servers started with opencode_bash(background=True).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pid": {"type": "integer", "description": "Process ID to stop"},
+            },
+            "required": ["pid"],
+        },
+    },
 ]
 
-COMMAND_TIMEOUT = 120
+COMMAND_TIMEOUT = 300  # 5 min for slow operations (npm install, npx create on Windows)
+
+_background_processes: dict[int, subprocess.Popen] = {}
 
 
 def _is_path_allowed(path: str) -> bool:
     resolved = Path(path).resolve()
-    return str(resolved).startswith(str(PROJECT_ROOT.resolve()))
+    root_str = str(PROJECT_ROOT.resolve())
+    projects_str = str(PROJECTS_DIR.resolve())
+    path_str = str(resolved)
+    return path_str.startswith(root_str) or path_str.startswith(projects_str)
 
 
 def _is_command_allowed(cmd: str) -> bool:
@@ -127,7 +150,7 @@ def _is_command_allowed(cmd: str) -> bool:
 def _resolve_path(path: str) -> str:
     p = Path(path)
     if not p.is_absolute():
-        p = PROJECT_ROOT / p
+        p = PROJECTS_DIR / p
     return str(p.resolve())
 
 
@@ -139,12 +162,13 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="opencode_bash",
-            description="Run a shell command inside the project directory. Whitelisted commands only.",
+            description="Run a shell command inside the project directory. Use background=True to start a persistent dev server. Whitelisted commands only.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "Shell command to run"},
-                    "cwd": {"type": "string", "description": "Working directory relative to project root (optional)"},
+                    "cwd": {"type": "string", "description": "Working directory relative to projects directory (optional)"},
+                    "background": {"type": "boolean", "description": "If true, run in background and return PID (default: false)", "default": False},
                 },
                 "required": ["command"],
             },
@@ -208,6 +232,17 @@ async def list_tools() -> list[Tool]:
                 "required": ["pattern"],
             },
         ),
+        Tool(
+            name="opencode_stop",
+            description="Stop a background process by PID. Used to terminate dev servers started with opencode_bash(background=True).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pid": {"type": "integer", "description": "Process ID to stop"},
+                },
+                "required": ["pid"],
+            },
+        ),
     ]
 
 
@@ -218,15 +253,30 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             cmd = arguments["command"]
             if not _is_command_allowed(cmd):
                 return [TextContent(type="text", text=f"Command not allowed: {cmd[:60]}...")]
-            cwd = PROJECT_ROOT
+            cwd = PROJECTS_DIR
             if arguments.get("cwd"):
                 cwd = Path(arguments["cwd"])
                 if not cwd.is_absolute():
-                    cwd = PROJECT_ROOT / cwd
+                    cwd = PROJECTS_DIR / cwd
                 cwd = cwd.resolve()
+
+            if arguments.get("background"):
+                import time
+                proc = subprocess.Popen(
+                    cmd, shell=True, cwd=cwd,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+                )
+                _background_processes[proc.pid] = proc
+                time.sleep(2)
+                return [TextContent(type="text", text=f"Started server (PID {proc.pid})")]
+
             result = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True,
                 cwd=cwd, timeout=COMMAND_TIMEOUT,
+                stdin=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
             )
             output = result.stdout or result.stderr or "(no output)"
             if result.returncode != 0:
@@ -240,7 +290,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             Path(path).write_text(arguments["content"], encoding="utf-8")
             size = len(arguments["content"])
-            return [TextContent(type="text", text=f"Wrote {size} chars to {os.path.relpath(path, PROJECT_ROOT)}")]
+            return [TextContent(type="text", text=f"Wrote {size} chars to {path}")]
 
         elif name == "opencode_read":
             path = _resolve_path(arguments["path"])
@@ -264,7 +314,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 return [TextContent(type="text", text=f"old_string not found in file")]
             new_content = content.replace(old, new, 1)
             Path(path).write_text(new_content, encoding="utf-8")
-            return [TextContent(type="text", text=f"Replaced 1 occurrence in {os.path.relpath(path, PROJECT_ROOT)}")]
+            return [TextContent(type="text", text=f"Replaced 1 occurrence in {path}")]
 
         elif name == "opencode_glob":
             pattern = arguments["pattern"]
@@ -294,6 +344,26 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if not matches:
                 return [TextContent(type="text", text="No matches found.")]
             return [TextContent(type="text", text="\n".join(matches[:200]))]
+
+        elif name == "opencode_stop":
+            pid = arguments["pid"]
+            if pid in _background_processes:
+                try:
+                    _background_processes[pid].terminate()
+                    _background_processes[pid].wait(timeout=5)
+                except Exception:
+                    pass
+                del _background_processes[pid]
+                return [TextContent(type="text", text=f"Process {pid} terminated")]
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    capture_output=True, timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+                )
+                return [TextContent(type="text", text=f"Process {pid} terminated via taskkill")]
+            except Exception:
+                return [TextContent(type="text", text=f"Process {pid} not found")]
 
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

@@ -19,6 +19,7 @@ from backend.functions.system_functions import (
 from backend.functions.project_functions import (
     create_project, resume_project, list_projects,
     update_project_status, add_project_note,
+    add_project_task, update_task_status, list_project_tasks,
 )
 
 logger = logging.getLogger(__name__)
@@ -704,11 +705,24 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_project",
-            "description": "Create a new project. Creates a project entry JSON record, creates a folder under projects/, syncs to knowledge graph, and logs the operation.",
+            "description": "Create a new project with optional tasks. Creates a project entry, folder, syncs to knowledge graph, and logs the operation. Use tasks to break the project into steps.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Project name"},
+                    "tasks": {
+                        "type": "array",
+                        "description": "Optional task list. Each: {title: str, type?: 'research'|'general'|'build', depends_on?: string[]}",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string", "description": "Task title"},
+                                "type": {"type": "string", "enum": ["research", "general", "build"], "description": "Task type (default: general)"},
+                                "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Task titles this depends on"},
+                            },
+                            "required": ["title"],
+                        },
+                    },
                 },
                 "required": ["name"],
             },
@@ -768,15 +782,65 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "add_project_note",
-            "description": "Write a research note (.md file) to the project folder. Creates the file inside projects/<project-slug>/ and syncs it to the knowledge graph.",
+            "description": "Write a research note (.md file) to the project folder. Creates the file inside projects/<project-slug>/ and syncs it to the knowledge graph. Omit name to use the active project.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Project name (optional — uses active project if omitted)"},
+                    "filename": {"type": "string", "description": "Filename, e.g. research.md or architecture.md"},
+                    "content": {"type": "string", "description": "Markdown content of the note"},
+                },
+                "required": ["filename", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_project_task",
+            "description": "Add a task to an existing project. Each task tracks progress through its lifecycle: pending → in_progress → completed/blocked/failed. Type 'research' triggers a research skill automatically. Type 'build' triggers a build skill.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Project name"},
-                    "filename": {"type": "string", "description": "Filename, e.g. research.md or architecture.md"},
-                    "content": {"type": "string", "description": "Markdown content of the note"},
+                    "title": {"type": "string", "description": "Task title"},
+                    "type": {"type": "string", "enum": ["research", "general", "build"], "description": "Task type (default: general)"},
+                    "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Task titles this task depends on (optional)"},
                 },
-                "required": ["name", "filename", "content"],
+                "required": ["name", "title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_task_status",
+            "description": "Update a task's status. Lifecycle: pending → in_progress → completed | blocked | failed. Use task_id (preferred) or task_title (fallback). When a task type matches a skill, the skill auto-loads.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Project name"},
+                    "task_id": {"type": "string", "description": "Task ID (returned when task was created, optional if task_title provided)"},
+                    "status": {"type": "string", "enum": ["in_progress", "completed", "blocked", "failed"], "description": "New status"},
+                    "result": {"type": "string", "description": "Result summary (saved to knowledge graph, optional)"},
+                    "task_title": {"type": "string", "description": "Task title fallback if task_id is unknown (optional)"},
+                },
+                "required": ["name", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_project_tasks",
+            "description": "List all tasks in a project, optionally filtered by status. Shows progress and next task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Project name"},
+                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked", "failed"], "description": "Optional status filter"},
+                },
+                "required": ["name"],
             },
         },
     },
@@ -795,6 +859,20 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_page_screenshot",
+            "description": "Navigate to a URL and take a screenshot of the live page. The screenshot is saved and displayed in the chat with an image_url. Use after starting a dev server to show the user what the page looks like.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to navigate to and screenshot (e.g. http://localhost:5173)"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
 ]
 
 FUNCTION_MAP = {
@@ -803,6 +881,9 @@ FUNCTION_MAP = {
     "list_projects": list_projects,
     "update_project_status": update_project_status,
     "add_project_note": add_project_note,
+    "add_project_task": add_project_task,
+    "update_task_status": update_task_status,
+    "list_project_tasks": list_project_tasks,
     "create_todo": create_todo,
     "update_todo": update_todo,
     "delete_todo": delete_todo,

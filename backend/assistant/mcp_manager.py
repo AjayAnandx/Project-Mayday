@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 MCP_CONNECT_TIMEOUT = 15  # seconds (eager servers)
 MCP_LAZY_CONNECT_TIMEOUT = 45  # seconds (lazy servers: Chrome/selenium startup)
+MCP_TOOL_CALL_TIMEOUT = 130  # seconds (slightly above opencode subprocess 120s)
 
 
 class MCPManager:
@@ -117,12 +118,20 @@ class MCPManager:
         try:
             await self._ensure_connected(server_name)
         except Exception as e:
-            return f"Failed to connect MCP server '{server_name}': {e}"
+            logger.warning("First connect attempt for '%s' failed: %s; retrying once", server_name, e)
+            try:
+                await asyncio.sleep(1)
+                await self._ensure_connected(server_name)
+            except Exception as e2:
+                return f"Failed to connect MCP server '{server_name}' after 2 attempts: {e2}"
         session = self._sessions.get(server_name)
         if not session:
             return f"MCP server '{server_name}' not connected"
         try:
-            result = await session.call_tool(name, arguments)
+            result = await asyncio.wait_for(
+                session.call_tool(name, arguments),
+                timeout=MCP_TOOL_CALL_TIMEOUT,
+            )
             parts = []
             for content in result.content:
                 if hasattr(content, "text"):
@@ -130,6 +139,9 @@ class MCPManager:
                 else:
                     parts.append(str(content))
             return "\n".join(parts)
+        except asyncio.TimeoutError:
+            logger.error("MCP tool '%s' timed out after %ss", name, MCP_TOOL_CALL_TIMEOUT)
+            return f"MCP tool '{name}' timed out after {MCP_TOOL_CALL_TIMEOUT}s"
         except Exception as e:
             return f"Error calling MCP tool '{name}': {e}"
 
