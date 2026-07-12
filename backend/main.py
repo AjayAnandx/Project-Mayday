@@ -62,6 +62,12 @@ SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 app.mount("/screenshots", StaticFiles(directory=SCREENSHOTS_DIR), name="screenshots")
 
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 if os.path.isdir(FRONTEND_DIST):
     assets_dir = os.path.join(FRONTEND_DIST, "assets")
@@ -76,8 +82,3 @@ if os.path.isdir(FRONTEND_DIST):
         if os.path.isfile(index_path):
             return FileResponse(index_path)
         return JSONResponse({"detail": "Frontend not built — run `npm run build` in frontend/"}, status_code=500)
-
-
-@app.get("/api/health")
-def health():
-    return {"status": "ok"}

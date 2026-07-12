@@ -44,6 +44,7 @@ mcp:
     git:
       command: python
       args: ["-m", "mcp_server_git", "-r", "."]
+      lazy: true
     github:
       command: backend\bin\github-mcp-server.exe
       args: ["stdio", "--toolsets", "repos,context"]

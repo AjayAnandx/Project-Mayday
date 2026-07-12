@@ -700,27 +700,15 @@ async def chat_websocket(websocket: WebSocket):
     mcp = MCPManager()
     if mcp_servers:
         for name, cfg in mcp_servers.items():
-            if cfg.get("lazy"):
-                try:
-                    await mcp.add_server_stdio(
-                        name,
-                        command=cfg["command"],
-                        args=cfg.get("args", []),
-                        env=cfg.get("env"),
-                        lazy=True,
-                    )
-                except Exception as e:
-                    logger.error("Failed to register lazy MCP server '%s': %s", name, e)
-            else:
-                try:
-                    await mcp.add_server_stdio(
-                        name,
-                        command=cfg["command"],
-                        args=cfg.get("args", []),
-                        env=cfg.get("env"),
-                    )
-                except Exception as e:
-                    logger.error("Failed to connect MCP server '%s': %s", name, e)
+            try:
+                kwargs = dict(command=cfg["command"], args=cfg.get("args", []), env=cfg.get("env"))
+                if cfg.get("lazy"):
+                    kwargs["lazy"] = True
+                await mcp.add_server_stdio(name, **kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Failed to connect MCP server '%s': %s", name, e)
     if mcp_servers:
         for name, cfg in mcp_servers.items():
             if cfg.get("lazy"):
