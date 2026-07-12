@@ -355,6 +355,7 @@ yellow:  '#eab308'
 - [x] **Bug fix: silent response after tool calls (Jul 4)**: When LLM returned `content=None, tool_calls=[...]`, no natural language response was generated. Added final LLM call with `tools=[]` after the iterative loop to force a summary. Fixes the `resume_project → recall_entity → list_directory → (silent)` pattern.
 - [x] **Project Task System + Auto-Skill Loading (Jul 12)**: 3 new LLM tools (`add_project_task`, `update_task_status`, `list_project_tasks`) for task lifecycle (pending → in_progress → completed/blocked/failed). Dependency tracking with cycle detection. `get_active_task()` auto-picks next eligible task. Auto-skill loading: when a task with `type: "research"` or `type: "build"` is set to `in_progress`, the matching skill auto-loads (Point A at engine start, Point B mid-iterative-loop). Active project block injected into system prompt shows real-time task progress. See `backend/core/project_store.py`, `backend/functions/project_functions.py`.
 - [x] **Dev Server + Screenshot Testing (Jul 12)**: `opencode_bash` now supports `background=True` to launch persistent dev servers (returns PID). New `opencode_stop(pid)` tool terminates background processes via `taskkill`. New `capture_page_screenshot(url)` tool navigates to a URL via Selenium, takes a screenshot, and displays it in chat with `image_url`. LLM can now build → start dev server → screenshot → stop server — all autonomous. See `backend/assistant/mcp_server_opencode.py`.
+- [x] **Production Deployment (Jul 12)**: Frontend served as static files from FastAPI (SPA catch-all). API keys moved to `.env` with `python-dotenv` loading + env var fallback. Production CORS allows Tailscale IPs. NSSM Windows service with auto-restart. Ollama as auto-start service. Tailscale 24/7 tunnel. See `docs/deployment.md`.
 - [ ] **Proactive Suggestions — Need to Refine Idea**: Chat shows clickable suggestion chips (upcoming events, overdue todos, recent activity, general prompts) when the chat page is empty.
 - [ ] **Data Export/Import — Need to Refine Idea**: `GET /api/export` + `POST /api/import` blob endpoints for full data backup and restore.
 
@@ -457,6 +458,8 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `frontend/src/components/voice/VoiceIndicator.tsx`: Animated voice state indicator
 - `frontend/src/components/voice/VoiceTranscript.tsx`: Live interim transcript display
 - `docs/adr.md`: Architecture Decision Record (15 decisions — backend, frontend, LLM, voice, search, skills)
+- `docs/deployment.md`: Production deployment guide (NSSM, Tailscale, Ollama service, env setup)
+- `backend/core/config.py`: YAML config loader with `.env` + env var fallback for secrets
 - `backend/core/tool_selector.py`: Inverted group index for LLM tool selection (TF-IDF weighted, BM25 saturation, group-penalty)
 - `backend/assistant/skill_manager.py`: SkillManager — scan SKILL.md files, registry, apply
 - `frontend/src/components/chat/SkillSuggestionCard.tsx`: Skill suggestion card with Confirm/Dismiss
