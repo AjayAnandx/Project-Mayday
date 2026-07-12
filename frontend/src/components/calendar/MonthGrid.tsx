@@ -72,14 +72,15 @@ export function MonthGrid({ year, month, events, onDayClick }: MonthGridProps) {
 
   return (
     <div className="flex flex-col">
-      <div className="grid grid-cols-7 mb-1">
+      <div className="grid grid-cols-7 mb-0.5 sm:mb-1">
         {DAYS.map((d) => (
-          <div key={d} className="text-center text-xs font-medium text-overlay0 py-1">
-            {d}
+          <div key={d} className="text-center text-[10px] sm:text-xs font-medium text-overlay0 py-0.5 sm:py-1">
+            <span className="sm:hidden">{d.slice(0, 2)}</span>
+            <span className="hidden sm:inline">{d}</span>
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-0.5">
+      <div className="grid grid-cols-7 gap-[1px] sm:gap-0.5">
         {cells.map((cell, i) => (
           <DayCell
             key={i}

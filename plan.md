@@ -3114,13 +3114,65 @@ Phase 4: Auto-Skill Loading
   ├── backend/assistant/skill_manager.py     task_type field + parse + lookup method
   └── backend/api/chat.py                    Point A + Point B trigger logic
 
-Phase 5: Dashboard Backend + Frontend (separate, after Phase 1-4)
-  ├── backend/api/dashboard.py               New
+Phase 5: Dashboard Backend + Frontend (separate, after Phase 1-4) — COMPLETED
+  ├── backend/api/dashboard.py               New — 3 endpoints (aggregation, weather, ai-news)
   ├── backend/main.py                        Register router
-  ├── frontend/src/hooks/useDashboard.ts     New
-  ├── frontend/src/services/api.ts           Modified
-  └── frontend/src/components/dashboard/     5 new components
+  ├── frontend/src/hooks/useDashboard.ts     New — fetches + auto-refresh on tool calls
+  ├── frontend/src/services/api.ts           Modified — 3 new API methods
+  └── frontend/src/components/dashboard/     6 new components (DashboardPanel, StatsSummary, UpcomingEvents, RecentActivity, WeatherWidget, AINewsWidget)
 ```
+
+---
+
+## Dashboard — Implementation Complete (Jul 12)
+
+### Goal
+Provide a default landing page that shows the user an overview of their workspace at a glance — stats, upcoming events, recent activity, live weather, and AI news.
+
+### Status — COMPLETED
+
+Dashboard is the default landing page (overrides `chat` as `useState<Page>('dashboard')`). 3 REST endpoints + 6 React components.
+
+### Architecture
+
+```
+App.tsx (default: 'dashboard')
+  ├── Sidebar.tsx — 6 nav items (Dashboard/Chat/Voice/Todos/Calendar/Brain)
+  └── DashboardPanel.tsx
+        ├── StatsSummary.tsx          — open/overdue todos, today events, projects, graph nodes
+        ├── UpcomingEvents.tsx        — next 7 days from /api/dashboard
+        ├── RecentActivity.tsx        — last 10 operations from /api/dashboard
+        ├── WeatherWidget.tsx         — wttr.in Chennai via /api/dashboard/weather
+        └── AINewsWidget.tsx          — Exa API AI news via /api/dashboard/ai-news
+```
+
+### REST Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/dashboard` | Aggregated stats + upcoming events + recent activity |
+| `GET` | `/api/dashboard/weather` | Live weather from wttr.in (`available`, `location`, `raw`) |
+| `GET` | `/api/dashboard/ai-news` | 5 AI news articles via Exa API, cached 1h |
+
+### Files Created
+
+| File | Role |
+|------|------|
+| `backend/api/dashboard.py` | 3 REST endpoints (aggregation, weather, ai-news) |
+| `frontend/src/types/dashboard.ts` | TypeScript interfaces (DashboardData, DashboardStats, DashboardWeather, AiNewsResponse) |
+| `frontend/src/services/api.ts` | 3 new methods (getDashboard, getDashboardWeather, getAiNews) |
+| `frontend/src/hooks/useDashboard.ts` | Fetch hook with auto-refresh on tool calls |
+| `frontend/src/components/dashboard/DashboardPanel.tsx` | Main container with layout grid |
+| `frontend/src/components/dashboard/StatsSummary.tsx` | Stats cards (open/overdue todos, events, conversations, projects, graph) |
+| `frontend/src/components/dashboard/UpcomingEvents.tsx` | Next 7 days event list |
+| `frontend/src/components/dashboard/RecentActivity.tsx` | Last 10 operation log entries |
+| `frontend/src/components/dashboard/WeatherWidget.tsx` | wttr.in weather with temperature/condition/icon |
+| `frontend/src/components/dashboard/AINewsWidget.tsx` | 5 Exa API news articles with title/url/summary |
+
+### Bugs Fixed During Testing
+
+1. **Exa API 400**: Dashboard AI news endpoint sent `"type": "article"` — Exa v2 doesn't accept this as a search type (expects `neural`/`keyword`/`auto`). Removed the field.
+2. **Weather `available: false`**: `startswith("Weather")` was too broad and matched `"Weather for Chennai:..."`. Changed to `startswith("Weather data not available")`.
 
 ### 8. Edge Cases Summary
 

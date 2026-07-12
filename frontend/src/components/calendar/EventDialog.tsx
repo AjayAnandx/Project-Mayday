@@ -160,8 +160,8 @@ export function EventDialog({ open, onClose, onSave, onDelete, event, defaultDat
             ]}
           />
           {recPattern && (
-            <div className="flex gap-2 mt-2">
-              <div className="w-24 flex flex-col gap-1.5">
+            <div className="flex flex-col sm:flex-row gap-2 mt-2">
+              <div className="w-full sm:w-24 flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-subtext0">Interval</label>
                 <input
                   type="number"
@@ -180,7 +180,7 @@ export function EventDialog({ open, onClose, onSave, onDelete, event, defaultDat
                   className="w-full rounded-xl bg-surface0/50 px-3 py-2.5 text-sm text-text placeholder-overlay0 border border-surface1 focus:border-green/50 focus:outline-none focus:ring-1 focus:ring-green/20 transition-all outline-none"
                 />
               </div>
-              <div className="w-24 flex flex-col gap-1.5">
+              <div className="w-full sm:w-24 flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-subtext0">Max Count</label>
                 <input
                   type="number"
@@ -194,7 +194,7 @@ export function EventDialog({ open, onClose, onSave, onDelete, event, defaultDat
           )}
         </div>
 
-        <div className="flex justify-between mt-2">
+        <div className="flex flex-col sm:flex-row justify-between mt-2 gap-2 sm:gap-0">
           <div>
             {event && onDelete && (
               <Button
@@ -204,6 +204,7 @@ export function EventDialog({ open, onClose, onSave, onDelete, event, defaultDat
                   onDelete(event.id)
                   onClose()
                 }}
+                className="w-full sm:w-auto"
               >
                 Delete
               </Button>

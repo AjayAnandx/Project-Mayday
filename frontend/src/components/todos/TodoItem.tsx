@@ -23,7 +23,7 @@ const recLabel: Record<string, string> = {
 export function TodoItem({ todo, onToggle, onEdit, onDelete }: TodoItemProps) {
   return (
     <div
-      className={`group flex items-start gap-3 p-3.5 rounded-xl transition-all hover:bg-surface0/30 ${
+      className={`group flex items-start gap-2 sm:gap-3 p-2.5 sm:p-3.5 rounded-xl transition-all hover:bg-surface0/30 ${
         todo.completed ? 'opacity-50' : ''
       }`}
     >
@@ -78,7 +78,7 @@ export function TodoItem({ todo, onToggle, onEdit, onDelete }: TodoItemProps) {
         </div>
       </div>
 
-      <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex gap-0.5 opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
         <button
           onClick={() => onEdit(todo)}
           className="p-1.5 rounded-lg text-overlay0 hover:text-text hover:bg-surface0/50 transition-colors"

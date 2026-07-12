@@ -33,31 +33,31 @@ export function BrainPanel() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-6 py-3 border-b border-surface1">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0 px-4 sm:px-6 py-2 sm:py-3 border-b border-surface1">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-green/30 to-purple-500/30 flex items-center justify-center">
-            <BrainCircuit className="h-4 w-4 text-green" />
+          <div className="w-6 sm:w-7 h-6 sm:h-7 rounded-lg bg-gradient-to-br from-green/30 to-purple-500/30 flex items-center justify-center shrink-0">
+            <BrainCircuit className="h-3.5 sm:h-4 w-3.5 sm:w-4 text-green" />
           </div>
-          <h2 className="text-sm font-semibold text-text">Brain</h2>
+          <h2 className="text-xs sm:text-sm font-semibold text-text">Brain</h2>
         </div>
 
-        <div className="flex items-center gap-3">
-          <form onSubmit={handleSearch} className="relative">
+        <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+          <form onSubmit={handleSearch} className="relative flex-1 sm:flex-none">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-overlay0" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search memory..."
-              className="w-56 pl-9 pr-3 py-1.5 text-xs bg-surface0 border border-surface1 rounded-xl text-text placeholder-overlay0 focus:outline-none focus:ring-1 focus:ring-green/50 focus:border-green/50 transition-all"
+              className="w-full sm:w-56 pl-9 pr-3 py-1.5 text-xs bg-surface0 border border-surface1 rounded-xl text-text placeholder-overlay0 focus:outline-none focus:ring-1 focus:ring-green/50 focus:border-green/50 transition-all"
             />
           </form>
           <button
             onClick={fetchGraph}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-overlay0 hover:text-text bg-surface0 hover:bg-surface1 rounded-full transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-overlay0 hover:text-text bg-surface0 hover:bg-surface1 rounded-full transition-colors shrink-0"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </button>
         </div>
       </div>

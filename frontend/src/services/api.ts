@@ -2,6 +2,7 @@ import type { Todo, TodoCreate, TodoUpdate } from '../types/todo'
 import type { Event, EventCreate, EventUpdate } from '../types/event'
 import type { GraphData, GraphNode } from '../types/graph'
 import type { SearchResults } from '../types/search'
+import type { DashboardData, DashboardWeather, AiNewsResponse } from '../types/dashboard'
 
 const BASE = '/api'
 
@@ -70,6 +71,16 @@ export const api = {
   // Search
   searchAll: (q: string) =>
     request<SearchResults>(`/search?q=${encodeURIComponent(q)}&limit=20`),
+
+  // Dashboard
+  getDashboard: () =>
+    request<DashboardData>('/dashboard'),
+
+  getDashboardWeather: () =>
+    request<DashboardWeather>('/dashboard/weather'),
+
+  getAiNews: () =>
+    request<AiNewsResponse>('/dashboard/ai-news'),
 
   // Voice
   getVoiceStatus: () =>

@@ -24,7 +24,7 @@ export function NodeDetail({ node, subgraph, onClose, onNavigate }: NodeDetailPr
   )
 
   return (
-    <div className="fixed right-4 top-20 w-80 bg-base border border-surface1 rounded-2xl shadow-2xl z-50 max-h-[80vh] overflow-y-auto">
+    <div className="fixed left-0 right-0 bottom-0 sm:left-auto sm:right-4 sm:top-20 sm:w-80 bg-base border border-surface1 rounded-t-2xl sm:rounded-2xl shadow-2xl z-50 max-h-[70dvh] sm:max-h-[80vh] overflow-y-auto">
       <div className="flex items-center justify-between p-4 border-b border-surface1">
         <div className="flex items-center gap-2">
           <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${typeColors[node.type] || 'bg-surface0 text-text'}`}>
