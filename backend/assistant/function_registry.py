@@ -8,6 +8,7 @@ from backend.functions.calendar_functions import create_event, update_event, del
 from backend.functions.reminder_functions import create_reminder, list_reminders, delete_reminder
 from backend.memory.memory_tools import remember, recall, recall_entity, forget, delete_entity, set_status
 from backend.api.screenshots import list_screenshots, get_screenshot_info, delete_screenshot_file
+from backend.core.port_utils import find_free_port as find_free_port_impl
 from backend.core.weather import get_weather
 from backend.functions.system_functions import (
     open_application, close_application,
@@ -23,6 +24,11 @@ from backend.functions.project_functions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def find_free_port_wrapper(preferred: int = 5174, max_tries: int = 20) -> str:
+    port = find_free_port_impl(preferred, max_tries)
+    return str(port)
 
 
 def get_conversations_from_store(date: str) -> str:
@@ -863,6 +869,20 @@ LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "find_free_port",
+            "description": "Find a free TCP port on the system. Call this before starting any dev server during project testing so it doesn't conflict with Mayday (port 5173) or other running services. Returns the first available port number as a string.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "preferred": {"type": "integer", "description": "Preferred starting port (default 5174)"},
+                    "max_tries": {"type": "integer", "description": "Max ports to try before erroring (default 20)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "capture_page_screenshot",
             "description": "Navigate to a URL and take a screenshot of the live page. The screenshot is saved and displayed in the chat with an image_url. Use after starting a dev server to show the user what the page looks like.",
             "parameters": {
@@ -922,6 +942,7 @@ FUNCTION_MAP = {
     "append_file": append_file,
     "list_directory": list_directory,
     "get_weather": get_weather,
+    "find_free_port": find_free_port_wrapper,
 }
 
 
