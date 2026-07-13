@@ -157,7 +157,7 @@ def add_project_note(filename: str, content: str, name: str = "") -> str:
     return f"Note saved: {folder_path / filename} ({len(content)} chars)"
 
 
-def add_project_task(name: str, title: str, type: str = "general", depends_on: list[str] | None = None) -> str:
+def add_project_task(name: str, title: str, type: str = "general", depends_on: list[str] | None = None, description: str = "") -> str:
     store = get_project_store()
     project = store.find_project_by_name(name)
     if not project:
@@ -167,7 +167,7 @@ def add_project_task(name: str, title: str, type: str = "general", depends_on: l
     if type not in valid_types:
         return f"Invalid type '{type}'. Must be one of {valid_types}."
 
-    result = store.add_task(project["id"], title, type, depends_on or [])
+    result = store.add_task(project["id"], title, type, depends_on or [], description)
     if "error" in result:
         return result["error"]
 
@@ -222,8 +222,9 @@ def list_project_tasks(name: str, status: str = "") -> str:
     lines = [f"Tasks ({len(tasks)}) for {name}:"]
     for i, t in enumerate(tasks):
         icon = icons.get(t["status"], "⬜")
+        desc = f" — {t['description']}" if t.get("description") else ""
         deps = f" — depends on: {', '.join(t['depends_on'])}" if t.get("depends_on") else ""
-        lines.append(f"{i+1}. {icon} {t['title']} ({t['type']}){deps}")
+        lines.append(f"{i+1}. {icon} {t['title']} ({t['type']}){desc}{deps}")
 
     all_tasks = project.get("tasks", [])
     done = sum(1 for t in all_tasks if t["status"] == "completed")

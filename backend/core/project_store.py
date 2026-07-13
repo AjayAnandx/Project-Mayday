@@ -136,7 +136,7 @@ class ProjectStore:
 
             if tasks:
                 for t in tasks:
-                    self._add_task_inner(project_id, t.get("title", ""), t.get("type", "general"), t.get("depends_on", []))
+                    self._add_task_inner(project_id, t.get("title", ""), t.get("type", "general"), t.get("depends_on", []), t.get("description", ""))
 
             return project
 
@@ -245,7 +245,7 @@ class ProjectStore:
                     return True
         return False
 
-    def _add_task_inner(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None) -> dict | None:
+    def _add_task_inner(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None, description: str = "") -> dict | None:
         idx = self._find_index(project_id)
         if idx is None:
             return {"error": "Project not found"}
@@ -272,6 +272,7 @@ class ProjectStore:
         task = {
             "id": "task_" + uuid.uuid4().hex[:8],
             "title": title,
+            "description": description,
             "type": type,
             "status": "pending",
             "depends_on": deps,
@@ -289,9 +290,9 @@ class ProjectStore:
         )
         return task
 
-    def add_task(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None) -> dict | None:
+    def add_task(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None, description: str = "") -> dict | None:
         with self._lock:
-            return self._add_task_inner(project_id, title, type, depends_on)
+            return self._add_task_inner(project_id, title, type, depends_on, description)
 
     def update_task_status(self, project_id: str, task_id: str, status: str, result: str = "") -> dict | None:
         VALID_TRANSITIONS = {
