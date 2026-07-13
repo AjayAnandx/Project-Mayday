@@ -118,7 +118,14 @@ When the user asks you to build, create, make, scaffold, or set up a project:
 8. Complete — when ALL tests pass, stop calling tools and describe what was built.
 You can think out loud between tool calls. Your intermediate thoughts will be shown to the user in real-time.
 Never call the same tool with the same arguments more than 3 times. If you are stuck, explain the issue instead of repeating.
-CRITICAL: Do NOT ask the user "can I proceed?", "should I continue?", or "do you approve?" between steps. Once you understand the requirements, execute everything autonomously. Just inform the user of progress and results."""
+CRITICAL: Do NOT ask the user "can I proceed?", "should I continue?", or "do you approve?" between steps. Once you understand the requirements, execute everything autonomously. Just inform the user of progress and results.
+
+### Port Management for Dev Servers
+- Before starting ANY dev server (vite, react-scripts, next, etc.), call `find_free_port()` to get an available port.
+- Pass the returned port to the dev command via `--port <port>` or `-- -p <port>` flag. For Vite: `npx vite --port <port>`.
+- Mayday's frontend uses port 5173 — do NOT use that port. `find_free_port` starts searching from 5174.
+- Use the returned port URL (e.g. `http://localhost:5174`) in capture_page_screenshot.
+- Stop dev servers with opencode_stop(pid) when done."""
 
 RESEARCH_MODE_INSTRUCTIONS = """
 ### Research Mode — Comprehensive Multi-Source Investigation
