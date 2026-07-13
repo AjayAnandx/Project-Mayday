@@ -94,7 +94,7 @@ PROJECT_INSTRUCTIONS = """
 - To BUILD code, use opencode tools (opencode_write, opencode_bash, opencode_read, opencode_edit, opencode_glob, opencode_grep).
 
 ### Task Lifecycle
-- add_project_task(project, title, type, depends_on): Add a task. Type options: research, general, build.
+- add_project_task(project, title, type, depends_on, description): Add a task. Type options: research, general, build. ALWAYS include a description (problem/goal statement) for research tasks.
 - update_task_status(project, task_id, status, result): Transition through pending → in_progress → completed | blocked | failed.
   Use task_id (preferred) or task_title (fallback) to identify the task.
   For blocked/failed, set status and explain why. For completed, include a result summary.
@@ -119,6 +119,26 @@ When the user asks you to build, create, make, scaffold, or set up a project:
 You can think out loud between tool calls. Your intermediate thoughts will be shown to the user in real-time.
 Never call the same tool with the same arguments more than 3 times. If you are stuck, explain the issue instead of repeating.
 CRITICAL: Do NOT ask the user "can I proceed?", "should I continue?", or "do you approve?" between steps. Once you understand the requirements, execute everything autonomously. Just inform the user of progress and results."""
+
+RESEARCH_MODE_INSTRUCTIONS = """
+### Research Mode — Comprehensive Multi-Source Investigation
+When the user says "research &lt;topic&gt;", "investigate", "find out about", "look into", or asks a complex factual question:
+
+1. DEFINE — Create a project (or resume if exists) and add a research task with a clear "description" field that captures the problem/goal.
+2. BREAK DOWN — For complex topics, split into sub-tasks with dependencies (depends_on). Each sub-task gets its own goal definition.
+3. SEARCH WIDELY — Run multiple search queries to cover different angles, terminology, and perspectives. Do NOT stop after one search — use 3-5 different queries to surface diverse sources. Search across documentation, news, articles, forums, academic sources, and competitor analysis.
+4. FOLLOW LEADS — When you find a promising source, use web_fetch_exa to read it in full. Extract key findings, citations, and references. Follow those references too (snowball search).
+5. FIND RELATED CONCEPTS — Actively look for related technologies, alternatives, dependencies, and context around the topic. The user wants the complete picture, not just a direct answer.
+6. DOCUMENT — Save structured findings via add_project_note (creates .md files in the project folder). Each major subtopic gets its own note.
+7. ANALYZE — Connect insights across sources. Identify patterns, contradictions, gaps, and open questions. Note what's well-established vs what's disputed.
+8. CONCLUDE — Summarize all findings. Update the task as completed with a result summary that covers key discoveries and any remaining open questions.
+9. ITERATE — If new questions or leads emerge during research, add follow-up tasks automatically.
+
+- Always include a description (goal/problem statement) when creating research tasks.
+- For complex research: break into multiple sub-tasks with depends_on so each piece can be tackled in order.
+- After each sub-task completes, check what's next via list_project_tasks or get_active_task.
+- Document findings as .md files in the project folder so results persist.
+- CRITICAL: Thorough research means multiple queries, multiple sources, following cross-references. A single search is never enough."""
 
 SKILL_DESCRIPTIONS_TEMPLATE = """
 ### Available Skills
@@ -315,6 +335,7 @@ async def _run_engine(
     system += WEATHER_INSTRUCTIONS
     system += PROJECT_INSTRUCTIONS
     system += BUILD_MODE_INSTRUCTIONS
+    system += RESEARCH_MODE_INSTRUCTIONS
 
     if skill_manager:
         descs = skill_manager.get_skill_descriptions()
@@ -400,6 +421,9 @@ async def _run_engine(
             return llm.extract_response(resp)
 
         content, tool_calls = await loop.run_in_executor(None, first_call, messages)
+    except asyncio.CancelledError:
+        logger.info("WebSocket client disconnected during first LLM call")
+        return
     except httpx.ConnectError:
         await _send_json(ws, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
         await _send_json(ws, {"type": "done"})
@@ -429,6 +453,9 @@ async def _run_engine(
                     resp.raise_for_status()
                     return llm.extract_response(resp)
                 content, tool_calls = await loop.run_in_executor(None, llm_call, messages)
+            except asyncio.CancelledError:
+                logger.info("WebSocket client disconnected during iterative tool loop")
+                break
             except httpx.ConnectError:
                 await _send_json(ws, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
                 break
@@ -650,6 +677,8 @@ async def _run_engine(
             summary, _ = await loop.run_in_executor(None, final_call, messages)
             if summary:
                 content = summary
+        except asyncio.CancelledError:
+            logger.info("WebSocket client disconnected during final summary")
         except Exception as e:
             logger.error("Final summary call failed: %s", e)
 
@@ -794,6 +823,8 @@ async def chat_websocket(websocket: WebSocket):
                     })
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
+    except asyncio.CancelledError:
+        logger.info("WebSocket task cancelled (client disconnected)")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         try:

@@ -804,6 +804,7 @@ LOCAL_TOOL_DEFINITIONS = [
                 "properties": {
                     "name": {"type": "string", "description": "Project name"},
                     "title": {"type": "string", "description": "Task title"},
+                    "description": {"type": "string", "description": "Clear problem/goal definition for this task. Required for research tasks."},
                     "type": {"type": "string", "enum": ["research", "general", "build"], "description": "Task type (default: general)"},
                     "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Task titles this task depends on (optional)"},
                 },
