@@ -23,6 +23,7 @@ PROJECTS_DIR = Path(_cfg_projects).resolve() if _cfg_projects else (PROJECT_ROOT
 ALLOWED_COMMANDS = {
     "pip", "npm", "npx", "python", "python3", "node",
     "git", "bun", "cargo", "go", "make", "poetry", "uv",
+    "cp", "mkdir", "copy",
 }
 
 BLOCKED_PATTERNS = [

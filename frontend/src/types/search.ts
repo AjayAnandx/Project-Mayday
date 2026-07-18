@@ -32,10 +32,17 @@ export interface SearchOperationResult {
   timestamp: string
 }
 
+export interface SearchDocumentResult {
+  id: string
+  title: string
+  snippet: string
+}
+
 export interface SearchResults {
   todos: SearchTodoResult[]
   events: SearchEventResult[]
   conversations: SearchConversationResult[]
   graph_nodes: SearchGraphResult[]
   operations: SearchOperationResult[]
+  documents: SearchDocumentResult[]
 }

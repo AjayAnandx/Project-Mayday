@@ -109,7 +109,11 @@ export function useChat() {
             break
         }
       },
-      onOpen: () => setConnected(true),
+      onOpen: () => {
+        setConnected(true)
+        setStreaming(false)
+        currentAssistantId.current = null
+      },
       onClose: () => setConnected(false),
     })
     ws.connect()
@@ -130,8 +134,10 @@ export function useChat() {
 
   const newConversation = useCallback(() => {
     setMessages([])
+    setStreaming(false)
     setPendingSkill(null)
     setActiveSkill(null)
+    currentAssistantId.current = null
     wsRef.current?.send({ type: 'new_conversation' })
   }, [])
 
@@ -145,6 +151,10 @@ export function useChat() {
     wsRef.current?.sendDismissSkill()
   }, [])
 
+  const addSystemMessage = useCallback((content: string) => {
+    addMessage({ id: nextId(), role: 'assistant', content })
+  }, [addMessage])
+
   return {
     messages,
     connected,
@@ -156,5 +166,6 @@ export function useChat() {
     activeSkill,
     confirmSkill,
     dismissSkill,
+    addSystemMessage,
   }
 }

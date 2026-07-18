@@ -1,17 +1,62 @@
-import { useState, useRef, useEffect } from 'react'
-import { Send } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { Send, FileText, Upload } from 'lucide-react'
 import { useChatContext } from '../../context/ChatContext'
 import { MessageBubble } from './MessageBubble'
 import { SkillSuggestionCard } from './SkillSuggestionCard'
 import { useAutoResizeTextarea } from '../../hooks/use-auto-resize-textarea'
+import { api } from '../../services/api'
 import { cn } from '../../lib/utils'
 
 export function ChatPanel() {
-  const { messages, connected, streaming, sendMessage, pendingSkill, activeSkill, confirmSkill, dismissSkill } = useChatContext()
+  const { messages, connected, streaming, sendMessage, pendingSkill, activeSkill, confirmSkill, dismissSkill, addSystemMessage } = useChatContext()
   const [input, setInput] = useState('')
   const [isFocused, setIsFocused] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const { textareaRef, adjustHeight } = useAutoResizeTextarea({ minHeight: 52, maxHeight: 200 })
+  const dragCountRef = useRef(0)
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    dragCountRef.current++
+    if (e.dataTransfer.types?.includes('Files')) {
+      setDragOver(true)
+    }
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    dragCountRef.current--
+    if (dragCountRef.current <= 0) {
+      dragCountRef.current = 0
+      setDragOver(false)
+    }
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+  }, [])
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    dragCountRef.current = 0
+    const file = e.dataTransfer.files[0]
+    if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
+      addSystemMessage('Only PDF files are supported for upload.')
+      return
+    }
+    setUploading(true)
+    try {
+      const result = await api.uploadDocument(file)
+      sendMessage(`I've uploaded a document: **${result.filename}** (${result.pages} pages, id: \`${result.id}\`). Please read it and understand its contents so you can answer questions about it.`)
+    } catch (err: any) {
+      addSystemMessage(`Upload failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setUploading(false)
+    }
+  }, [addSystemMessage, sendMessage])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -25,7 +70,21 @@ export function ChatPanel() {
   }
 
   return (
-    <div className="flex flex-col h-full bg-crust">
+    <div
+      className="flex flex-col h-full bg-crust relative"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {dragOver && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-crust/80 backdrop-blur-sm rounded-2xl border-2 border-dashed border-green/50 m-2">
+          <div className="flex flex-col items-center gap-3 text-green">
+            <Upload className="h-10 w-10" />
+            <p className="text-sm font-medium">{uploading ? 'Uploading...' : 'Drop PDF here to upload'}</p>
+          </div>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-1">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-overlay0">
@@ -100,7 +159,38 @@ export function ChatPanel() {
               rows={1}
             />
 
-            <div className="absolute right-1.5 bottom-1.5">
+            <div className="absolute right-1.5 bottom-1.5 flex items-center gap-0.5">
+              <input
+                type="file"
+                accept=".pdf"
+                id="pdf-upload"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  setUploading(true)
+                  try {
+                    const result = await api.uploadDocument(file)
+                    sendMessage(`I've uploaded a document: **${result.filename}** (${result.pages} pages, id: \`${result.id}\`). Please read it and understand its contents so you can answer questions about it.`)
+                  } catch (err: any) {
+                    addSystemMessage(`Upload failed: ${err.message || 'Unknown error'}`)
+                  } finally {
+                    setUploading(false)
+                    e.target.value = ''
+                  }
+                }}
+              />
+              <label
+                htmlFor="pdf-upload"
+                className={cn(
+                  'rounded-full p-2.5 transition-all cursor-pointer',
+                  'text-overlay0 hover:text-text hover:bg-surface1/50',
+                  uploading && 'opacity-50 pointer-events-none',
+                )}
+                title="Upload PDF"
+              >
+                <FileText className="h-4 w-4" />
+              </label>
               <button
                 type="button"
                 onClick={handleSubmit}

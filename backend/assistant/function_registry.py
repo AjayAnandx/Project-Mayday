@@ -22,6 +22,9 @@ from backend.functions.project_functions import (
     update_project_status, add_project_note,
     add_project_task, update_task_status, list_project_tasks,
 )
+from backend.functions.document_functions import (
+    upload_pdf, read_pdf, search_pdfs, list_pdfs, delete_pdf, rename_pdf,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,8 @@ def unified_search(query: str) -> str:
     from backend.api.search import unified_search as search_api
     result = search_api(q=query, limit=10)
     parts = []
+    if result.get("documents"):
+        parts.append("📄 Documents:\n" + "\n".join(f"  - {d['title']} ({d['snippet']})" for d in result["documents"]))
     if result["todos"]:
         parts.append("📋 Todos:\n" + "\n".join(f"  - {t['title']} ({t['id']})" for t in result["todos"]))
     if result["events"]:
@@ -483,7 +488,7 @@ LOCAL_TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["create", "update", "delete"], "description": "Filter by action type (optional)"},
-                    "entity_type": {"type": "string", "description": "Filter by entity type: todo, event, conversation, project, concept (optional)"},
+                    "entity_type": {"type": "string", "description": "Filter by entity type: todo, event, conversation, project, concept, document (optional)"},
                     "date_from": {"type": "string", "description": "Start date YYYY-MM-DD (optional)"},
                     "date_to": {"type": "string", "description": "End date YYYY-MM-DD (optional)"},
                     "query": {"type": "string", "description": "Full-text search in entity name or user message (optional)"},
@@ -883,6 +888,92 @@ LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "upload_pdf",
+            "description": "Upload a PDF file from your local file system. Extracts all text for search, summary, and graph memory. Optionally link to a project (copies file to project dir). Use this when the user wants to upload a PDF for reading or analysis.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Absolute path to the PDF file"},
+                    "filename": {"type": "string", "description": "Display name for the document"},
+                    "project_name": {"type": "string", "description": "Optional project name to link this document to"},
+                },
+                "required": ["file_path", "filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_pdf",
+            "description": "Read text content from an uploaded PDF document. Can read specific pages or the full document.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doc_id": {"type": "string", "description": "Document ID to read"},
+                    "pages": {"type": "array", "items": {"type": "integer"}, "description": "Specific page numbers to read (1-indexed). Omit to read all pages."},
+                },
+                "required": ["doc_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_pdfs",
+            "description": "Search uploaded PDF documents by text content. Only use when the user explicitly asks to search their documents or references a specific uploaded file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "limit": {"type": "integer", "description": "Maximum results (default 5)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_pdfs",
+            "description": "List all uploaded PDF documents with basic metadata.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_pdf",
+            "description": "Delete an uploaded PDF document and all its extracted data.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doc_id": {"type": "string", "description": "Document ID to delete"},
+                },
+                "required": ["doc_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rename_pdf",
+            "description": "Rename an uploaded PDF document. Old filename is preserved in search history so it remains findable by its previous name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doc_id": {"type": "string", "description": "Document ID to rename"},
+                    "new_filename": {"type": "string", "description": "New display name for the document"},
+                },
+                "required": ["doc_id", "new_filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "capture_page_screenshot",
             "description": "Navigate to a URL and take a screenshot of the live page. The screenshot is saved and displayed in the chat with an image_url. Use after starting a dev server to show the user what the page looks like.",
             "parameters": {
@@ -943,6 +1034,12 @@ FUNCTION_MAP = {
     "list_directory": list_directory,
     "get_weather": get_weather,
     "find_free_port": find_free_port_wrapper,
+    "upload_pdf": upload_pdf,
+    "read_pdf": read_pdf,
+    "search_pdfs": search_pdfs,
+    "list_pdfs": list_pdfs,
+    "delete_pdf": delete_pdf,
+    "rename_pdf": rename_pdf,
 }
 
 

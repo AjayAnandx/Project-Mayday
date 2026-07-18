@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query
 
 from backend.core.data_store import get_store
 from backend.core.operation_log import get_operation_log
+from backend.core.pdf_store import get_pdf_store
 from backend.memory.knowledge_graph import get_graph
 
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -70,6 +71,16 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
 
     operations = olog.query(query=q, limit=limit)
 
+    documents = get_pdf_store().search(q, limit)
+    document_results = [
+        {
+            "id": d["id"],
+            "title": d.get("title", d.get("filename", "")),
+            "snippet": f"{d['filename']} ({d['pages']} pages)",
+        }
+        for d in documents
+    ]
+
     return {
         "todos": [
             {
@@ -99,6 +110,7 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
             }
             for op in operations[:limit]
         ],
+        "documents": document_results[:limit],
     }
 
 

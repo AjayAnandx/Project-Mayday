@@ -16,6 +16,7 @@ conversations/
 screenshots/
 memory_graph.json
 operations/
+pdfs/*.pdf
 reminders.json
 projects.json
 projects/

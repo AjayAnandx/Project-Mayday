@@ -8,3 +8,4 @@ python-dotenv>=1.0.0
 mcp-server-git>=2026.0.0
 mcp-server-selenium>=0.1.0
 selenium>=4.20.0
+pymupdf>=1.24.0
