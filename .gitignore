@@ -23,3 +23,7 @@ projects/
 bin/
 *.tsbuildinfo
 python-installer.exe
+baselines/
+config.local.yaml
+*.pem
+*.key
