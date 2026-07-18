@@ -1,4 +1,4 @@
-# Mayday — Desktop AI Personal Assistant
+# Mayday — Adavance AI Operating System
 
 An intelligent desktop AI assistant with todo management, calendar, LLM chat with tool calling, voice I/O, knowledge graph memory, and an extensible MCP-based tool system.
 
