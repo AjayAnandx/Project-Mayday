@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications, location, projects, dashboard
+from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications, location, projects, dashboard, documents
 from backend.voice import router as voice_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -57,11 +57,16 @@ app.include_router(notifications.router)
 app.include_router(location.router)
 app.include_router(projects.router)
 app.include_router(dashboard.router)
+app.include_router(documents.router)
 app.include_router(voice_router)
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 app.mount("/screenshots", StaticFiles(directory=SCREENSHOTS_DIR), name="screenshots")
+
+PDFS_DIR = os.path.join(os.path.dirname(__file__), "..", "pdfs")
+os.makedirs(PDFS_DIR, exist_ok=True)
+app.mount("/pdfs", StaticFiles(directory=PDFS_DIR), name="pdfs")
 
 
 @app.get("/api/health")

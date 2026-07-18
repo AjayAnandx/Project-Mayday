@@ -26,7 +26,7 @@ class DataStore:
             path = Path(__file__).resolve().parent.parent.parent / path
         self._path = path
         self._conv_dir = Path(__file__).resolve().parent.parent.parent / "conversations"
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._todos: list[dict] = []
         self._events: list[dict] = []
         self._conv_idx: dict[str, dict] = {}

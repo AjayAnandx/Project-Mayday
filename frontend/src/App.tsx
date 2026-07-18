@@ -10,6 +10,7 @@ import { SearchOverlay } from './components/search/SearchOverlay'
 import { ToastContainer } from './components/ui/Toast'
 import { ReminderDialog } from './components/ui/ReminderDialog'
 import { VoiceMode } from './components/voice/VoiceMode'
+import { DocumentPanel } from './components/documents/DocumentPanel'
 import { useNotifications } from './hooks/useNotifications'
 import { useLocation } from './hooks/useLocation'
 
@@ -24,7 +25,7 @@ function AppContent() {
   useEffect(() => {
     const handleNavigate = (e: Event) => {
       const detail = (e as CustomEvent).detail
-      if (detail === 'dashboard' || detail === 'chat' || detail === 'todos' || detail === 'calendar' || detail === 'brain' || detail === 'voice') {
+      if (detail === 'dashboard' || detail === 'chat' || detail === 'todos' || detail === 'calendar' || detail === 'brain' || detail === 'voice' || detail === 'documents') {
         setCurrentPage(detail)
       }
     }
@@ -58,6 +59,7 @@ function AppContent() {
         {currentPage === 'todos' && <TodoPanel />}
         {currentPage === 'calendar' && <CalendarPanel />}
         {currentPage === 'brain' && <BrainPanel />}
+        {currentPage === 'documents' && <DocumentPanel />}
         {currentPage === 'voice' && <VoiceMode onExit={() => setCurrentPage('dashboard')} />}
       </div>
       <SearchOverlay

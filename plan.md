@@ -3871,10 +3871,33 @@ Phase 4: Test
 
 ---
 
-## PDF Document Parser — Implementation Plan
+## PDF Document Management — Partial Implementation (Jul 15)
 
 ### Goal
 Upload PDF documents → extract text with PyMuPDF (fitz) → index for search → query via LLM tools. Fast CPU-native parsing, no OCR needed for text-native PDFs.
+
+### Completed (Jul 15)
+- **Frontend**: ChatPanel drag-drop PDF upload zone + FileText button — upload calls `sendMessage()` so LLM sees the document in context
+- **Frontend**: `useDocuments` hook (list, search, upload, delete, viewText)
+- **Frontend**: `DocumentPanel` with search bar, upload button, drag-drop zone, inline DocumentViewer modal
+- **Frontend**: Sidebar FileText nav item, App.tsx routing
+- **Frontend**: `addSystemMessage` on ChatContext for upload failure messages
+- **Integration**: Upload sends PDF info via `sendMessage` → LLM can read with `search_pdfs` from system prompt awareness
+- **Integration**: Layer 3 auto-context injection (chat.py:388-403) — reads first 3 pages from cached `_meta.json` into system prompt when keywords match a document graph node
+- **Integration**: Layer 1 system prompt hint — LLM told to proactively `search_pdfs()` when questions relate to uploaded documents
+- **Deps**: `pymupdf` installed
+- **Port fix**: NSSM `MaydayBackend` service on 8771 (old code, can't restart w/o admin). Dev backend moved to port 8772 (package.json), Vite proxy updated to 8772
+- **CSS fix**: `Upload` → `Upload.css` re-imported after accidental deletion
+
+### Remaining
+- Backend REST API (`/api/documents` CRUD)
+- `backend/core/pdf_store.py` — PDFStore class
+- `backend/functions/document_functions.py` — 5 LLM document tools
+- Register in `function_registry.py`
+- Register router in `main.py`
+- KnowledgeGraph `document` node type + OperationLog recording
+- Full `NgramIndex` + `SearchTrie` integration for document search
+- Phase 3 Frontend polish (progress indicator, OCR fallback, batch upload)
 
 ### Why PyMuPDF (fitz)
 - **Speed**: 5,000–15,000 pages/sec on CPU (native C++ bindings, memory-mapped I/O)
@@ -4035,3 +4058,166 @@ pymupdf>=1.24.0
 - Integration: Upload → search → read → delete cycle
 - Load: 100 concurrent 50-page uploads
 - Accuracy: Compare extracted text vs. ground truth
+
+---
+
+## Bug Fix: Stuck `streaming` State After Backend Error — Plan for Jul 16
+
+### Problem
+When the backend WebSocket drops mid-response (during tool processing, token streaming, or final summary), the frontend's `streaming` state stays stuck at `true`. The WebSocket reconnects after 3s but `streaming` is never reset. The input stays permanently disabled (`disabled={!connected || streaming}`), making the AI unresponsive to any messages.
+
+### Root Cause Chain
+1. Backend `_run_engine()` sends `token` and `done` via `_send_json()` **outside any try/except** for WebSocket errors (chat.py:484, 698, 724)
+2. If `_send_json` fails (e.g., client navigated away, network blip), the exception propagates out of `_run_engine` **without sending `done`**
+3. WebSocket disconnects → 3s reconnect → new WebSocket connects → `onOpen` fires → `setConnected(true)`
+4. But `streaming` is **never reset** — stays `true` from step 1
+5. Input is permanently blocked by `disabled={!connected || streaming}`
+
+### Files to Modify
+
+#### 1. `frontend/src/hooks/useChat.ts` — Frontend (2 changes)
+
+**1a. Reset `streaming` and `currentAssistantId` in `onOpen` callback**
+
+Inside the WebSocket constructor's `onOpen` callback (around line 112), reset the stuck state:
+```typescript
+onOpen: () => {
+    setConnected(true)
+    setStreaming(false)          // NEW — clear stuck streaming on reconnect
+    currentAssistantId.current = null  // NEW — clear stale ref
+}
+```
+
+**1b. Reset `streaming` in `newConversation()`**
+
+Inside `newConversation()` (around line 131), add:
+```typescript
+setStreaming(false)              // NEW
+currentAssistantId.current = null // NEW
+```
+
+#### 2. `backend/api/chat.py` — Backend (1 change)
+
+**2a. Wrap final `done` send in try/except**
+
+Around line 724, wrap the `await _send_json(ws, {"type": "done"})` in a try/except that logs but doesn't crash:
+```python
+try:
+    await _send_json(ws, {"type": "done"})
+except Exception:
+    logger.warning("Failed to send done — client may have disconnected")
+```
+
+### Why This Works
+
+| Layer | What it fixes | Why it's safe |
+|-------|--------------|---------------|
+| Frontend `onOpen` | Stuck `streaming` after reconnect | Streaming can't happen without an open WS — resetting on connect is correct |
+| Frontend `newConversation` | Stuck `streaming` on manual reset | User explicitly asked for a fresh start — clear all state |
+| Backend try/except on `done` | Unhandled exception during send | If client disconnected, `_send_json` will fail — log and move on |
+
+### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| Normal flow (no error) | `done` sent normally, `streaming` set to `false` by the existing `case 'done'` handler — no change |
+| WS drops during tool processing | `_send_json` fails → logged → WS closes → reconnects → `onOpen` resets streaming |
+| WS drops during final token send | `_send_json` for `token` fails → exception propagates → `done` never reached → WS closes → reconnects → `onOpen` resets streaming |
+| WS drops during `done` send | `try/except` catches and logs it → WS already closing anyway |
+| Multiple rapid reconnects | Each reconnect clears `streaming` — safe |
+| Upgrade/fix deployed while streaming is stuck | User clicks "New Conversation" → `newConversation()` now resets `streaming` → input works again |
+
+### Implementation Order
+1. Frontend: `useChat.ts` — add `setStreaming(false)` + `currentAssistantId.current = null` to `onOpen`
+2. Frontend: `useChat.ts` — add `setStreaming(false)` + `currentAssistantId.current = null` to `newConversation()`
+3. Backend: `chat.py` — wrap `done` send in try/except
+4. Verify: TypeScript compiles (`npx tsc --noEmit`), Python syntax valid (`python -c "import py_compile; py_compile.compile(...)"`)
+
+---
+
+## Jul 16 — PDF Storage, Tool Loop Fixes, Auto-Context Fixes
+
+### 1. PDF Storage Enhancement
+- **pdf_store.py**: Summary extraction from first meaningful paragraph on upload; `rename(doc_id, new_filename)` method
+- **knowledge_graph.py**: `sync_document` stores `_text` and `_previous_names` in node properties; `update_document_text()`, `update_document_previous_names()` helpers; `summary` field in properties
+- **project_store.py**: `add_document()`, `remove_document()`, `list_documents()`, `get_project_docs_dir()` for tracking PDFs within projects
+
+### 2. LLM Tool Changes
+- **document_functions.py**: `upload_pdf` now passes full extracted text to graph node; accepts `project_name` param (auto-copies file to project dir via `copy_to_project`); new `rename_pdf()` function (preserves old names in `_previous_names` for findability)
+- **function_registry.py**: `upload_pdf` tool def updated with `project_name`; new `rename_pdf` tool def; `query_operations` entity_type includes "document"
+- **documents.py API**: Upload endpoint passes `_text` to graph sync
+
+### 3. Frontend
+- **document.ts**: `summary` field added to `DocumentMeta` type
+- **DocumentPanel.tsx**: `DocumentViewer` shows stored summary in green-bordered box at top when opening a document
+
+### 4. Crash/Silent Response Fixes
+- **chat.py:526** — Assistant content stored as `null` (not `""`) when `tool_calls` present. Some Ollama models trip on empty string when they expect null.
+- **chat.py:735-755** — Fallback message added: if final summary returns empty, last tool result used as fallback (or generic "couldn't find relevant information")
+- **chat.py:382-389** — Auto-context keyword matching fixed: previously checked if full query string `"when is my tcs exam date"` was contained *inside* titles (backwards). Now checks individual keywords from `extract_keywords()` against title+description text.
+
+### 5. System Prompt Tool Selection Fix
+- **chat.py:44** — Removed `**PDF PRIORITY RULE**` which told LLM to call `search_pdfs` for every exam/event/date/personal question. Auto-context injection already silently injects relevant PDF content — LLM should use that, not call the tool unnecessarily.
+- **function_registry.py:922** — `search_pdfs` tool description downgraded: "Only use when user explicitly asks to search their documents or references a specific uploaded file."
+
+### 6. Bug Fixes
+- **document_functions.py:copy_to_project** — Fixed `store._get_file_path()` (doesn't exist) → `store._pdf_path()`
+- **document_functions.py:rename_pdf** — Fixed `if "error" in result` crash (store.rename returns `bool`, not `dict`)
+- **mcp_server_opencode.py** — Added `cp`, `mkdir`, `copy` to `ALLOWED_COMMANDS`
+
+### Files Modified
+- `backend/core/pdf_store.py`
+- `backend/core/project_store.py`
+- `backend/memory/knowledge_graph.py`
+- `backend/functions/document_functions.py`
+- `backend/assistant/function_registry.py`
+- `backend/assistant/mcp_server_opencode.py`
+- `backend/api/chat.py`
+- `backend/api/documents.py`
+- `frontend/src/types/document.ts`
+- `frontend/src/components/documents/DocumentPanel.tsx`
+
+---
+
+## Research Tools (arXiv, Semantic Scholar, Hugging Face) — Need to Refine
+
+### Goal
+Add 3 research-specific tools so the LLM can search academic papers, models, and datasets during research tasks.
+
+### Tools
+
+1. **`search_arxiv(query, max_results=5, sort_by="relevance")`** — Search academic papers on arXiv. Returns title, authors, abstract snippet, published date, PDF URL, and arXiv ID. Uses `https://export.arxiv.org/api/query` (Atom XML, no auth).
+
+2. **`search_semantic_scholar(query, limit=5)`** — Search academic papers via Semantic Scholar. Returns richer metadata: citation count, venue, year, authors, abstract, open-access PDF link. Uses `https://api.semanticscholar.org/graph/v1/paper/search` (JSON, no auth, ~100 req/min).
+
+3. **`search_huggingface(query, type="models", limit=5, sort="downloads")`** — Search Hugging Face Hub for models, datasets, or papers. Returns name, description, downloads, likes, tags, HF link. Uses `https://huggingface.co/api/{models|datasets|papers}` (JSON, no auth, ~30 req/min).
+
+### Files
+
+| Action | File | Change |
+|--------|------|--------|
+| CREATE | `backend/assistant/research_tools.py` | 3 functions with HTTP clients |
+| MODIFY | `backend/assistant/function_registry.py` | Import + 3 tool defs + FUNCTION_MAP |
+| MODIFY | `backend/api/chat.py` | Brief mention in system prompt |
+
+### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| arXiv API returns empty results | Return clear "no papers found" message |
+| Semantic Scholar rate limited | Catch HTTP 429, return "rate limited, try again in 30s" |
+| HF API timeout | 10s timeout, return timeout error string |
+| Invalid query (special chars) | URL-encode query parameters |
+| Network offline | `httpx.ConnectError` caught, return clear offline message |
+| User asks for PDF download | Return the arXiv/PDF URL — the `fetch` tool can download it |
+
+### Why Semantic Scholar instead of Google Scholar
+- Google Scholar has no official API and scraping violates ToS
+- Semantic Scholar is the standard academic API replacement (broader coverage, better metadata, citation counts, open-access PDF links)
+- Free tier: ~100 requests/minute — sufficient for single-user desktop app
+
+### Potential pitfalls
+- arXiv response is XML — needs `xml.etree.ElementTree` parsing
+- arXiv has ~5min indexing delay for new submissions
+- HF API returns different schemas for models vs datasets vs papers — handle each `type` separately
+- All three should use a timeout (10s default) to avoid hanging the tool loop

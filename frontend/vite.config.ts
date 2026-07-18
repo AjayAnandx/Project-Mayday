@@ -20,6 +20,7 @@ export default defineConfig({
         ws: true,
       },
       '/screenshots': 'http://localhost:8772',
+      '/pdfs': 'http://localhost:8772',
     },
   },
 })

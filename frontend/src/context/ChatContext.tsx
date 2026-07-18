@@ -12,6 +12,7 @@ interface ChatContextValue {
   activeSkill: string | null
   confirmSkill: (name: string) => void
   dismissSkill: () => void
+  addSystemMessage: (content: string) => void
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null)
