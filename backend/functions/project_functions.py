@@ -9,8 +9,6 @@ from backend.memory.knowledge_graph import get_graph
 def _project_folder(project: dict) -> Path:
     folder = project.get("folder", "")
     store = get_project_store()
-    if folder.startswith("projects/"):
-        return Path(__file__).resolve().parent.parent.parent / folder
     return store.projects_dir / folder
 
 
