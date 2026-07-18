@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { FileText, Upload, X, Search, Trash2, ChevronLeft, Loader2, ExternalLink } from 'lucide-react'
 import { useDocuments } from '../../hooks/useDocuments'
-import { cn } from '../../lib/utils'
+
 import type { DocumentMeta } from '../../types/document'
 
 function formatSize(bytes: number): string {
@@ -16,31 +16,6 @@ function formatDate(iso: string): string {
 }
 
 function DocumentViewer({ doc, onClose }: { doc: DocumentMeta; onClose: () => void }) {
-  const [text, setText] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [pageStart, setPageStart] = useState(1)
-  const viewerRef = useRef<HTMLDivElement>(null)
-
-  const loadText = async (page?: number) => {
-    setLoading(true)
-    try {
-      const pagesParam = page ? `${page}-${page + 4}` : undefined
-      const res = await fetch(`/api/documents/${doc.id}/text${pagesParam ? `?pages=${pagesParam}` : ''}`)
-      const data = await res.json()
-      setText(data.text || '(No text content)')
-    } catch {
-      setText('(Failed to load text)')
-    } finally {
-      setLoading(false)
-      viewerRef.current?.scrollTo(0, 0)
-    }
-  }
-
-  const handleShowAll = () => {
-    setPageStart(1)
-    loadText()
-  }
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       <div className="bg-surface0 rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col border border-white/10 shadow-2xl overflow-hidden">
@@ -54,49 +29,18 @@ function DocumentViewer({ doc, onClose }: { doc: DocumentMeta; onClose: () => vo
               <p className="text-xs text-overlay0">{doc.pages} pages</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleShowAll}
-              disabled={loading}
-              className="text-xs px-3 py-1.5 rounded-full bg-green/10 text-green hover:bg-green/20 transition-colors disabled:opacity-50"
-            >
-              Load all
-            </button>
-            <button onClick={onClose} className="text-overlay0 hover:text-text p-1 rounded-lg hover:bg-surface1 transition-colors">
-              <X className="h-5 w-5" />
-            </button>
-          </div>
+          <button onClick={onClose} className="text-overlay0 hover:text-text p-1 rounded-lg hover:bg-surface1 transition-colors">
+            <X className="h-5 w-5" />
+          </button>
         </div>
-        <div
-          ref={viewerRef}
-          className="flex-1 overflow-y-auto p-5 text-sm text-subtext1 leading-relaxed whitespace-pre-wrap font-mono"
-        >
+        <div className="flex-1 overflow-y-auto p-5">
           {doc.summary ? (
-            <div className="mb-4 p-3 rounded-xl bg-green/5 border border-green/20">
+            <div className="p-4 rounded-xl bg-green/5 border border-green/20">
               <p className="text-xs font-semibold text-green mb-1.5 uppercase tracking-wider">Summary</p>
               <p className="text-sm text-subtext1 leading-relaxed">{doc.summary}</p>
             </div>
-          ) : null}
-          {loading ? (
-            <div className="flex items-center justify-center h-32">
-              <Loader2 className="h-5 w-5 text-green animate-spin" />
-            </div>
           ) : (
-            text || <span className="text-overlay0 italic">Click a page range to load</span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 px-5 py-3 border-t border-white/5 shrink-0 overflow-x-auto">
-          {Array.from({ length: Math.min(doc.pages, 10) }, (_, i) => i + 1).map((p) => (
-            <button
-              key={p}
-              onClick={() => { setPageStart(p); loadText(p) }}
-              className="text-xs px-2.5 py-1 rounded-full bg-surface1 text-overlay0 hover:text-text hover:bg-surface2 transition-colors"
-            >
-              {p}
-            </button>
-          ))}
-          {doc.pages > 10 && (
-            <span className="text-xs text-overlay0 px-1">+{doc.pages - 10} more</span>
+            <p className="text-sm text-overlay0 italic">No summary available</p>
           )}
         </div>
       </div>

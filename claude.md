@@ -35,9 +35,8 @@ See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (
 
 ## Architecture
 - **Two-process**: FastAPI backend (uvicorn) + React frontend (Vite dev / Electron)
-- Vite proxies `/api` → `localhost:8771` and `/ws` → `ws://localhost:8771`
+- Vite proxies `/api` → `localhost:8772` (dev) / `localhost:8771` (NSSM production service) and `/ws` → `ws://localhost:8772` (dev) / `ws://localhost:8771` (production)
 - Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
-- Vite proxies `/api` → `localhost:8771` and `/ws` → `ws://localhost:8771`
 - **Dashboard** is the default landing page (stats summary, upcoming events, recent activity, weather widget, AI news feed)
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
 - 45 built-in function tools: 8 project/task + 5 todo/event CRUD + 2 event query + 5 memory + 2 conversation + 3 screenshot + 3 notifications/reminder + 3 misc (set_status, suggest_skill, capture_page_screenshot) + 11 system/file + query_operations + unified_search + get_weather
@@ -102,6 +101,7 @@ mayday/
 │   ├── functions/
 │   │   ├── todo_functions.py         # Todo CRUD implementations
 │   │   ├── calendar_functions.py     # Event CRUD + search implementations
+│   │   ├── document_functions.py     # PDF upload/read/search/list/delete/rename + project copy
 │   │   └── system_functions.py       # System control + file access tools (11 tools)
 │   └── voice/
 │       ├── router.py                 # Voice REST + WebSocket endpoints
@@ -375,6 +375,18 @@ yellow:  '#eab308'
 - [x] **Dashboard (Jul 12)**: Default landing page with StatsSummary (todos, events, projects, conversations, graph), UpcomingEvents (next 7 days), RecentActivity (last 10 operations), WeatherWidget (wttr.in Chennai), AINewsWidget (Exa API, cached 1h). 3 new REST endpoints (`GET /api/dashboard`, `/weather`, `/ai-news`). 6 new React components under `dashboard/`. Dashboard is the default page on app load. 6th nav item in Sidebar.
 - [x] **Bug fix: AI news Exa API 400**: Dashboard AI news was returning HTTP 400. Removed invalid `"type": "article"` field from Exa API request — Exa v2 `type` parameter expects search algorithm (`neural`/`keyword`/`auto`), not content category. See `backend/api/dashboard.py`.
 - [x] **Bug fix: weather `available: false`**: `WeatherWidget` showed weather unavailable because `startswith("Weather")` matched valid response `"Weather for Chennai:..."`. Changed to `startswith("Weather data not available")`. See `backend/api/dashboard.py`.
+- [x] **PDF upload in chat (Jul 15)**: ChatPanel drag-drop zone + FileText button calls `sendMessage()` so LLM sees uploaded PDFs in context. `addSystemMessage` on ChatContext for upload failures. See `frontend/src/components/chat/ChatPanel.tsx`.
+- [x] **DocumentPanel + hooks (Jul 15)**: `useDocuments` hook (CRUD + search), `DocumentPanel` with viewer modal, inline `DocumentViewer`. Sidebar `FileText` nav item, App.tsx routing. See `frontend/src/hooks/useDocuments.ts`, `frontend/src/components/documents/DocumentPanel.tsx`.
+- [x] **Auto-context injection for documents (Jul 15)**: chat.py reads first 3 pages from cached `_meta.json` into system prompt when keywords match a document graph node. System prompt hints LLM to proactively use `search_pdfs()`. See `backend/api/chat.py:388-403`.
+- [x] **PDF storage rewrite (Jul 16)**: `pdf_store.py` stores summary from first meaningful paragraph on upload; `rename()` method preserves `_previous_names` in graph nodes. Graph document nodes store full `_text` for instant context injection. `upload_pdf` tool accepts `project_name` to auto-copy to project dir. New `rename_pdf` LLM tool.
+- [x] **Project document tracking (Jul 16)**: ProjectStore has `add_document/remove_document/list_documents/get_project_docs_dir`. Copy-to-project on upload copies PDF file into `projects/{slug}/pdfs/`.
+- [x] **Frontend summary display (Jul 16)**: `DocumentViewer` shows stored summary in green-bordered box when opening a document — no API call needed.
+- [x] **Bug fix: null assistant content for tool-only responses (Jul 16)**: chat.py stored `""` for assistant content when LLM returned `content=None, tool_calls=[...]`. Some Ollama models expect `content: null` (not empty string) when tool_calls present. Fixed by passing `content` directly (allows `None`).
+- [x] **Bug fix: fallback message on empty final summary (Jul 16)**: When all LLM calls (iterative loop + final summary) returned `None`, no text was sent to frontend — only `done`. Added fallback that uses last tool result or generic "couldn't find relevant information" message.
+- [x] **Bug fix: auto-context keyword matching (Jul 16)**: Was checking if full query string (e.g. "when is my tcs exam date") was contained *inside* title — backwards. Fixed to check individual `extract_keywords()` tokens against title+description.
+- [x] **Removed aggressive PDF PRIORITY RULE (Jul 16)**: System prompt told LLM to call `search_pdfs()` for every exam/event/date/personal question. Replaced with passive "PDF content auto-injected" instruction. Auto-context injection already handles PDF content silently.
+- [x] **Port conflict fix (Jul 15)**: NSSM `MaydayBackend` service on 8771 (old code, can't restart w/o admin). Dev backend moved to port 8772. Vite proxy targets 8772. `package.json` dev script updated. `pymupdf` installed.
+- [x] **Streaming stuck bug analysis (Jul 15)**: Root-caused: `_run_engine` may exit without sending `done` when `_send_json` fails (WS drop); frontend `streaming` never resets on reconnect. Fix plan written to `plan.md` for Jul 16.
 - [ ] **Proactive Suggestions — Need to Refine Idea**: Chat shows clickable suggestion chips (upcoming events, overdue todos, recent activity, general prompts) when the chat page is empty.
 - [ ] **Data Export/Import — Need to Refine Idea**: `GET /api/export` + `POST /api/import` blob endpoints for full data backup and restore.
 
@@ -383,7 +395,7 @@ yellow:  '#eab308'
 ### Dev mode (two terminals)
 ```bash
 # Terminal 1 — Backend
-uvicorn backend.main:app --reload --port 8771 --reload-exclude 'projects/**' --reload-exclude 'operations/**' --reload-exclude 'conversations/**' --reload-exclude 'screenshots/**'
+uvicorn backend.main:app --reload --port 8772 --reload-exclude 'projects/**' --reload-exclude 'operations/**' --reload-exclude 'conversations/**' --reload-exclude 'screenshots/**'
 
 # Terminal 2 — Frontend
 cd frontend && npm run dev
@@ -459,6 +471,7 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `backend/memory/memory_tools.py`: 5 LLM functions for memory (remember, recall, recall_entity, forget, delete_entity)
 - `backend/core/project_store.py`: Project store with CRUD, lifecycle state machine (active/paused/scrapped), fuzzy matching, task CRUD (add/update/list/get_active), dependency cycle detection, conversation auto-link
 - `backend/functions/project_functions.py`: 8 LLM functions for project + task management (create_project, resume_project, list_projects, update_project_status, add_project_note, add_project_task, update_task_status, list_project_tasks)
+- `backend/functions/document_functions.py`: PDF upload/read/search/list/delete/rename + project copy (copy_to_project)
 - `backend/functions/system_functions.py`: 11 LLM functions for system control + file access (open_application, close_application, set_volume, get_volume, copy_to_clipboard, get_system_info, get_active_window, read_file, write_file, append_file, list_directory)
 - `backend/api/memory.py`: REST API for graph visualization (GET/DELETE nodes)
 - `backend/api/search.py`: Unified search across all 5 data stores
@@ -486,3 +499,6 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `backend/assistant/mcp_server_opencode.py`: opencode wrapper MCP server (bash, write, read, edit, glob, grep, stop tools) with background process management
 - `backend/assistant/selenium_tools.py`: Selenium browser tools (navigate, screenshot, page description) used by `capture_page_screenshot` interception
 - `opencode.json`: opencode permission config for MCP tools
+- `frontend/src/hooks/useDocuments.ts`: Document CRUD + search hook
+- `frontend/src/components/documents/DocumentPanel.tsx`: Document list with viewer modal
+- `frontend/src/types/document.ts`: TypeScript interfaces for documents
