@@ -1,0 +1,70 @@
+ollama:
+  api_key: ""  # Leave empty for local Ollama
+  model: gemma4:31b-cloud
+  endpoint: http://localhost:11434/v1/chat/completions
+
+data:
+  storage_path: data.json
+  projects_dir: C:\Users\hp\Projects\madays projects
+
+server:
+  host: 0.0.0.0
+  port: 8771
+
+personality:
+  name: "Mayday"
+  user_name: ""
+  default_tone: "warm and professional"
+  traits:
+    - "concise but thorough"
+    - "proactive with suggestions"
+    - "adapts tone based on user feedback"
+  rules:
+    - "Address user by name when known"
+    - "Explain tool actions briefly"
+    - "Suggest follow-ups proactively"
+
+voice:
+  enabled: true
+  deepgram_api_key: ""  # Set via DEEPGRAM_API_KEY env var or .env
+  stt_model: nova-2
+  tts_voice: aura-asteria-en
+  tts_speed: 1.0
+  sample_rate: 16000
+
+location:
+  default_location: ""
+
+skills:
+  enabled: true
+  directory: C:\Users\hp\agent-skills\skills
+
+mcp:
+  servers:
+    git:
+      command: .\\venv\\Scripts\\python.exe
+      args: ["-m", "mcp_server_git", "-r", "."]
+      lazy: true
+    github:
+      command: backend\bin\github-mcp-server.exe
+      args: ["stdio", "--toolsets", "repos,context"]
+      env:
+        GITHUB_PERSONAL_ACCESS_TOKEN: ""  # Set via GITHUB_PERSONAL_ACCESS_TOKEN env var or .env
+    selenium:
+      command: .\\venv\\Scripts\\python.exe
+      args: ["-m", "mcp_server_selenium"]
+      lazy: true
+    exa:
+      command: npx
+      args: ["-y", "exa-mcp-server"]
+      env:
+        EXA_API_KEY: ""  # Set via EXA_API_KEY env var or .env
+      lazy: true
+    fetch:
+      command: uvx
+      args: ["mcp-server-fetch"]
+      lazy: true
+    opencode:
+      command: .\\venv\\Scripts\\python.exe
+      args: ["-m", "backend.assistant.mcp_server_opencode"]
+      lazy: true

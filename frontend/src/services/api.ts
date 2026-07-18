@@ -2,6 +2,8 @@ import type { Todo, TodoCreate, TodoUpdate } from '../types/todo'
 import type { Event, EventCreate, EventUpdate } from '../types/event'
 import type { GraphData, GraphNode } from '../types/graph'
 import type { SearchResults } from '../types/search'
+import type { DashboardData, DashboardWeather, AiNewsResponse } from '../types/dashboard'
+import type { DocumentMeta } from '../types/document'
 
 const BASE = '/api'
 
@@ -18,6 +20,35 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // Documents
+  listDocuments: () =>
+    request<DocumentMeta[]>('/documents'),
+
+  getDocument: (id: string) =>
+    request<DocumentMeta>(`/documents/${id}`),
+
+  getDocumentText: (id: string, pages?: string) =>
+    request<{ doc_id: string; text: string }>(`/documents/${id}/text${pages ? `?pages=${encodeURIComponent(pages)}` : ''}`),
+
+  searchDocuments: (q: string, limit = 10) =>
+    request<DocumentMeta[]>(`/documents/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+
+  uploadDocument: async (file: File): Promise<DocumentMeta> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await fetch(`${BASE}/documents`, {
+      method: 'POST',
+      body: formData,
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(err || `HTTP ${res.status}`)
+    }
+    return res.json()
+  },
+
+  deleteDocument: (id: string) =>
+    request<{ deleted: boolean }>(`/documents/${id}`, { method: 'DELETE' }),
   // Todos
   listTodos: (includeCompleted = true, q = '') =>
     request<Todo[]>(`/todos?include_completed=${includeCompleted}&q=${encodeURIComponent(q)}`),
@@ -70,6 +101,16 @@ export const api = {
   // Search
   searchAll: (q: string) =>
     request<SearchResults>(`/search?q=${encodeURIComponent(q)}&limit=20`),
+
+  // Dashboard
+  getDashboard: () =>
+    request<DashboardData>('/dashboard'),
+
+  getDashboardWeather: () =>
+    request<DashboardWeather>('/dashboard/weather'),
+
+  getAiNews: () =>
+    request<AiNewsResponse>('/dashboard/ai-news'),
 
   // Voice
   getVoiceStatus: () =>

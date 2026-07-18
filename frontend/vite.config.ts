@@ -7,19 +7,20 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api/notifications/ws': {
-        target: 'ws://localhost:8771',
+        target: 'ws://localhost:8772',
         ws: true,
       },
       '/api/voice/stt': {
-        target: 'ws://localhost:8771',
+        target: 'ws://localhost:8772',
         ws: true,
       },
-      '/api': 'http://localhost:8771',
+      '/api': 'http://localhost:8772',
       '/ws': {
-        target: 'ws://localhost:8771',
+        target: 'ws://localhost:8772',
         ws: true,
       },
-      '/screenshots': 'http://localhost:8771',
+      '/screenshots': 'http://localhost:8772',
+      '/pdfs': 'http://localhost:8772',
     },
   },
 })

@@ -5,16 +5,18 @@ import { ChatPanel } from './components/chat/ChatPanel'
 import { TodoPanel } from './components/todos/TodoPanel'
 import { CalendarPanel } from './components/calendar/CalendarPanel'
 import { BrainPanel } from './components/brain/BrainPanel'
+import { DashboardPanel } from './components/dashboard/DashboardPanel'
 import { SearchOverlay } from './components/search/SearchOverlay'
 import { ToastContainer } from './components/ui/Toast'
 import { ReminderDialog } from './components/ui/ReminderDialog'
 import { VoiceMode } from './components/voice/VoiceMode'
+import { DocumentPanel } from './components/documents/DocumentPanel'
 import { useNotifications } from './hooks/useNotifications'
 import { useLocation } from './hooks/useLocation'
 
 function AppContent() {
   const { connected, newConversation } = useChatContext()
-  const [currentPage, setCurrentPage] = useState<Page>('chat')
+  const [currentPage, setCurrentPage] = useState<Page>('dashboard')
   const [searchOpen, setSearchOpen] = useState(false)
 
   useNotifications()
@@ -23,7 +25,7 @@ function AppContent() {
   useEffect(() => {
     const handleNavigate = (e: Event) => {
       const detail = (e as CustomEvent).detail
-      if (detail === 'chat' || detail === 'todos' || detail === 'calendar' || detail === 'brain' || detail === 'voice') {
+      if (detail === 'dashboard' || detail === 'chat' || detail === 'todos' || detail === 'calendar' || detail === 'brain' || detail === 'voice' || detail === 'documents') {
         setCurrentPage(detail)
       }
     }
@@ -52,11 +54,13 @@ function AppContent() {
         onSearchOpen={() => setSearchOpen(true)}
       />
       <div className="flex-1 overflow-hidden">
+        {currentPage === 'dashboard' && <DashboardPanel />}
         {currentPage === 'chat' && <ChatPanel />}
         {currentPage === 'todos' && <TodoPanel />}
         {currentPage === 'calendar' && <CalendarPanel />}
         {currentPage === 'brain' && <BrainPanel />}
-        {currentPage === 'voice' && <VoiceMode onExit={() => setCurrentPage('chat')} />}
+        {currentPage === 'documents' && <DocumentPanel />}
+        {currentPage === 'voice' && <VoiceMode onExit={() => setCurrentPage('dashboard')} />}
       </div>
       <SearchOverlay
         open={searchOpen}

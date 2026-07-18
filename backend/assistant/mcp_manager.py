@@ -49,6 +49,12 @@ class MCPManager:
             except BaseException:
                 logger.debug("MCP server '%s' exit stack close error after timeout", name)
             raise
+        except Exception:
+            try:
+                await exit_stack.aclose()
+            except BaseException:
+                pass
+            raise
 
     def add_static_tools(self, name: str, tool_defs: list[dict]):
         for tool_def in tool_defs:
@@ -68,6 +74,8 @@ class MCPManager:
             return
         if name not in self._lazy_configs:
             raise ValueError(f"No lazy config registered for server '{name}'")
+        if name in getattr(self, '_failed_servers', set()):
+            raise RuntimeError(f"MCP server '{name}' previously failed and is disabled for this session")
         cfg = self._lazy_configs[name]
         server_params = StdioServerParameters(command=cfg["command"], args=cfg["args"], env=cfg.get("env"))
         exit_stack = AsyncExitStack()
@@ -82,12 +90,16 @@ class MCPManager:
         timeout_value = cfg.get("timeout") or MCP_LAZY_CONNECT_TIMEOUT
         try:
             await asyncio.wait_for(_connect(), timeout=timeout_value)
-        except asyncio.TimeoutError:
-            logger.error("Lazy MCP server '%s' connection timed out after %ss", name, timeout_value)
+        except Exception:
+            # Clean up exit stack on ANY failure to prevent
+            # garbage-collected async generator -> cancel scope corruption -> RuntimeError -> server crash
             try:
                 await exit_stack.aclose()
             except BaseException:
-                logger.debug("Lazy MCP server '%s' exit stack close error after timeout", name)
+                pass
+            if not hasattr(self, '_failed_servers'):
+                self._failed_servers = set()
+            self._failed_servers.add(name)
             raise
 
     async def discover_tools(self) -> list[dict]:
@@ -160,3 +172,5 @@ class MCPManager:
         self._exit_stacks.clear()
         self._tools.clear()
         self._lazy_configs.clear()
+        if hasattr(self, '_failed_servers'):
+            self._failed_servers.clear()

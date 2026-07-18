@@ -23,6 +23,7 @@ from backend.assistant.memory.conversation_manager import ConversationManager
 from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
 from backend.api.screenshots import get_screenshot_store
 from backend.core.tool_selector import ToolSelector
+from backend.core.pdf_store import get_pdf_store
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ You also have web search tools available:
 Rule of thumb: complex → Exa tools, simple URL fetch → fetch tool.
 Do not say you lack access. You have the tools.
 Be concise, helpful, and friendly. When you use a tool, explain what you did.
+You also have PDF document tools: list_pdfs, search_pdfs, read_pdf, upload_pdf, delete_pdf, rename_pdf.
+Relevant PDF content is automatically injected into your context when appropriate — use search_pdfs() only when you need to find something specific in uploaded documents.
 Current date and time (your local timezone): {date}"""
 
 PERSONALITY_INSTRUCTIONS = """
@@ -94,7 +97,7 @@ PROJECT_INSTRUCTIONS = """
 - To BUILD code, use opencode tools (opencode_write, opencode_bash, opencode_read, opencode_edit, opencode_glob, opencode_grep).
 
 ### Task Lifecycle
-- add_project_task(project, title, type, depends_on): Add a task. Type options: research, general, build.
+- add_project_task(project, title, type, depends_on, description): Add a task. Type options: research, general, build. ALWAYS include a description (problem/goal statement) for research tasks.
 - update_task_status(project, task_id, status, result): Transition through pending → in_progress → completed | blocked | failed.
   Use task_id (preferred) or task_title (fallback) to identify the task.
   For blocked/failed, set status and explain why. For completed, include a result summary.
@@ -118,7 +121,34 @@ When the user asks you to build, create, make, scaffold, or set up a project:
 8. Complete — when ALL tests pass, stop calling tools and describe what was built.
 You can think out loud between tool calls. Your intermediate thoughts will be shown to the user in real-time.
 Never call the same tool with the same arguments more than 3 times. If you are stuck, explain the issue instead of repeating.
-CRITICAL: Do NOT ask the user "can I proceed?", "should I continue?", or "do you approve?" between steps. Once you understand the requirements, execute everything autonomously. Just inform the user of progress and results."""
+CRITICAL: Do NOT ask the user "can I proceed?", "should I continue?", or "do you approve?" between steps. Once you understand the requirements, execute everything autonomously. Just inform the user of progress and results.
+
+### Port Management for Dev Servers
+- Before starting ANY dev server (vite, react-scripts, next, etc.), call `find_free_port()` to get an available port.
+- Pass the returned port to the dev command via `--port <port>` or `-- -p <port>` flag. For Vite: `npx vite --port <port>`.
+- Mayday's frontend uses port 5173 — do NOT use that port. `find_free_port` starts searching from 5174.
+- Use the returned port URL (e.g. `http://localhost:5174`) in capture_page_screenshot.
+- Stop dev servers with opencode_stop(pid) when done."""
+
+RESEARCH_MODE_INSTRUCTIONS = """
+### Research Mode — Comprehensive Multi-Source Investigation
+When the user says "research &lt;topic&gt;", "investigate", "find out about", "look into", or asks a complex factual question:
+
+1. DEFINE — Create a project (or resume if exists) and add a research task with a clear "description" field that captures the problem/goal.
+2. BREAK DOWN — For complex topics, split into sub-tasks with dependencies (depends_on). Each sub-task gets its own goal definition.
+3. SEARCH WIDELY — Run multiple search queries to cover different angles, terminology, and perspectives. Do NOT stop after one search — use 3-5 different queries to surface diverse sources. Search across documentation, news, articles, forums, academic sources, and competitor analysis.
+4. FOLLOW LEADS — When you find a promising source, use web_fetch_exa to read it in full. Extract key findings, citations, and references. Follow those references too (snowball search).
+5. FIND RELATED CONCEPTS — Actively look for related technologies, alternatives, dependencies, and context around the topic. The user wants the complete picture, not just a direct answer.
+6. DOCUMENT — Save structured findings via add_project_note (creates .md files in the project folder). Each major subtopic gets its own note.
+7. ANALYZE — Connect insights across sources. Identify patterns, contradictions, gaps, and open questions. Note what's well-established vs what's disputed.
+8. CONCLUDE — Summarize all findings. Update the task as completed with a result summary that covers key discoveries and any remaining open questions.
+9. ITERATE — If new questions or leads emerge during research, add follow-up tasks automatically.
+
+- Always include a description (goal/problem statement) when creating research tasks.
+- For complex research: break into multiple sub-tasks with depends_on so each piece can be tackled in order.
+- After each sub-task completes, check what's next via list_project_tasks or get_active_task.
+- Document findings as .md files in the project folder so results persist.
+- CRITICAL: Thorough research means multiple queries, multiple sources, following cross-references. A single search is never enough."""
 
 SKILL_DESCRIPTIONS_TEMPLATE = """
 ### Available Skills
@@ -154,6 +184,8 @@ CORE_TOOL_NAMES = {
     "capture_page_screenshot",
     # Skill suggestion
     "suggest_skill",
+    # PDF document tools
+    "upload_pdf", "read_pdf", "search_pdfs", "list_pdfs", "delete_pdf",
 }
 
 GIT_TOOL_NAMES = {
@@ -211,7 +243,12 @@ CONNECTION_HINT = (
 
 
 async def _send_json(ws: WebSocket, data: dict):
-    await ws.send_text(json.dumps(data))
+    try:
+        await ws.send_text(json.dumps(data))
+    except WebSocketDisconnect:
+        logger.debug("WS disconnected during send — suppressed")
+    except Exception as e:
+        logger.warning("_send_json failed for type=%s: %s", data.get("type", "?"), e)
 
 
 def _make_voice_text(text: str) -> str:
@@ -315,6 +352,7 @@ async def _run_engine(
     system += WEATHER_INSTRUCTIONS
     system += PROJECT_INSTRUCTIONS
     system += BUILD_MODE_INSTRUCTIONS
+    system += RESEARCH_MODE_INSTRUCTIONS
 
     if skill_manager:
         descs = skill_manager.get_skill_descriptions()
@@ -333,7 +371,7 @@ async def _run_engine(
 
     if kg:
         keywords = extract_keywords(user_text)
-        if keywords and len(keywords) >= 2:
+        if keywords and len(keywords) >= 1:
             query = " ".join(keywords)
             memories = [m for m in kg.search(query) if m.get("properties", {}).get("search_result") != "true"]
             memory_lines = ""
@@ -341,18 +379,50 @@ async def _run_engine(
                 memory_lines += "\n".join(f"- [{m['type']}] {m['label']}" for m in memories[:8])
             from backend.core.data_store import get_store as get_data_store
             store = get_data_store()
-            q = query.lower()
             store_matches = []
+            seen_ids = set()
             for t in store.list_todos(include_completed=True):
-                if q in t["title"].lower() or q in t.get("description", "").lower():
-                    store_matches.append(f"- [todo] {t['title']}")
+                text = (t["title"] + " " + (t.get("description", "") or "")).lower()
+                if any(kw in text for kw in keywords):
+                    if t["id"] not in seen_ids:
+                        seen_ids.add(t["id"])
+                        store_matches.append(f"- [todo] {t['title']}")
             for e in store.list_events():
-                if q in e["title"].lower() or q in e.get("description", "").lower():
-                    store_matches.append(f"- [event] {e['title']}")
+                text = (e["title"] + " " + (e.get("description", "") or "")).lower()
+                if any(kw in text for kw in keywords):
+                    if e["id"] not in seen_ids:
+                        seen_ids.add(e["id"])
+                        store_matches.append(f"- [event] {e['title']}")
             if store_matches:
                 if memory_lines:
                     memory_lines += "\n"
                 memory_lines += "\n".join(store_matches[:4])
+
+            # PDF auto-context from graph node _text
+            from backend.core.pdf_store import get_pdf_store as _get_pdf_store
+            _pdf_store = _get_pdf_store()
+            _pdf_results = _pdf_store.search(query, limit=3)
+            if _pdf_results:
+                _doc_lines = []
+                for _pdf in _pdf_results:
+                    _text = None
+                    for _node in (kg._nodes or {}).values():
+                        if _node.get("type") == "document" and _node.get("properties", {}).get("doc_id") == _pdf["id"]:
+                            _text = _node.get("properties", {}).get("_text")
+                            break
+                    if not _text:
+                        _text = _pdf_store.get_text(_pdf["id"])
+                        if _text and kg:
+                            kg.update_document_text(_pdf["id"], _text)
+                    if _text and len(_text.strip()) > 50:
+                        if len(_text) > 4000:
+                            _text = _text[:4000].rsplit("\n", 1)[0] + "\n...[truncated]"
+                        _doc_lines.append(f"[Document: {_pdf['filename']}]\n{_text}")
+                if _doc_lines:
+                    memory_lines += "\n" if memory_lines else ""
+                    memory_lines += "\n\n".join(_doc_lines)
+                    memory_lines += "\n\n### IMPORTANT: Use the document content above to answer. Do NOT search the web — the answer is in these uploaded documents."
+
             if memory_lines:
                 system += f"\n\n### Relevant memories:\n{memory_lines}\n###"
 
@@ -400,17 +470,30 @@ async def _run_engine(
             return llm.extract_response(resp)
 
         content, tool_calls = await loop.run_in_executor(None, first_call, messages)
+    except asyncio.CancelledError:
+        logger.info("WebSocket client disconnected during first LLM call")
+        return
     except httpx.ConnectError:
         await _send_json(ws, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
-        await _send_json(ws, {"type": "done"})
+        try:
+            await _send_json(ws, {"type": "done"})
+        except Exception:
+            logger.warning("Failed to send done after ConnectError — client may have disconnected")
         return
     except httpx.HTTPStatusError as e:
         await _send_json(ws, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}. Check your model and API key."})
-        await _send_json(ws, {"type": "done"})
+        try:
+            await _send_json(ws, {"type": "done"})
+        except Exception:
+            logger.warning("Failed to send done after HTTPStatusError — client may have disconnected")
         return
     except Exception as e:
+        logger.exception("LLM error in first_call: %s", e)
         await _send_json(ws, {"type": "error", "content": f"LLM error: {e}"})
-        await _send_json(ws, {"type": "done"})
+        try:
+            await _send_json(ws, {"type": "done"})
+        except Exception:
+            logger.warning("Failed to send done after LLM error — client may have disconnected")
         return
 
     MAX_ITERATIONS = 20
@@ -429,6 +512,9 @@ async def _run_engine(
                     resp.raise_for_status()
                     return llm.extract_response(resp)
                 content, tool_calls = await loop.run_in_executor(None, llm_call, messages)
+            except asyncio.CancelledError:
+                logger.info("WebSocket client disconnected during iterative tool loop")
+                break
             except httpx.ConnectError:
                 await _send_json(ws, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
                 break
@@ -436,201 +522,213 @@ async def _run_engine(
                 await _send_json(ws, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}. Check your model and API key."})
                 break
             except Exception as e:
+                logger.exception("LLM error in iterative call: %s", e)
                 await _send_json(ws, {"type": "error", "content": f"LLM error: {e}"})
                 break
 
         if not tool_calls:
             break
 
-        conv.add_message("assistant", content or "", tool_calls=tool_calls)
+        conv.add_message("assistant", content, tool_calls=tool_calls)
 
         if content and content.strip():
             await _send_json(ws, {"type": "token", "content": content})
 
         for tc in tool_calls:
-            fn_name = tc["function"]["name"]
-            fn_args = tc["function"]["arguments"]
-            tool_call_id = tc.get("id", f"call_{iteration}_{fn_name}")
+            try:
+                fn_name = tc["function"]["name"]
+                fn_args = tc["function"]["arguments"]
+                tool_call_id = tc.get("id", f"call_{iteration}_{fn_name}")
 
-            if isinstance(fn_args, str):
-                fn_args = json.loads(fn_args)
-
-            if fn_name == "suggest_skill":
-                skill_name = fn_args.get("name", "")
-                if skill_manager and skill_manager.get_skill(skill_name):
-                    skill = skill_manager.get_skill(skill_name)
-                    if active_skill is not None:
-                        active_skill.clear()
-                        active_skill.append(skill)
-                    body, skill_tool_defs, _ = skill_manager.apply_skill(skill_name)
-                    for sd in skill_tool_defs:
-                        if sd not in filtered_tools:
-                            filtered_tools.append(sd)
-                    system += f"\n\n### Active Skill: {skill.name}\n{body}\n###"
-                    await _send_json(ws, {
-                        "type": "skill_activated",
-                        "name": skill_name,
-                    })
-                    result = f"Auto-activated skill '{skill_name}' for this task."
-                else:
-                    avail = skill_manager.list_skills() if skill_manager else []
-                    result = f"Skill '{skill_name}' not found. Available: {', '.join(avail)}"
-                conv.add_message("tool", result, tool_call_id=tool_call_id)
-                await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
-
-            if fn_name == "capture_page_screenshot":
-                url = fn_args.get("url", "")
-                if not url:
-                    result = "Error: No URL provided."
-                else:
+                if isinstance(fn_args, str):
                     try:
-                        await mcp.call_tool("navigate", {"url": url})
-                    except Exception as e:
-                        result = f"navigate error: {e}"
-                        tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
-                        await _send_json(ws, tool_msg)
+                        fn_args = json.loads(fn_args)
+                    except (json.JSONDecodeError, TypeError):
+                        result = f"Invalid JSON arguments from LLM for {fn_name}: {str(fn_args)[:200]}"
+                        await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
                         conv.add_message("tool", result, tool_call_id=tool_call_id)
                         continue
-                    await asyncio.sleep(1.5)
-                    ss_dir = os.path.join(os.path.dirname(__file__), "..", "..", "screenshots")
-                    os.makedirs(ss_dir, exist_ok=True)
-                    try:
-                        ss_result = await mcp.call_tool("take_screenshot", {"save_path": ss_dir})
-                    except Exception as e:
-                        result = f"screenshot error: {e}"
-                        tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
-                        await _send_json(ws, tool_msg)
-                        conv.add_message("tool", result, tool_call_id=tool_call_id)
-                        continue
-                    import re as _scr
-                    _scr_match = _scr.search(r"Screenshot saved to (.+\.png)", ss_result)
-                    ss_path = _scr_match.group(1) if _scr_match else ""
-                    if ss_path and os.path.exists(ss_path):
-                        ss_store = get_screenshot_store()
-                        saved = ss_store.add_screenshot(ss_path)
-                        if saved:
-                            tool_msg = {
-                                "type": "tool_call", "name": fn_name,
-                                "result": f"Screenshot captured at {url}",
-                                "image_url": f"/screenshots/{saved}",
-                            }
-                            await _send_json(ws, tool_msg)
-                            conv.add_message("tool", f"Screenshot captured at {url}", tool_call_id=tool_call_id)
-                            seen_calls.append((fn_name, json.dumps(fn_args, sort_keys=True), ""))
-                            continue
-                    result = "Screenshot taken but could not be registered in store."
 
-            if fn_name in OPENCODE_TOOL_NAMES:
-                opencode_used = True
-
-            result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
-            if len(result) > MAX_TOOL_RESULT_LENGTH:
-                result = result[:MAX_TOOL_RESULT_LENGTH] + "\n...[truncated]"
-
-            if fn_name == "update_task_status" and skill_manager and not (active_skill and active_skill[0]):
-                new_status = fn_args.get("status", "")
-                if new_status == "in_progress":
-                    task_title = fn_args.get("task_title", "")
-                    proj_name = fn_args.get("name", "")
-                    if proj_name:
-                        from backend.core.project_store import get_project_store
-                        pstore = get_project_store()
-                        project = pstore.find_project_by_name(proj_name)
-                        if project:
-                            target_task = None
-                            for t in project.get("tasks", []):
-                                if t["id"] == fn_args.get("task_id", ""):
-                                    target_task = t
-                                    break
-                                if task_title and t["title"].lower() == task_title.lower():
-                                    target_task = t
-                                    break
-                            if target_task:
-                                skill = skill_manager.get_skill_by_task_type(target_task["type"])
-                                if skill:
-                                    if active_skill is not None:
-                                        active_skill.clear()
-                                        active_skill.append(skill)
-                                        logger.info("Point B: Auto-loaded skill '%s' for task '%s'", skill.name, target_task["title"])
-
-            args_hash = json.dumps(fn_args, sort_keys=True)
-            result_head = result[:100]
-            call_key = (fn_name, args_hash, result_head)
-            seen_calls.append(call_key)
-            dup_count = sum(1 for c in seen_calls if c == call_key)
-            if dup_count >= DUPLICATE_LIMIT:
-                result = f"[Stuck after {dup_count} identical attempts] {result}"
-                content = "I got stuck — the same action repeated with the same result."
-                tool_calls = None
-                await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
-                break
-
-            conv.add_message("tool", result, tool_call_id=tool_call_id)
-
-            if kg and fn_name in ("create_todo", "update_todo", "delete_todo"):
-                from backend.core.data_store import get_store as get_data_store
-                store = get_data_store()
-                if fn_name == "delete_todo":
-                    kg.delete_todo_node(fn_args.get("todo_id", ""))
-                elif fn_name == "create_todo":
-                    m = re.search(r'\(id: ([a-f0-9]+)\)', result)
-                    if m:
-                        todo = store.get_todo(m.group(1))
-                        if todo:
-                            kg.sync_todo(todo)
-                else:
-                    todo_id = fn_args.get("todo_id", "")
-                    if todo_id:
-                        todo = store.get_todo(todo_id)
-                        if todo:
-                            kg.sync_todo(todo)
-
-            if kg and fn_name in ("create_event", "update_event", "delete_event"):
-                from backend.core.data_store import get_store as get_data_store
-                store = get_data_store()
-                if fn_name == "delete_event":
-                    kg.delete_event_node(fn_args.get("event_id", ""))
-                elif fn_name == "create_event":
-                    m = re.search(r'\(id: ([a-f0-9]+)\)', result)
-                    if m:
-                        event = store.get_event(m.group(1))
-                        if event:
-                            kg.sync_event(event)
-                else:
-                    event_id = fn_args.get("event_id", "")
-                    if event_id:
-                        event = store.get_event(event_id)
-                        if event:
-                            kg.sync_event(event)
-
-            tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
-
-            if fn_name == "take_screenshot":
-                import re as _re
-                _path_match = _re.search(r"Screenshot saved to (.+\.png)", result)
-                if _path_match:
-                    src_path = _path_match.group(1)
-                else:
-                    _start = result.find("screenshot_")
-                    if _start != -1:
-                        src_path = result[_start:].split()[0].rstrip(". \n")
+                if fn_name == "suggest_skill":
+                    skill_name = fn_args.get("name", "")
+                    if skill_manager and skill_manager.get_skill(skill_name):
+                        skill = skill_manager.get_skill(skill_name)
+                        if active_skill is not None:
+                            active_skill.clear()
+                            active_skill.append(skill)
+                        body, skill_tool_defs, _ = skill_manager.apply_skill(skill_name)
+                        for sd in skill_tool_defs:
+                            if sd not in filtered_tools:
+                                filtered_tools.append(sd)
+                        system += f"\n\n### Active Skill: {skill.name}\n{body}\n###"
+                        await _send_json(ws, {
+                            "type": "skill_activated",
+                            "name": skill_name,
+                        })
+                        result = f"Auto-activated skill '{skill_name}' for this task."
                     else:
-                        src_path = ""
-                if src_path and os.path.exists(src_path):
-                    ss_store = get_screenshot_store()
-                    saved = ss_store.add_screenshot(src_path)
-                    if saved:
-                        tool_msg["image_url"] = f"/screenshots/{saved}"
+                        avail = skill_manager.list_skills() if skill_manager else []
+                        result = f"Skill '{skill_name}' not found. Available: {', '.join(avail)}"
+                    conv.add_message("tool", result, tool_call_id=tool_call_id)
+                    await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
 
-            if fn_name == "get_screenshot":
-                try:
-                    data = json.loads(result)
-                    if "filename" in data:
-                        tool_msg["image_url"] = f"/screenshots/{data['filename']}"
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                if fn_name == "capture_page_screenshot":
+                    url = fn_args.get("url", "")
+                    if not url:
+                        result = "Error: No URL provided."
+                    else:
+                        try:
+                            await mcp.call_tool("navigate", {"url": url})
+                        except Exception as e:
+                            result = f"navigate error: {e}"
+                            tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
+                            await _send_json(ws, tool_msg)
+                            conv.add_message("tool", result, tool_call_id=tool_call_id)
+                            continue
+                        await asyncio.sleep(1.5)
+                        ss_dir = os.path.join(os.path.dirname(__file__), "..", "..", "screenshots")
+                        os.makedirs(ss_dir, exist_ok=True)
+                        try:
+                            ss_result = await mcp.call_tool("take_screenshot", {"save_path": ss_dir})
+                        except Exception as e:
+                            result = f"screenshot error: {e}"
+                            tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
+                            await _send_json(ws, tool_msg)
+                            conv.add_message("tool", result, tool_call_id=tool_call_id)
+                            continue
+                        import re as _scr
+                        _scr_match = _scr.search(r"Screenshot saved to (.+\.png)", ss_result)
+                        ss_path = _scr_match.group(1) if _scr_match else ""
+                        if ss_path and os.path.exists(ss_path):
+                            ss_store = get_screenshot_store()
+                            saved = ss_store.add_screenshot(ss_path)
+                            if saved:
+                                tool_msg = {
+                                    "type": "tool_call", "name": fn_name,
+                                    "result": f"Screenshot captured at {url}",
+                                    "image_url": f"/screenshots/{saved}",
+                                }
+                                await _send_json(ws, tool_msg)
+                                conv.add_message("tool", f"Screenshot captured at {url}", tool_call_id=tool_call_id)
+                                seen_calls.append((fn_name, json.dumps(fn_args, sort_keys=True), ""))
+                                continue
+                        result = "Screenshot taken but could not be registered in store."
 
-            await _send_json(ws, tool_msg)
+                if fn_name in OPENCODE_TOOL_NAMES:
+                    opencode_used = True
+
+                result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
+                if len(result) > MAX_TOOL_RESULT_LENGTH:
+                    result = result[:MAX_TOOL_RESULT_LENGTH] + "\n...[truncated]"
+
+                if fn_name == "update_task_status" and skill_manager and not (active_skill and active_skill[0]):
+                    new_status = fn_args.get("status", "")
+                    if new_status == "in_progress":
+                        task_title = fn_args.get("task_title", "")
+                        proj_name = fn_args.get("name", "")
+                        if proj_name:
+                            from backend.core.project_store import get_project_store
+                            pstore = get_project_store()
+                            project = pstore.find_project_by_name(proj_name)
+                            if project:
+                                target_task = None
+                                for t in project.get("tasks", []):
+                                    if t["id"] == fn_args.get("task_id", ""):
+                                        target_task = t
+                                        break
+                                    if task_title and t["title"].lower() == task_title.lower():
+                                        target_task = t
+                                        break
+                                if target_task:
+                                    skill = skill_manager.get_skill_by_task_type(target_task["type"])
+                                    if skill:
+                                        if active_skill is not None:
+                                            active_skill.clear()
+                                            active_skill.append(skill)
+                                            logger.info("Point B: Auto-loaded skill '%s' for task '%s'", skill.name, target_task["title"])
+
+                args_hash = json.dumps(fn_args, sort_keys=True)
+                result_head = result[:100]
+                call_key = (fn_name, args_hash, result_head)
+                seen_calls.append(call_key)
+                dup_count = sum(1 for c in seen_calls if c == call_key)
+                if dup_count >= DUPLICATE_LIMIT:
+                    result = f"[Stuck after {dup_count} identical attempts] {result}"
+                    content = "I got stuck — the same action repeated with the same result."
+                    tool_calls = None
+                    await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
+                    break
+
+                conv.add_message("tool", result, tool_call_id=tool_call_id)
+
+                if kg and fn_name in ("create_todo", "update_todo", "delete_todo"):
+                    from backend.core.data_store import get_store as get_data_store
+                    store = get_data_store()
+                    if fn_name == "delete_todo":
+                        kg.delete_todo_node(fn_args.get("todo_id", ""))
+                    elif fn_name == "create_todo":
+                        m = re.search(r'\(id: ([a-f0-9]+)\)', result)
+                        if m:
+                            todo = store.get_todo(m.group(1))
+                            if todo:
+                                kg.sync_todo(todo)
+                    else:
+                        todo_id = fn_args.get("todo_id", "")
+                        if todo_id:
+                            todo = store.get_todo(todo_id)
+                            if todo:
+                                kg.sync_todo(todo)
+
+                if kg and fn_name in ("create_event", "update_event", "delete_event"):
+                    from backend.core.data_store import get_store as get_data_store
+                    store = get_data_store()
+                    if fn_name == "delete_event":
+                        kg.delete_event_node(fn_args.get("event_id", ""))
+                    elif fn_name == "create_event":
+                        m = re.search(r'\(id: ([a-f0-9]+)\)', result)
+                        if m:
+                            event = store.get_event(m.group(1))
+                            if event:
+                                kg.sync_event(event)
+                    else:
+                        event_id = fn_args.get("event_id", "")
+                        if event_id:
+                            event = store.get_event(event_id)
+                            if event:
+                                kg.sync_event(event)
+
+                tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
+
+                if fn_name == "take_screenshot":
+                    import re as _re
+                    _path_match = _re.search(r"Screenshot saved to (.+\.png)", result)
+                    if _path_match:
+                        src_path = _path_match.group(1)
+                    else:
+                        _start = result.find("screenshot_")
+                        if _start != -1:
+                            src_path = result[_start:].split()[0].rstrip(". \n")
+                        else:
+                            src_path = ""
+                    if src_path and os.path.exists(src_path):
+                        ss_store = get_screenshot_store()
+                        saved = ss_store.add_screenshot(src_path)
+                        if saved:
+                            tool_msg["image_url"] = f"/screenshots/{saved}"
+
+                if fn_name == "get_screenshot":
+                    try:
+                        data = json.loads(result)
+                        if "filename" in data:
+                            tool_msg["image_url"] = f"/screenshots/{data['filename']}"
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                await _send_json(ws, tool_msg)
+            except Exception as e:
+                logger.exception("Tool '%s' crashed: %s", fn_name, e)
+                await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": f"Internal error: {e}"})
+                conv.add_message("tool", f"Error: {e}", tool_call_id=tool_call_id)
 
         if not tool_calls:
             break
@@ -640,50 +738,67 @@ async def _run_engine(
         if iteration >= MAX_ITERATIONS:
             content = (content or "") + "\n\n[Reached maximum iterations — the build may be incomplete.]"
 
-    if not content:
-        messages = [{"role": "system", "content": system}] + conv.get_context()
-        try:
-            def final_call(msgs):
-                resp = llm.chat(msgs, stream=False, tools=[])
-                resp.raise_for_status()
-                return llm.extract_response(resp)
-            summary, _ = await loop.run_in_executor(None, final_call, messages)
-            if summary:
-                content = summary
-        except Exception as e:
-            logger.error("Final summary call failed: %s", e)
+    try:
+        if not content:
+            messages = [{"role": "system", "content": system}] + conv.get_context()
+            try:
+                def final_call(msgs):
+                    resp = llm.chat(msgs, stream=False, tools=[])
+                    resp.raise_for_status()
+                    return llm.extract_response(resp)
+                summary, _ = await loop.run_in_executor(None, final_call, messages)
+                if summary:
+                    content = summary
+            except asyncio.CancelledError:
+                logger.info("WebSocket client disconnected during final summary")
+            except Exception as e:
+                logger.error("Final summary call failed: %s", e)
 
-    if content:
-        voice_text = _make_voice_text(content)
-        logger.info("Voice: ui=%d chars, voice=%d chars", len(content), len(voice_text))
-        conv.add_message("assistant", content)
-        await _send_json(ws, {"type": "token", "content": content, "voice_content": voice_text})
+        if not content:
+            ctx = conv.get_context()
+            for msg in reversed(ctx):
+                if msg.get("role") == "tool" and msg.get("content"):
+                    content = msg["content"][:500]
+                    break
+            if not content:
+                content = "I looked into that but couldn't find any relevant information in your data."
 
-    if kg and conv.current_id:
-        conv_data = get_store().get_conversation(conv.current_id)
-        if conv_data:
-            kg.sync_conversation(conv_data)
-        from backend.core.project_store import get_project_store
-        pstore = get_project_store()
-        active_projects = pstore.list_projects(status="active")
-        for proj in active_projects:
-            if conv.current_id not in proj.get("conversation_ids", []):
-                pstore.link_conversation(proj["id"], conv.current_id)
-                logger.info("Auto-linked conversation %s to project '%s'", conv.current_id, proj["name"])
+        if content:
+            voice_text = _make_voice_text(content)
+            logger.info("Voice: ui=%d chars, voice=%d chars", len(content), len(voice_text))
+            conv.add_message("assistant", content)
+            await _send_json(ws, {"type": "token", "content": content, "voice_content": voice_text})
 
-    if active_skill and not tool_calls:
-        active_skill.clear()
-        await _send_json(ws, {"type": "skill_deactivated"})
+        if kg and conv.current_id:
+            conv_data = get_store().get_conversation(conv.current_id)
+            if conv_data:
+                kg.sync_conversation(conv_data)
+            from backend.core.project_store import get_project_store
+            pstore = get_project_store()
+            active_projects = pstore.list_projects(status="active")
+            for proj in active_projects:
+                if conv.current_id not in proj.get("conversation_ids", []):
+                    pstore.link_conversation(proj["id"], conv.current_id)
+                    logger.info("Auto-linked conversation %s to project '%s'", conv.current_id, proj["name"])
 
-    if opencode_used and _BUILD_REQUEST_KEYWORDS.search(user_text) and content:
-        from backend.core.scheduler import get_scheduler
-        get_scheduler().fire_notification(
-            title="Build Complete",
-            body=content[:200],
-            category="event_reminder",
-        )
+        if active_skill and not tool_calls:
+            active_skill.clear()
+            await _send_json(ws, {"type": "skill_deactivated"})
 
-    await _send_json(ws, {"type": "done"})
+        if opencode_used and _BUILD_REQUEST_KEYWORDS.search(user_text) and content:
+            from backend.core.scheduler import get_scheduler
+            get_scheduler().fire_notification(
+                title="Build Complete",
+                body=content[:200],
+                category="event_reminder",
+            )
+    except Exception as e:
+        logger.exception("Post-loop processing error: %s", e)
+
+    try:
+        await _send_json(ws, {"type": "done"})
+    except Exception:
+        logger.warning("Failed to send done — client may have disconnected")
 
 
 @router.websocket("/ws/chat")
@@ -700,27 +815,15 @@ async def chat_websocket(websocket: WebSocket):
     mcp = MCPManager()
     if mcp_servers:
         for name, cfg in mcp_servers.items():
-            if cfg.get("lazy"):
-                try:
-                    await mcp.add_server_stdio(
-                        name,
-                        command=cfg["command"],
-                        args=cfg.get("args", []),
-                        env=cfg.get("env"),
-                        lazy=True,
-                    )
-                except Exception as e:
-                    logger.error("Failed to register lazy MCP server '%s': %s", name, e)
-            else:
-                try:
-                    await mcp.add_server_stdio(
-                        name,
-                        command=cfg["command"],
-                        args=cfg.get("args", []),
-                        env=cfg.get("env"),
-                    )
-                except Exception as e:
-                    logger.error("Failed to connect MCP server '%s': %s", name, e)
+            try:
+                kwargs = dict(command=cfg["command"], args=cfg.get("args", []), env=cfg.get("env"))
+                if cfg.get("lazy"):
+                    kwargs["lazy"] = True
+                await mcp.add_server_stdio(name, **kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Failed to connect MCP server '%s': %s", name, e)
     if mcp_servers:
         for name, cfg in mcp_servers.items():
             if cfg.get("lazy"):
@@ -806,6 +909,8 @@ async def chat_websocket(websocket: WebSocket):
                     })
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
+    except asyncio.CancelledError:
+        logger.info("WebSocket task cancelled (client disconnected)")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         try:

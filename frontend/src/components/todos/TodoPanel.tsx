@@ -45,24 +45,24 @@ export function TodoPanel() {
 
   return (
     <div className="flex flex-col h-full max-w-3xl mx-auto w-full">
-      <div className="p-6 pb-4 bg-crust">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-green/15 flex items-center justify-center">
-              <ListTodo className="h-5 w-5 text-green" />
+      <div className="p-4 sm:p-6 pb-4 bg-crust">
+        <div className="flex items-center justify-between mb-4 sm:mb-6">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="w-8 sm:w-10 h-8 sm:h-10 rounded-xl bg-green/15 flex items-center justify-center shrink-0">
+              <ListTodo className="h-4 sm:h-5 w-4 sm:w-5 text-green" />
             </div>
-            <div>
-              <h1 className="text-xl font-bold text-text">Todos</h1>
-              <p className="text-xs text-overlay0">Manage your tasks</p>
+            <div className="min-w-0">
+              <h1 className="text-base sm:text-xl font-bold text-text truncate">Todos</h1>
+              <p className="text-[10px] sm:text-xs text-overlay0 hidden sm:block">Manage your tasks</p>
             </div>
           </div>
-          <Button onClick={handleAdd} className="gap-1.5">
+          <Button onClick={handleAdd} className="gap-1 sm:gap-1.5 shrink-0">
             <Plus className="h-4 w-4" />
-            Add Todo
+            <span className="hidden sm:inline">Add Todo</span>
           </Button>
         </div>
 
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 mb-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-overlay0" />
             <input
@@ -72,7 +72,7 @@ export function TodoPanel() {
               className="w-full rounded-xl bg-black/40 pl-10 pr-4 py-2.5 text-sm text-text placeholder-overlay0 border border-white/10 focus:border-green/50 focus:outline-none focus:ring-1 focus:ring-green/20 transition-all"
             />
           </div>
-          <label className="flex items-center gap-2 cursor-pointer shrink-0">
+          <label className="flex items-center gap-2 cursor-pointer shrink-0 self-end sm:self-auto">
             <input
               type="checkbox"
               checked={showCompleted}
@@ -84,7 +84,7 @@ export function TodoPanel() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 pb-6">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 pb-4 sm:pb-6">
         {loading ? (
           <div className="flex items-center justify-center h-48 text-subtext0 text-sm">
             <div className="flex flex-col items-center gap-2">

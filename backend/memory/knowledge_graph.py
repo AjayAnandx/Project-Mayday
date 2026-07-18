@@ -484,6 +484,79 @@ class KnowledgeGraph:
             if nid:
                 self.remove_node(nid)
 
+    def sync_document(self, doc: dict, _text: str | None = None, _previous_names: list[str] | None = None):
+        with self._lock:
+            key = ("document", "doc_id", doc["id"])
+            existing_id = self._prop_idx.get(key)
+            if existing_id:
+                existing = self._nodes.get(existing_id)
+                if existing:
+                    self._unindex_node(existing)
+                    existing["label"] = doc.get("filename", doc["id"])
+                    existing["properties"].update({
+                        "doc_id": doc["id"],
+                        "filename": doc.get("filename", ""),
+                        "title": doc.get("title", ""),
+                        "author": doc.get("author", ""),
+                        "pages": doc.get("pages", 0),
+                        "size": doc.get("size", 0),
+                        "needs_ocr": doc.get("needs_ocr", False),
+                        "summary": doc.get("summary", ""),
+                    })
+                    if _text is not None:
+                        existing["properties"]["_text"] = _text
+                    if _previous_names is not None:
+                        existing["properties"]["_previous_names"] = _previous_names
+                    self._index_node(existing)
+                    self._save()
+                    return
+            node_id = uuid.uuid4().hex[:12]
+            node = {
+                "id": node_id,
+                "type": "document",
+                "label": doc.get("filename", doc["id"]),
+                "properties": {
+                    "doc_id": doc["id"],
+                    "filename": doc.get("filename", ""),
+                    "title": doc.get("title", ""),
+                    "author": doc.get("author", ""),
+                    "pages": doc.get("pages", 0),
+                    "size": doc.get("size", 0),
+                    "needs_ocr": doc.get("needs_ocr", False),
+                    "summary": doc.get("summary", ""),
+                },
+            }
+            if _text is not None:
+                node["properties"]["_text"] = _text
+            if _previous_names is not None:
+                node["properties"]["_previous_names"] = _previous_names
+            self._nodes[node_id] = node
+            self._index_node(node)
+            self._save()
+
+    def update_document_text(self, doc_id: str, text: str):
+        with self._lock:
+            key = ("document", "doc_id", doc_id)
+            nid = self._prop_idx.get(key)
+            if nid and nid in self._nodes:
+                self._nodes[nid]["properties"]["_text"] = text
+                self._save()
+
+    def update_document_previous_names(self, doc_id: str, names: list[str]):
+        with self._lock:
+            key = ("document", "doc_id", doc_id)
+            nid = self._prop_idx.get(key)
+            if nid and nid in self._nodes:
+                self._nodes[nid]["properties"]["_previous_names"] = names
+                self._save()
+
+    def delete_document_node(self, doc_id: str):
+        with self._lock:
+            key = ("document", "doc_id", doc_id)
+            nid = self._prop_idx.get(key)
+            if nid:
+                self.remove_node(nid)
+
     def set_status(self, label: str, status: str) -> dict | None:
         with self._lock:
             nid = self._label_idx.get(label.strip().lower())

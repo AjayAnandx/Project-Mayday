@@ -1,5 +1,4 @@
 serviceAccountKey.json
-config.yaml
 __pycache__/
 *.pyc
 .env
@@ -17,6 +16,14 @@ conversations/
 screenshots/
 memory_graph.json
 operations/
+pdfs/*.pdf
 reminders.json
 projects.json
 projects/
+bin/
+*.tsbuildinfo
+python-installer.exe
+baselines/
+config.local.yaml
+*.pem
+*.key

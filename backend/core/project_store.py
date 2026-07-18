@@ -136,7 +136,7 @@ class ProjectStore:
 
             if tasks:
                 for t in tasks:
-                    self._add_task_inner(project_id, t.get("title", ""), t.get("type", "general"), t.get("depends_on", []))
+                    self._add_task_inner(project_id, t.get("title", ""), t.get("type", "general"), t.get("depends_on", []), t.get("description", ""))
 
             return project
 
@@ -245,7 +245,7 @@ class ProjectStore:
                     return True
         return False
 
-    def _add_task_inner(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None) -> dict | None:
+    def _add_task_inner(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None, description: str = "") -> dict | None:
         idx = self._find_index(project_id)
         if idx is None:
             return {"error": "Project not found"}
@@ -272,6 +272,7 @@ class ProjectStore:
         task = {
             "id": "task_" + uuid.uuid4().hex[:8],
             "title": title,
+            "description": description,
             "type": type,
             "status": "pending",
             "depends_on": deps,
@@ -289,9 +290,9 @@ class ProjectStore:
         )
         return task
 
-    def add_task(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None) -> dict | None:
+    def add_task(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None, description: str = "") -> dict | None:
         with self._lock:
-            return self._add_task_inner(project_id, title, type, depends_on)
+            return self._add_task_inner(project_id, title, type, depends_on, description)
 
     def update_task_status(self, project_id: str, task_id: str, status: str, result: str = "") -> dict | None:
         VALID_TRANSITIONS = {
@@ -376,6 +377,46 @@ class ProjectStore:
                 self._projects[idx]["conversation_ids"].append(conversation_id)
             self._projects[idx]["last_activity"] = _utcnow()
             self._save()
+
+    def get_project_docs_dir(self, project_id: str) -> Path:
+        idx = self._find_index(project_id)
+        if idx is None:
+            return self._projects_dir / "unknown" / "pdfs"
+        folder = self._projects[idx].get("folder", "unknown")
+        return self._projects_dir / folder / "pdfs"
+
+    def add_document(self, project_id: str, doc_id: str) -> bool:
+        with self._lock:
+            idx = self._find_index(project_id)
+            if idx is None:
+                return False
+            if "documents" not in self._projects[idx]:
+                self._projects[idx]["documents"] = []
+            if doc_id not in self._projects[idx]["documents"]:
+                self._projects[idx]["documents"].append(doc_id)
+            self._projects[idx]["last_activity"] = _utcnow()
+            self._save()
+            return True
+
+    def remove_document(self, project_id: str, doc_id: str) -> bool:
+        with self._lock:
+            idx = self._find_index(project_id)
+            if idx is None:
+                return False
+            docs = self._projects[idx].get("documents", [])
+            if doc_id in docs:
+                docs.remove(doc_id)
+                self._projects[idx]["last_activity"] = _utcnow()
+                self._save()
+                return True
+            return False
+
+    def list_documents(self, project_id: str) -> list[str]:
+        with self._lock:
+            idx = self._find_index(project_id)
+            if idx is None:
+                return []
+            return list(self._projects[idx].get("documents", []))
 
     def touch_activity(self, project_id: str):
         with self._lock:
