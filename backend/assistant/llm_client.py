@@ -19,13 +19,16 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def chat(self, messages: list[dict], stream: bool = False, tools: list[dict] | None = None):
+    def chat(self, messages: list[dict], stream: bool = False, tools: list[dict] | None = None,
+             tool_choice: str | None = None):
         body = {
             "model": self.model,
             "messages": messages,
             "tools": tools if tools is not None else get_tool_definitions(),
             "stream": stream,
         }
+        if tool_choice:
+            body["tool_choice"] = tool_choice
         if stream:
             return self._http.stream("POST", self.endpoint, json=body, headers=self._build_headers())
         return self._http.post(self.endpoint, json=body, headers=self._build_headers())
@@ -50,13 +53,17 @@ class LLMClient:
             return content, tool_calls, False
         return None, None, False
 
-    def stream_tokens(self, messages: list[dict], tools: list[dict] | None = None):
-        with self._http.stream("POST", self.endpoint, json={
+    def stream_tokens(self, messages: list[dict], tools: list[dict] | None = None,
+                      tool_choice: str | None = None):
+        body = {
             "model": self.model,
             "messages": messages,
             "tools": tools if tools is not None else get_tool_definitions(),
             "stream": True,
-        }, headers=self._build_headers()) as response:
+        }
+        if tool_choice:
+            body["tool_choice"] = tool_choice
+        with self._http.stream("POST", self.endpoint, json=body, headers=self._build_headers()) as response:
             for line in response.iter_lines():
                 line = line.strip()
                 if not line:

@@ -1,0 +1,20 @@
+{
+  "metadata": {
+    "title": "Copy of AJAY ANAND.K",
+    "author": "Ajay Anand",
+    "subject": "",
+    "producer": "Canva",
+    "creator": "Canva"
+  },
+  "pages": [
+    {
+      "num": 1,
+      "text": "Biomedical Engineering undergraduate at SRM University specializing in Artificial\nIntelligence, Machine Learning, and Generative AI solutions. Experienced in\ndeveloping LLM-powered applications, Retrieval-Augmented Generation (RAG)\nsystems, voice AI agents, and machine learning models. Skilled in Python,\nLangChain, OpenAI APIs, TensorFlow, and cloud-based AI development with a\nstrong focus on healthcare and business automation applications..\nAJAY ANAND.K\n+91 8015061933  |  ajaysunil35@gmail.com  |  Chennai , India 600089 \nEDUCATION\nSchool | Year 2009 - 2023 \nVANI VIDYALAYA | KK.NAGAR            10 TH - 83%   12 TH - 65%\nB.tech Biomedical Engineering | Year 2023 - 2027\nSRM UNIVERSITY | RAMAPURAM                              CGPA - 8.3\nLANGUAGES\nTamil \nProficiency : Native language\nEnglish \nProficiency : Intermediate \nSKILLS\nProgramming Language :    C , C++ , Python , Matlab , Javascript , SQL\nMachine learning Framework :    Scikit-learn , TensorFlow , Pandas , Matplotlib , NumPy\nEXPERIENCE\nGen AI Developer | QuantumScripts\nChennai,IN | Dec 2025 - Present | https://quantumscripts.in/\nDeveloped AI-powered applications using OpenAI GPT-4,\nLangChain, Groq LLM, and Hugging Face models.\nBuilt Retrieval-Augmented Generation (RAG) systems with\nsemantic search capabilities.\nDesigned prompt engineering workflows to improve\nresponse quality and user experience.\nOptimized inference pipelines, reducing latency and API\ncosts while maintaining high response accuracy.\nGenerative AI :  OpenAI GPT-4, LangChain, RAG, Vector Databases, Prompt\nEngineering, Llama.cpp, Hugging Face, Groq LLM, Gemini API\nSoft Skill  :  Leadership, Problem Solving, Technical Communication, Team\nCollaboration , Agile Methodology\nCloud & Development Tools  :  Git ,  GitHub,  VS Code,  Google Colab,  Jira, Microsoft 365\nDatabases  :   SQL, Vector Databases\n"
+    },
+    {
+      "num": 2,
+      "text": "PROJECTS\nDisease Detection Using an ML Model\nTechnology Used:  Machine Learning, Python, Gemini APi, Gradio\nDeveloped a multi-class disease prediction model achieving 87% classification accuracy.\nAchieved an F1-score of 0.84 through feature engineering and model optimization.\nIntegrated Gemini API to generate explainable AI-based diagnostic insights.\nBuilt an interactive Gradio interface for real-time symptom analysis and prediction.\nReal-Time AI Voice Assistant\nTechnology Used : Groq LLM , Deepgram Agents , Langchain\nDeveloped a low-latency voice assistant capable of handling conversational tasks.\nIntegrated Deepgram Speech-to-Text and Text-to-Speech services.\nLeveraged Groq LPU architecture to reduce inference latency.\nImplemented LangChain-based orchestration for intelligent task execution.\nMarket Research Agent  \nTechnology Used :  Phidata Framework , Groq LLM, \nBuilt an autonomous AI agent for company research and market analysis.\nGenerated business intelligence reports with approximately 80% analytical accuracy.\nAutomated competitor analysis, company profiling, and industry trend identification\nSOCIAL & CERTIFICATION LINKS\nGITHUB          :  https://github.com/ajxy2006\nLINKEDIN      :  https://www.linkedin.com/in/ajay-anand-7757a227a/\nLEETCODE     : https://leetcode.com/u/AjayAnandx/  \nCREDLY          : https://www.credly.com/users/ajay-anand.84f958e5\nAZURE            : https://learn.microsoft.com/en-us/users/ajayanand-3820/\nRESEARCH & PUBLICATIONS\nTraining a Multi-Modal AI System for NEET Preparation - Ongoing Research\nDeveloping an AI-powered educational platform integrating text, image, and audio\nmodalities.\nInvestigating adaptive learning strategies for personalized medical entrance examination\npreparation.\nApplying Large Language Models and multimodal learning techniques to improve student\noutcomes.\n"
+    }
+  ],
+  "needs_ocr": false
+}

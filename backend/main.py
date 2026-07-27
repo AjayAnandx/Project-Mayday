@@ -33,6 +33,10 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     logger.info("Scheduler stopped")
+    from backend.core.project_runner import ProjectRunner
+    orphan_count = ProjectRunner.cleanup_orphans()
+    if orphan_count:
+        logger.info("Cleaned up %d orphaned process(es)", orphan_count)
 
 
 app = FastAPI(title="Mayday Backend", version="1.0.0", lifespan=lifespan)

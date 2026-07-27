@@ -39,6 +39,12 @@ skills:
   enabled: true
   directory: C:\Users\hp\agent-skills\skills
 
+sandbox:
+  enabled: true
+  image: mayday-sandbox:latest
+  build_from: docker/Dockerfile
+  volume_driver: local
+
 mcp:
   servers:
     git:
@@ -50,10 +56,6 @@ mcp:
       args: ["stdio", "--toolsets", "repos,context"]
       env:
         GITHUB_PERSONAL_ACCESS_TOKEN: ""  # Set via GITHUB_PERSONAL_ACCESS_TOKEN env var or .env
-    selenium:
-      command: .\\venv\\Scripts\\python.exe
-      args: ["-m", "mcp_server_selenium"]
-      lazy: true
     exa:
       command: npx
       args: ["-y", "exa-mcp-server"]
@@ -67,4 +69,16 @@ mcp:
     opencode:
       command: .\\venv\\Scripts\\python.exe
       args: ["-m", "backend.assistant.mcp_server_opencode"]
+      lazy: true
+    ui-layouts:
+      command: npx
+      args: ["@ui-layouts/mcp"]
+      lazy: true
+    magic-ui:
+      command: npx
+      args: ["-y", "@magicuidesign/mcp@latest"]
+      lazy: true
+    playwright:
+      command: npx
+      args: ["@executeautomation/playwright-mcp-server"]
       lazy: true

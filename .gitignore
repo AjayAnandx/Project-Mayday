@@ -24,6 +24,7 @@ bin/
 *.tsbuildinfo
 python-installer.exe
 baselines/
+sandbox-projects/
 config.local.yaml
 *.pem
 *.key

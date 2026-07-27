@@ -429,6 +429,27 @@ class ProjectStore:
     def soft_delete(self, project_id: str) -> dict | None:
         return self.update_project_status(project_id, "scrapped")
 
+    def discover_host_projects(self) -> list[dict]:
+        known_folders = {p.get("folder", "").lower() for p in self._projects if p.get("folder")}
+        discovered = []
+        if not self._projects_dir.is_dir():
+            return discovered
+        for entry in sorted(self._projects_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            if entry.name.lower() in known_folders:
+                continue
+            file_count = sum(1 for _ in entry.rglob("*") if _.is_file())
+            mtime = datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
+            discovered.append({
+                "name": entry.name,
+                "folder": entry.name,
+                "path": str(entry.resolve()),
+                "file_count": file_count,
+                "modified_at": mtime.isoformat(),
+            })
+        return discovered
+
 
 _instance: ProjectStore | None = None
 _instance_lock = threading.Lock()

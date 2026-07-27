@@ -59,7 +59,11 @@ def upload_pdf(file_path: str, filename: str, project_name: str = "") -> str:
     return f"Uploaded '{result['filename']}' ({pages} pages, {size_kb:.1f} KB, id: {result['id']})"
 
 
-def read_pdf(doc_id: str, pages: list[int] | None = None) -> str:
+def read_pdf(doc_id: str = "", pages: list[int] | None = None,
+             pdf_id: str = "", pdf_name: str = "") -> str:
+    doc_id = pdf_id or pdf_name or doc_id
+    if not doc_id:
+        return "Missing required parameter: doc_id or pdf_id"
     store = get_pdf_store()
     doc = store.get_meta(doc_id)
     if not doc:
@@ -103,7 +107,10 @@ def list_pdfs() -> str:
     return "\n".join(lines)
 
 
-def delete_pdf(doc_id: str) -> str:
+def delete_pdf(doc_id: str = "", pdf_id: str = "", pdf_name: str = "") -> str:
+    doc_id = pdf_id or pdf_name or doc_id
+    if not doc_id:
+        return "Missing required parameter: doc_id or pdf_id"
     store = get_pdf_store()
     doc = store.get_meta(doc_id)
     if not doc:
@@ -115,7 +122,13 @@ def delete_pdf(doc_id: str) -> str:
     return f"Deleted document: {filename}"
 
 
-def rename_pdf(doc_id: str, new_filename: str) -> str:
+def rename_pdf(doc_id: str = "", new_filename: str = "",
+               pdf_id: str = "", pdf_name: str = "") -> str:
+    doc_id = pdf_id or pdf_name or doc_id
+    if not doc_id:
+        return "Missing required parameter: doc_id or pdf_id"
+    if not new_filename:
+        return "Missing required parameter: new_filename"
     store = get_pdf_store()
     doc = store.get_meta(doc_id)
     if not doc:

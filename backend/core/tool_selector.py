@@ -97,7 +97,12 @@ class ToolSelector:
         self._group_sets = {k: set(v) for k, v in group_sets.items()}
         self._index = {}
 
-        tool_by_name = {t["function"]["name"]: t for t in tools}
+        tool_by_name: dict[str, dict] = {}
+        for t in tools:
+            if "function" in t and "name" in t["function"]:
+                tool_by_name[t["function"]["name"]] = t
+            elif "name" in t:
+                tool_by_name[t["name"]] = t
 
         group_corpus: dict[str, list[str]] = {g: [] for g in self._group_sets}
         for group_name, tool_names in self._group_sets.items():

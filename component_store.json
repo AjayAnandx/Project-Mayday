@@ -1,0 +1,125 @@
+{
+  "components": [
+    {
+      "id": "a0a39936",
+      "name": "HeroSection",
+      "code": "import React, { useEffect, useRef } from 'react';\nimport { motion } from 'framer-motion';\n\nconst HeroSection = () => {\n  return (\n    <section className=\"relative h-screen w-full overflow-hidden flex items-center justify-center bg-cargo-bone\">\n      {/* Background Cinematic Element */}\n      <div className=\"absolute inset-0 z-0\">\n        <div className=\"absolute inset-0 bg-black/20 z-10\" />\n        <img \n          src=\"https://images.unsplash.com/photo-1534438370758-87375f3765f6?auto=format&fit=crop&q=80&w=2000\" \n          className=\"w-full h-full object-cover scale-105 animate-slow-zoom\" \n          alt=\"Luxury Wellness Background\" \n        />\n      </div>\n\n      {/* Content */}\n      <div className=\"relative z-20 text-center px-6 max-w-4xl\">\n        <motion.span \n          initial={{ opacity: 0, y: 20 }}\n          animate={{ opacity: 1, y: 0 }}\n          transition={{ duration: 0.8, ease: \"easeOut\" }}\n          className=\"text-cargo-accent font-sans uppercase tracking-[0.3em] text-xs mb-6 block\"\n        >\n          Established in Excellence\n        </motion.span>\n        \n        <motion.h1 \n          initial={{ opacity: 0, y: 30 }}\n          animate={{ opacity: 1, y: 0 }}\n          transition={{ duration: 1, delay: 0.2, ease: \"easeOut\" }}\n          className=\"text-5xl md:text-7xl font-serif text-cargo-charcoal mb-8 leading-tight\"\n        >\n          The Pinnacle of <br /> \n          <span className=\"italic\">Human Optimization</span>\n        </motion.h1>\n\n        <motion.div \n          initial={{ opacity: 0, y: 20 }}\n          animate={{ opacity: 1, y: 0 }}\n          transition={{ duration: 0.8, delay: 0.5, ease: \"easeOut\" }}\n          className=\"flex flex-col md:flex-row gap-4 justify-center items-center\"\n        >\n          <button className=\"px-8 py-4 bg-cargo-charcoal text-cargo-bone hover:bg-cargo-accent transition-colors duration-300 font-sans uppercase tracking-widest text-xs group relative overflow-hidden\">\n            <span className=\"relative z-10\">Request Private Access</span>\n          </button>\n          <button className=\"px-8 py-4 border border-cargo-charcoal text-cargo-charcoal hover:bg-cargo-charcoal hover:text-cargo-bone transition-all duration-300 font-sans uppercase tracking-widest text-xs\">\n            Explore The Space\n          </button>\n        </motion.div>\n      </div>\n\n      {/* Scroll Indicator */}\n      <div className=\"absolute bottom-10 left-1/2 -translate-x-1/2 z-20\">\n        <div className=\"w-[1px] h-16 bg-cargo-charcoal/30 relative overflow-hidden\">\n          <div className=\"absolute top-0 left-0 w-full h-full bg-cargo-accent animate-scroll-line\" />\n        </div>\n      </div>\n    </section>\n  );\n};\n\nexport default HeroSection;\n",
+      "description": "",
+      "framework": "react",
+      "tags": [
+        "luxury",
+        "wellness",
+        "hero"
+      ],
+      "version": 1,
+      "created_at": "2026-07-19T07:45:57.529929+00:00",
+      "updated_at": "2026-07-19T07:45:57.529953+00:00"
+    },
+    {
+      "id": "b896fe6a",
+      "name": "PillarsGrid",
+      "code": "import React from 'react';\n\nconst PillarsGrid = () => {\n  const pillars = [\n    {\n      title: \"Elite Training\",\n      desc: \"Biometric-led strength and conditioning programs designed for structural longevity.\",\n      size: \"col-span-2 row-span-1\",\n      img: \"https://images.unsplash.com/photo-1540497077774-2237a77a5450?auto=format&fit=crop&q=80&w=800\"\n    },\n    {\n      title: \"Restorative Wellness\",\n      desc: \"Advanced recovery labs, contrast therapy, and sensory deprivation suites.\",\n      size: \"col-span-1 row-span-1\",\n      img: \"https://images.unsplash.com/photo-1544172857-d235f7d6ec2c?auto=format&fit=crop&q=80&w=800\"\n    },\n    {\n      title: \"Holistic Guidance\",\n      desc: \"Bespoke nutritional protocols and longevity coaching from world-class experts.\",\n      size: \"col-span-1 row-span-2\",\n      img: \"https://images.unsplash.com/photo-1512620717167-a2363508736c?auto=format&fit=crop&q=80&w=800\"\n    },\n    {\n      title: \"The Sanctuary\",\n      desc: \"An environment of absolute privacy and architectural silence.\",\n      size: \"col-span-1 row-span-1\",\n      img: \"https://images.unsplash.com/photo-1493976040374-85c8abe29387?auto=format&fit=crop&q=80&w=800\"\n    },\n  ];\n\n  return (\n    <section className=\"py-24 px-6 bg-cargo-bone\">\n      <div className=\"max-w-7xl mx-auto\">\n        <div className=\"mb-16 text-center\">\n          <h2 className=\"text-4xl font-serif text-cargo-charcoal mb-4\">The Core Pillars</h2>\n          <div className=\"w-20 h-[1px] bg-cargo-accent mx-auto\" />\n        </div>\n        \n        <div className=\"grid grid-cols-1 md:grid-cols-3 gap-4 auto-rows-[300px]\">\n          {pillars.map((p, i) => (\n            <div \n              key={i} \n              className={`${p.size} group relative overflow-hidden rounded-sm cursor-pointer`}\n            >\n              <img \n                src={p.img} \n                className=\"absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110\" \n                alt={p.title}\n              />\n              <div className=\"absolute inset-0 bg-gradient-to-t from-cargo-charcoal/80 via-transparent to-transparent p-8 flex flex-col justify-end transition-colors duration-300 group-hover:bg-cargo-charcoal/60\">\n                <h3 className=\"text-2xl font-serif text-cargo-bone mb-2\">{p.title}</h3>\n                <p className=\"text-cargo-bone/80 font-sans text-sm leading-relaxed opacity-0 group-hover:opacity-100 transition-opacity duration-500\">\n                  {p.desc}\n                </p>\n              </div>\n            </div>\n          ))}\n        </div>\n      </div>\n    </section>\n  );\n};\n\nexport default PillarsGrid;\n",
+      "description": "",
+      "framework": "react",
+      "tags": [
+        "bento",
+        "luxury",
+        "wellness"
+      ],
+      "version": 1,
+      "created_at": "2026-07-19T07:46:17.050801+00:00",
+      "updated_at": "2026-07-19T07:46:17.050824+00:00"
+    },
+    {
+      "id": "63953b7d",
+      "name": "MembershipSection",
+      "code": "import React from 'react';\n\nconst MembershipSection = () => {\n  return (\n    <section className=\"py-24 px-6 bg-cargo-bone flex justify-center\">\n      <div className=\"max-w-4xl w-full bg-cargo-charcoal text-cargo-bone p-12 md:p-20 rounded-sm relative overflow-hidden shadow-2xl\">\n        {/* Abstract background element */}\n        <div className=\"absolute top-0 right-0 w-64 h-64 bg-cargo-accent/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-3xl\" />\n        \n        <div className=\"relative z-10 text-center\">\n          <span className=\"text-cargo-accent font-sans uppercase tracking-widest text-xs mb-4 block\">Exclusive Access</span>\n          <h2 className=\"text-4xl md:text-6xl font-serif mb-8\">Founding Membership</h2>\n          \n          <div className=\"grid md:grid-cols-3 gap-12 mb-12 text-left\">\n            <div className=\"space-y-4\">\n              <h4 className=\"text-cargo-accent font-sans uppercase text-xs tracking-widest\">Privacy</h4>\n              <p className=\"text-cargo-bone/70 text-sm font-sans leading-relaxed\">\n                Capped at 150 members to ensure absolute discretion and an intimate environment.\n              </p>\n            </div>\n            <div className=\"space-y-4\">\n              <h4 className=\"text-cargo-accent font-sans uppercase text-xs tracking-widest\">Performance</h4>\n              <p className=\"text-cargo-bone/70 text-sm font-sans leading-relaxed\">\n                Full access to biometric monitoring, recovery suites, and elite coaching.\n              </p>\n            </div>\n            <div className=\"space-y-4\">\n              <h4 className=\"text-cargo-accent font-sans uppercase text-xs tracking-widest\">Longevity</h4>\n              <p className=\"text-cargo-bone/70 text-sm font-sans leading-relaxed\">\n                Bespoke longevity protocols integrated with your unique biological markers.\n              </p>\n            </div>\n          </div>\n          \n          <div className=\"flex flex-col items-center gap-6\">\n            <p className=\"text-cargo-bone/50 font-sans text-xs italic\">Membership is by application only.</p>\n            <button className=\"px-12 py-5 bg-cargo-bone text-cargo-charcoal hover:bg-cargo-accent transition-all duration-300 font-sans uppercase tracking-widest text-xs font-bold\">\n              Apply for Membership\n            </button>\n          </div>\n        </div>\n      </div>\n    </section>\n  );\n};\n\nexport default MembershipSection;\n",
+      "description": "",
+      "framework": "react",
+      "tags": [
+        "pricing",
+        "luxury",
+        "conversion"
+      ],
+      "version": 1,
+      "created_at": "2026-07-19T07:46:35.387307+00:00",
+      "updated_at": "2026-07-19T07:46:35.387331+00:00"
+    },
+    {
+      "id": "60537c89",
+      "name": "PortfolioHero",
+      "code": "import React from 'react';\nimport { motion } from 'framer-motion';\n\ninterface PortfolioHeroProps {\n  name: string;\n  tagline: string;\n  ctaText?: string;\n}\n\nconst PortfolioHero = ({ name, tagline, ctaText = 'View Work' }: PortfolioHeroProps) => (\n  <section className='min-h-screen flex flex-col justify-center px-6'>\n    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }} className='max-w-4xl'>\n      <h1 className='text-7xl md:text-9xl font-black tracking-tighter leading-none mb-6'>\n        {name}\n      </h1>\n      <p className='text-lg md:text-2xl text-gray-600 max-w-2xl mb-10 leading-relaxed'>\n        {tagline}\n      </p>\n      <a href='#projects' className='inline-block bg-black text-white px-8 py-4 rounded-full font-bold hover:bg-gray-800 transition-all'>\n        {ctaText}\n      </a>\n    </motion.div>\n  </section>\n);\n\nexport default PortfolioHero;",
+      "description": "B&W hero section for developer portfolio",
+      "framework": "react",
+      "tags": [
+        "portfolio",
+        "hero",
+        "black-white"
+      ],
+      "version": 1,
+      "created_at": "2026-07-20T15:33:38.189735+00:00",
+      "updated_at": "2026-07-20T15:33:38.189770+00:00"
+    },
+    {
+      "id": "cc61cb59",
+      "name": "ProjectsGrid",
+      "code": "import React from 'react';\nimport { motion } from 'framer-motion';\nimport { ExternalLink, Code2 } from 'lucide-react';\n\ninterface Project {\n  title: string;\n  description: string;\n  tags: string[];\n  link: string;\n}\n\ninterface ProjectsGridProps {\n  projects: Project[];\n  title?: string;\n}\n\nconst ProjectsGrid = ({ projects, title = 'SELECTED WORK' }: ProjectsGridProps) => (\n  <section id='projects' className='py-24 px-6'>\n    <div className='max-w-6xl mx-auto'>\n      <h2 className='text-5xl font-black tracking-tighter mb-16'>{title}</h2>\n      <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8'>\n        {projects.map((p, i) => (\n          <motion.div key={i} whileHover={{ y: -10 }} className='group border border-black/10 p-8 rounded-2xl bg-white hover:shadow-2xl transition-all'>\n            <div className='flex justify-between items-start mb-6'>\n              <div className='p-3 bg-black text-white rounded-xl'><Code2 size={24} /></div>\n              <a href={p.link} className='p-2 hover:bg-gray-100 rounded-full transition-colors'><ExternalLink size={20} /></a>\n            </div>\n            <h3 className='text-2xl font-bold mb-3'>{p.title}</h3>\n            <p className='text-gray-500 mb-6 line-clamp-3'>{p.description}</p>\n            <div className='flex gap-2 flex-wrap'>\n              {p.tags.map(tag => (\n                <span key={tag} className='text-xs font-bold px-3 py-1 bg-gray-100 rounded-full text-gray-600'>{tag}</span>\n              ))}\n            </div>\n          </motion.div>\n        ))}\n      </div>\n    </div>\n  </section>\n);\n\nexport default ProjectsGrid;",
+      "description": "B&W project card grid for portfolio",
+      "framework": "react",
+      "tags": [
+        "portfolio",
+        "projects",
+        "grid",
+        "black-white"
+      ],
+      "version": 1,
+      "created_at": "2026-07-20T15:33:38.191715+00:00",
+      "updated_at": "2026-07-20T15:33:38.191733+00:00"
+    },
+    {
+      "id": "f1040021",
+      "name": "ContactSection",
+      "code": "import React from 'react';\nimport { Mail, Code2, ExternalLink } from 'lucide-react';\n\ninterface ContactSectionProps {\n  email: string;\n  github?: string;\n  linkedin?: string;\n  headline?: string;\n}\n\nconst ContactSection = ({ email, github, linkedin, headline = 'READY TO BUILD?' }: ContactSectionProps) => (\n  <section id='contact' className='py-24 px-6 bg-black text-white'>\n    <div className='max-w-4xl mx-auto text-center'>\n      <h2 className='text-6xl font-black tracking-tighter mb-8'>{headline}</h2>\n      <p className='text-xl text-gray-400 mb-12'>Currently available for select freelance projects and full-time opportunities.</p>\n      <div className='flex justify-center gap-8'>\n        <a href={'mailto:' + email} className='flex items-center gap-2 text-lg font-bold hover:underline'>\n          <Mail size={20} /> {email}\n        </a>\n        {github && (\n          <a href={'https://github.com/' + github} className='flex items-center gap-2 text-lg font-bold hover:underline'>\n            <Code2 size={20} /> GitHub\n          </a>\n        )}\n        {linkedin && (\n          <a href={'https://linkedin.com/in/' + linkedin} className='flex items-center gap-2 text-lg font-bold hover:underline'>\n            <ExternalLink size={20} /> LinkedIn\n          </a>\n        )}\n      </div>\n    </div>\n  </section>\n);\n\nexport default ContactSection;",
+      "description": "B&W contact section with email and social links",
+      "framework": "react",
+      "tags": [
+        "portfolio",
+        "contact",
+        "black-white"
+      ],
+      "version": 1,
+      "created_at": "2026-07-20T15:33:38.193163+00:00",
+      "updated_at": "2026-07-20T15:33:38.193179+00:00"
+    },
+    {
+      "id": "cf86519c",
+      "name": "MagicCard",
+      "code": "\"use client\"\n\nimport React, { useCallback, useEffect, useMemo, useRef, useState } from \"react\"\nimport {\n  motion,\n  useMotionTemplate,\n  useMotionValue,\n  useSpring,\n} from \"motion/react\"\nimport { cn } from \"@/lib/utils\"\n\ninterface MagicCardProps {\n  children?: React.ReactNode\n  className?: string\n  gradientSize?: number\n  gradientColor?: string\n  gradientOpacity?: number\n  gradientFrom?: string\n  gradientTo?: string\n  mode?: \"gradient\" | \"orb\"\n  glowFrom?: string\n  glowTo?: string\n  glowAngle?: number\n  glowSize?: number\n  glowBlur?: number\n  glowOpacity?: number\n}\n\nexport function MagicCard(props: MagicCardProps) {\n  const {\n    children,\n    className,\n    gradientSize = 200,\n    gradientColor = \"#262626\",\n    gradientOpacity = 0.8,\n    gradientFrom = \"#00FF00\",\n    gradientTo = \"#004400\",\n    mode = \"gradient\",\n  } = props\n\n  const glowFrom = props.glowFrom ?? \"#00FF00\"\n  const glowTo = props.glowTo ?? \"#004400\"\n  const glowAngle = props.glowAngle ?? 90\n  const glowSize = props.glowSize ?? 420\n  const glowBlur = props.glowBlur ?? 60\n  const glowOpacity = props.glowOpacity ?? 0.9\n\n  const [mounted, setMounted] = useState(false)\n  useEffect(() => setMounted(true), [])\n\n  const mouseX = useMotionValue(-gradientSize)\n  const mouseY = useMotionValue(-gradientSize)\n\n  const orbX = useSpring(mouseX, { stiffness: 250, damping: 30, mass: 0.6 })\n  const orbY = useSpring(mouseY, { stiffness: 250, damping: 30, mass: 0.6 })\n  const orbVisible = useSpring(0, { stiffness: 300, damping: 35 })\n\n  const modeRef = useRef(mode)\n  const glowOpacityRef = useRef(glowOpacity)\n  const gradientSizeRef = useRef(gradientSize)\n\n  useEffect(() => { modeRef.current = mode }, [mode])\n  useEffect(() => { glowOpacityRef.current = glowOpacity }, [glowOpacity])\n  useEffect(() => { gradientSizeRef.current = gradientSize }, [gradientSize])\n\n  const reset = useCallback((reason: string = \"leave\") => {\n    if (modeRef.current === \"orb\") {\n      if (reason === \"enter\") orbVisible.set(glowOpacityRef.current)\n      else orbVisible.set(0)\n      return\n    }\n    const off = -gradientSizeRef.current\n    mouseX.set(off)\n    mouseY.set(off)\n  }, [mouseX, mouseY, orbVisible])\n\n  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {\n    const rect = e.currentTarget.getBoundingClientRect()\n    mouseX.set(e.clientX - rect.left)\n    mouseY.set(e.clientY - rect.top)\n  }, [mouseX, mouseY])\n\n  useEffect(() => { reset(\"init\") }, [reset])\n\n  return (\n    <motion.div\n      className={cn(\n        \"group relative isolate overflow-hidden rounded-2xl border border-transparent\",\n        className\n      )}\n      onPointerMove={handlePointerMove}\n      onPointerLeave={() => reset(\"leave\")}\n      onPointerEnter={() => reset(\"enter\")}\n      style={{\n        background: useMotionTemplate`\n          linear-gradient(var(--color-background) 0 0) padding-box,\n          radial-gradient(${gradientSize}px circle at ${mouseX}px ${mouseY}px,\n            ${gradientFrom},\n            ${gradientTo},\n            rgba(0,0,0,0) 100%\n          ) border-box\n        `,\n      }}\n    >\n      <div className=\"bg-black absolute inset-px z-20 rounded-2xl\" />\n      {mode === \"gradient\" && (\n        <motion.div\n          className=\"pointer-events-none absolute inset-px z-30 rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100\"\n          style={{\n            background: useMotionTemplate`\n              radial-gradient(${gradientSize}px circle at ${mouseX}px ${mouseY}px,\n                ${gradientColor},\n                transparent 100%\n              )\n            `,\n            opacity: gradientOpacity,\n          }}\n        />\n      )}\n      {mode === \"orb\" && (\n        <motion.div\n          className=\"pointer-events-none absolute z-30\"\n          style={{\n            width: glowSize,\n            height: glowSize,\n            x: orbX,\n            y: orbY,\n            translateX: \"-50%\",\n            translateY: \"-50%\",\n            borderRadius: 9999,\n            filter: `blur(${glowBlur}px)`,\n            opacity: orbVisible,\n            background: `linear-gradient(${glowAngle}deg, ${glowFrom}, ${glowTo})`,\n            mixBlendMode: \"screen\",\n            willChange: \"transform, opacity\",\n          }}\n        />\n      )}\n      <div className=\"relative z-40\">{children}</div>\n    </motion.div>\n  )\n}",
+      "description": "",
+      "framework": "react",
+      "tags": [
+        "luxury",
+        "developer",
+        "black-green"
+      ],
+      "version": 1,
+      "created_at": "2026-07-21T05:05:36.765891+00:00",
+      "updated_at": "2026-07-21T05:05:36.765915+00:00"
+    },
+    {
+      "id": "4b278cba",
+      "name": "NeonGradientCard",
+      "code": "\"use client\"\n\nimport React, { CSSProperties, ReactNode, useEffect, useRef, useState } from \"react\"\nimport { cn } from \"@/lib/utils\"\n\ninterface NeonGradientCardProps extends React.HTMLAttributes<HTMLDivElement> {\n  className?: string\n  children?: ReactNode\n  borderSize?: number\n  borderRadius?: number\n  neonColors?: {\n    firstColor: string\n    secondColor: string\n  }\n}\n\nexport const NeonGradientCard: React.FC<NeonGradientCardProps> = ({\n  className,\n  children,\n  borderSize = 2,\n  borderRadius = 20,\n  neonColors = {\n    firstColor: \"#00FF00\",\n    secondColor: \"#004400\",\n  },\n  ...props\n}) => {\n  const containerRef = useRef<HTMLDivElement>(null)\n  const [dimensions, setDimensions] = useState({ width: 0, height: 0 })\n\n  useEffect(() => {\n    const updateDimensions = () => {\n      if (containerRef.current) {\n        const { offsetWidth, offsetHeight } = containerRef.current\n        setDimensions({ width: offsetWidth, height: offsetHeight })\n      }\n    }\n    updateDimensions()\n    window.addEventListener(\"resize\", updateDimensions)\n    return () => window.removeEventListener(\"resize\", updateDimensions)\n  }, [])\n\n  return (\n    <div\n      ref={containerRef}\n      style={{\n        \"--border-size\": `${borderSize}px`,\n        \"--border-radius\": `${borderRadius}px`,\n        \"--neon-first-color\": neonColors.firstColor,\n        \"--neon-second-color\": neonColors.secondColor,\n        \"--card-width\": `${dimensions.width}px`,\n        \"--card-height\": `${dimensions.height}px`,\n        \"--card-content-radius\": `${borderRadius - borderSize}px`,\n        \"--pseudo-element-background-image\": `linear-gradient(0deg, ${neonColors.firstColor}, ${neonColors.secondColor})`,\n        \"--pseudo-element-width\": `${dimensions.width + borderSize * 2}px`,\n        \"--pseudo-element-height\": `${dimensions.height + borderSize * 2}px`,\n        \"--after-blur\": `${dimensions.width / 3}px`,\n      } as CSSProperties}\n      className={cn(\"relative z-10 size-full rounded-(--border-radius)\", className)}\n      {...props}\n    >\n      <div\n        className={cn(\n          \"relative size-full min-h-[inherit] rounded-(--card-content-radius) bg-neutral-900 p-6\",\n          \"before:absolute before:-top-(--border-size) before:-left-(--border-size) before:-z-10 before:block\",\n          \"before:h-(--pseudo-element-height) before:w-(--pseudo-element-width) before:rounded-(--border-radius) before:content-['']\",\n          \"before:bg-[linear-gradient(0deg,var(--neon-first-color),var(--neon-second-color))] before:bg-size-[100%_200%] before:animate-background-position-spin\",\n          \"after:absolute after:-top-(--border-size) after:-left-(--border-size) after:-z-10 after:block\",\n          \"after:h-(--pseudo-element-height) after:w-(--pseudo-element-width) after:rounded-(--border-radius) after:blur-(--after-blur) after:content-['']\",\n          \"after:bg-[linear-gradient(0deg,var(--neon-first-color),var(--neon-second-color))] after:bg-size-[100%_200%] after:opacity-80 after:animate-background-position-spin\",\n          \"wrap-break-word\"\n        )}\n      >\n        {children}\n      </div>\n    </div>\n  )\n}",
+      "description": "",
+      "framework": "react",
+      "tags": [
+        "luxury",
+        "developer",
+        "black-green"
+      ],
+      "version": 1,
+      "created_at": "2026-07-21T05:05:36.821317+00:00",
+      "updated_at": "2026-07-21T05:05:36.821337+00:00"
+    }
+  ]
+}

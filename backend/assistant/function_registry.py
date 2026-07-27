@@ -1,7 +1,10 @@
 import asyncio
 import logging
+from pathlib import Path
 
 from backend.core.data_store import get_store
+from backend.core.config import load_config
+from backend.core.component_store import get_component_store
 from backend.core.operation_log import get_operation_log
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
@@ -24,6 +27,27 @@ from backend.functions.project_functions import (
 )
 from backend.functions.document_functions import (
     upload_pdf, read_pdf, search_pdfs, list_pdfs, delete_pdf, rename_pdf,
+)
+from backend.functions.scaffold_functions import (
+    store_component, list_stored_components, get_stored_component, scaffold_ui_project,
+)
+from backend.functions.visual_testing import (
+    update_baseline,
+)
+from backend.functions.browser_functions import (
+    capture_page_screenshot, visual_diff_sandbox, check_element_sandbox,
+)
+from backend.assistant.playwright_runner import (
+    playwright_navigate, playwright_screenshot, playwright_click,
+    playwright_fill, playwright_evaluate, playwright_console_logs,
+    playwright_get_visible_html, playwright_get_visible_text,
+    playwright_expect_response, playwright_assert_response,
+)
+from backend.assistant.playwright_tools import PLAYWRIGHT_TOOL_DEFINITIONS
+from backend.core.sandbox import (
+    sandbox_start, sandbox_exec, sandbox_stop, sandbox_status,
+    sandbox_write_file, sandbox_read_file, sandbox_delete_file, sandbox_list_files,
+    sandbox_sync_from_host, sandbox_sync_to_host, list_host_projects,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,12 +151,161 @@ def unified_search(query: str) -> str:
     return "\n\n".join(parts)
 
 
+DESIGN_TOOL_NAMES = {
+    "design_generate_layout",
+    "design_generate_component",
+    "design_write_spec",
+}
+
+
+def design_generate_layout(
+    section: str, description: str = "", style: str = "",
+) -> str:
+    return (
+        f"Layout request for section: {section}\n"
+        f"Style: {style or 'modern minimal'}\n"
+        f"Description: {description}\n\n"
+        "To find layouts: call search_components(q='<section> layout', limit=5) "
+        "on @ui-layouts/mcp, then get_source_code() for each match."
+    )
+
+
+def design_generate_component(
+    name: str, description: str = "", style: str = "",
+) -> str:
+    return (
+        f"Component request: {name}\n"
+        f"Style: {style or 'modern minimal'}\n"
+        f"Description: {description}\n\n"
+        "To find components: call searchRegistryItems(query='<description>') "
+        "on @magicuidesign/mcp, then getRegistryItem(name, includeSource=true)."
+    )
+
+
+def design_write_spec(
+    project_name: str, layout_results: str = "", component_results: str = "",
+    design_tokens: str = "", architecture: str = "",
+) -> str:
+    slug = project_name.lower().replace(" ", "-").replace("_", "-")
+    slug = "".join(c for c in slug if c.isalnum() or c in "-_")
+    cfg_pdir = load_config().get("data", {}).get("projects_dir", "")
+    proj_dir = Path(cfg_pdir) / slug if cfg_pdir else Path(__file__).resolve().parent.parent.parent / "projects" / slug
+    proj_dir.mkdir(parents=True, exist_ok=True)
+
+    spec = f"""# Design Specification: {project_name}
+
+## Design Tokens
+{design_tokens or 'See individual component specs below.'}
+
+## Page Layouts
+{layout_results or 'Generated from design MCP servers.'}
+
+## Components
+{component_results or 'Generated from design MCP servers.'}
+
+## Architecture
+{architecture or 'Standard Vite + React + TypeScript + Tailwind.'}
+
+## Build Manifest
+
+### Files to Create (CRITICAL — do not skip any)
+| File | Purpose | Critical |
+|------|---------|----------|
+| `index.html` | Vite entry with `<div id="root">` + `<script type="module" src="/src/main.tsx">` | Yes |
+| `package.json` | Dependencies + `scripts: {{dev, build, preview}}` | Yes |
+| `tsconfig.json` | TypeScript config with `jsx: "react-jsx"`, `strict: true` | Yes |
+| `vite.config.ts` | Vite with `@vitejs/plugin-react` + `@tailwindcss/vite` plugins | Yes |
+| `src/vite-env.d.ts` | `/// <reference types="vite/client" />` — required to avoid TS errors on CSS imports | Yes |
+| `src/main.tsx` | React entry — `ReactDOM.createRoot` + `import './index.css'` | Yes |
+| `src/index.css` | **Must start with `@import "tailwindcss"`** — NOT `@tailwind` (that is v3). Add `@plugin "tailwindcss-animate"` right after if using animation classes. | **Critical** |
+| `src/App.tsx` | Root component | Yes |
+| `src/components/*.tsx` | One file per generated component | Yes |
+
+### Import Requirements
+- `index.css`: `@import "tailwindcss"` (first line) + `@plugin "tailwindcss-animate"` (if using animation classes like `animate-in`, `fade-in`, `slide-in-*`) + `@theme {{ ... }}` for custom tokens
+- `vite.config.ts`: `import tailwindcss from '@tailwindcss/vite'` + add to `plugins: [react(), tailwindcss()]`
+- Every component: import `React` (explicit or via JSX transform), libraries used
+- `lucide-react` icons: verify icon names exist (brand icons like `Github`/`Linkedin` may be removed — use `Code2`/`ExternalLink`/`Globe` instead)
+- `framer-motion`: import `motion` from `'framer-motion'`, not `'motion'`
+
+### Verification Commands (run ALL after build)
+1. `npx tsc --noEmit` — must pass with zero errors
+2. `npm run build` — must succeed (no runtime errors)
+3. `Playwright_navigate(url="http://localhost:5174")` — page must load
+4. `Playwright_screenshot()` — check image is not blank/white
+5. `Playwright_get_visible_text(url="http://localhost:5174")` — verify expected text renders
+6. If blank: check `@import "tailwindcss"` in index.css first
+7. If TS errors: check `vite-env.d.ts` and `tsconfig.json` exist
+"""
+    (proj_dir / "design_spec.md").write_text(spec, encoding="utf-8")
+
+    arch = f"""# Architecture: {project_name}
+
+## Tech Stack
+- **Framework:** React 19 + TypeScript
+- **Build:** Vite 6+
+- **Styling:** Tailwind CSS v4 (via @tailwindcss/vite plugin)
+- **Animation:** Framer Motion
+- **Icons:** Lucide React
+
+## Component Tree
+{architecture or 'See design_spec.md for component breakdown.'}
+
+## Data Flow
+{layout_results or 'Static site — no backend data flow.'}
+
+## File Structure (Prescribed)
+```
+{slug}/
+├── index.html              # <div id="root"> + module script
+├── package.json            # npm scripts: dev, build, preview
+├── tsconfig.json           # strict mode, jsx: react-jsx
+├── vite.config.ts          # react() + tailwindcss() plugins
+├── src/
+│   ├── vite-env.d.ts       # /// <reference types="vite/client" />
+│   ├── main.tsx            # React entry point
+│   ├── index.css           # @import "tailwindcss" (NOT @tailwind)
+│   ├── App.tsx             # Root component
+│   └── components/         # One .tsx per component
+```
+
+## Critical CSS Rules (Tailwind v4)
+- `src/index.css` FIRST line MUST be: `@import "tailwindcss";`
+- If using animation utilities (`animate-in`, `fade-in`, `slide-in-*`, `zoom-in-*`):
+  Add `@plugin "tailwindcss-animate";` right after `@import "tailwindcss";`
+  Install: `npm install tailwindcss-animate`
+  Without this, animation classes are silently ignored (no error, no animation)
+- `@theme {{ }}` block defines custom design tokens (colors, fonts, spacing)
+- `vite.config.ts` MUST include `@tailwindcss/vite` plugin
+- No `tailwind.config.js` or `postcss.config.js` needed in v4
+- No CDN script in `index.html` — Tailwind is injected at build time
+
+## Dependency Audit
+- Every dep in `package.json` must be imported in at least one source file
+- Run: grep source files for each dep name
+- If a dep is installed but not imported: remove it (unused deps bloat the build)
+- If a dep is imported but not installed: `npm install <dep>` (missing deps crash the page)
+- `framer-motion` and `lucide-react` are NOT auto-included — install only when needed
+
+## Import Map
+| Library | Import | Notes |
+|---------|--------|-------|
+| React | `import React from 'react'` or JSX transform | |
+| Framer Motion | `import {{ motion }} from 'framer-motion'` | |
+| Lucide Icons | `import {{ IconName }} from 'lucide-react'` | No brand icons (Github/Linkedin) — use Code2/Globe/ExternalLink |
+| Tailwind | `@import "tailwindcss"` in CSS | v4 only — no @tailwind directives |
+"""
+    (proj_dir / "architecture.md").write_text(arch, encoding="utf-8")
+
+    return f"Written design_spec.md and architecture.md to {proj_dir}"
+
+
 LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
             "name": "create_todo",
-            "description": "Create a new todo item. If duplicate detection warns you, set force=True to bypass the check and create anyway.",
+            "description": "Create a new todo with title, due date, priority",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -161,7 +334,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "update_todo",
-            "description": "Update an existing todo",
+            "description": "Update an existing todo fields",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -191,7 +364,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "delete_todo",
-            "description": "Delete a todo",
+            "description": "Delete a todo by ID",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -205,7 +378,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "list_todos",
-            "description": "List all todos, optionally filter",
+            "description": "List all todos, optionally filter by completed",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -218,7 +391,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_event",
-            "description": "Create a new calendar event. If duplicate detection warns you, set force=True to bypass the check and create anyway.",
+            "description": "Create a calendar event with start/end times",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -276,7 +449,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "delete_event",
-            "description": "Delete an event",
+            "description": "Delete an event by ID",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -290,7 +463,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "list_events",
-            "description": "List events, optionally filtered by date range",
+            "description": "List events, filterable by date range",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -318,7 +491,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "remember",
-            "description": "Store a fact or relationship in long-term memory",
+            "description": "Store a fact in long-term memory (entity->relation->value)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -336,7 +509,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "recall",
-            "description": "Search memory for any information matching a query",
+            "description": "Search memory for information matching a query",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -350,13 +523,13 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "recall_entity",
-            "description": "Get all information stored about a specific entity",
+            "description": "Get all stored info about a specific entity by name or entity",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Entity name"},
+                    "entity": {"type": "string", "description": "Same as name (alias)"},
                 },
-                "required": ["name"],
             },
         },
     },
@@ -364,7 +537,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "forget",
-            "description": "Remove a memory (entity, relationship, or entire entity). Pass only 'entity' to remove the entire entity and all its connections. Pass entity+relation+value to remove a specific relationship edge. If you are unsure of the relation/value, pass only entity — it will remove everything.",
+            "description": "Remove a memory or entire entity from the graph",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -380,13 +553,13 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "delete_entity",
-            "description": "Set an entity's status to 'scraped'. The entity stays in the knowledge graph and can be reactivated later with set_status(). Use when the user wants to remove, abandon, or scrap a project/concept.",
+            "description": "Set an entity status to scraped in the graph by name or entity",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Exact name of the entity to scrap"},
+                    "entity": {"type": "string", "description": "Same as name (alias)"},
                 },
-                "required": ["name"],
             },
         },
     },
@@ -394,14 +567,15 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "set_status",
-            "description": "Change an entity's status between 'active', 'inactive', and 'scraped'. Use 'scraped' to abandon an entity, 'inactive' to pause it, 'active' to reactivate it.",
+            "description": "Change entity status: active/inactive/scraped by name or entity",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Exact name of the entity"},
+                    "entity": {"type": "string", "description": "Same as name (alias)"},
                     "status": {"type": "string", "enum": ["active", "inactive", "scraped"], "description": "New status value"},
                 },
-                "required": ["name", "status"],
+                "required": ["status"],
             },
         },
     },
@@ -409,7 +583,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_conversations",
-            "description": "Retrieve conversations from a specific date to recall past discussions. Use when the user asks about a previous conversation.",
+            "description": "Retrieve conversations from a specific date",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -423,7 +597,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_conversation_history",
-            "description": "Retrieve a summary of a past conversation by ID. Returns title, message count, tools used, and first/last messages.",
+            "description": "Get summary of a past conversation by ID",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -444,7 +618,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "list_screenshots",
-            "description": "List all stored screenshots with timestamps. Use this to find past screenshots to show the user.",
+            "description": "List all stored screenshots with timestamps",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -455,7 +629,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_screenshot",
-            "description": "Get metadata for a specific screenshot by filename. The image will be displayed in the chat.",
+            "description": "Get metadata for a specific screenshot file",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -469,7 +643,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "delete_screenshot",
-            "description": "Permanently delete a screenshot file.",
+            "description": "Permanently delete a screenshot file",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -483,7 +657,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "query_operations",
-            "description": "Search the history of all create/update/delete operations across todos, events, conversations, projects, and memory entities. Use when the user asks about past activity like deleted items, cancellations, or changes.",
+            "description": "Search past create/update/delete operations",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -500,7 +674,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "unified_search",
-            "description": "Search across all Mayday data (todos, events, conversations, memories, operations) at once. Use this when the user asks a broad question like 'find that thing about the API' or 'what did I do with X' instead of guessing which specific store to search.",
+            "description": "Search todos, events, conversations, memories, ops at once",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -514,7 +688,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_weather",
-            "description": "Get current weather and up to 7-day forecast for any city worldwide. Proactively call this when the user mentions meetings, events, travel plans, or outdoor activities tied to a location and date. If no location is specified, the user's stored default location is used.",
+            "description": "Get current weather and forecast for any city",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -529,7 +703,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_reminder",
-            "description": "Set a reminder that will fire as a desktop notification at the specified time. Use 24-hour format for the time.",
+            "description": "Set a reminder that fires as a notification",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -544,7 +718,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "list_reminders",
-            "description": "List all pending reminders that haven't fired yet.",
+            "description": "List all pending reminders",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -555,7 +729,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "delete_reminder",
-            "description": "Delete a pending reminder by its ID.",
+            "description": "Delete a pending reminder by ID",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -569,7 +743,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "open_application",
-            "description": "Open a desktop application by name (e.g. netflix, spotify, chrome, whatsapp, zoom). Searches the Start Menu, Program Files, AppData, Windows Registry, and system PATH. If the app is installed anywhere on the system, it will be found and launched. Returns 'not available' if no installed app is found.",
+            "description": "Open a desktop app by name (searches all locations)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -583,7 +757,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "close_application",
-            "description": "Close a running desktop application by name (e.g. chrome, notepad). Uses taskkill.",
+            "description": "Close a running desktop app by name",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -597,7 +771,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "set_volume",
-            "description": "Set the system master volume level (0-100).",
+            "description": "Set system master volume (0-100)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -611,7 +785,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_volume",
-            "description": "Get the current system master volume level as a percentage (0-100).",
+            "description": "Get current system master volume level",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -622,7 +796,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "copy_to_clipboard",
-            "description": "Copy text to the system clipboard. Max 10,000 characters.",
+            "description": "Copy text to system clipboard (max 10K chars)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -636,7 +810,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_system_info",
-            "description": "Get system information including OS, CPU, RAM, disk space, and hostname.",
+            "description": "Get OS, CPU, RAM, disk, hostname",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -647,7 +821,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_active_window",
-            "description": "Get the title of the currently active/foreground window.",
+            "description": "Get the title of the active/foreground window",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -658,7 +832,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read a file's contents from your Documents, Desktop, or the project root directory. Shows text content up to 100KB. Binary files return size only.",
+            "description": "Read a file (Documents, Desktop, project dirs only)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -672,7 +846,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Create or overwrite a file in your Documents, Desktop, or the project root directory. Creates parent folders if needed.",
+            "description": "Create or overwrite a file (whitelisted dirs)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -687,7 +861,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "append_file",
-            "description": "Append content to a file in your Documents, Desktop, or the project root directory. Creates the file if it doesn't exist.",
+            "description": "Append content to a file (creates if missing)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -702,7 +876,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "list_directory",
-            "description": "List files and folders in a directory from your Documents, Desktop, or the project root. Shows file sizes and directory markers.",
+            "description": "List files/folders in a directory",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -716,7 +890,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_project",
-            "description": "Create a new project with optional tasks. Creates a project entry, folder, syncs to knowledge graph, and logs the operation. Use tasks to break the project into steps.",
+            "description": "Create a new project with optional tasks",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -743,7 +917,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "resume_project",
-            "description": "Resume an existing project. Returns full project state: status, files, linked conversations, knowledge graph edges. Supports fuzzy name matching — if no exact match, suggests similar project names.",
+            "description": "Resume a project, returns full state",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -757,7 +931,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "list_projects",
-            "description": "List all projects, optionally filtered by status (active/paused/scrapped).",
+            "description": "List projects, filterable by status",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -774,7 +948,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "update_project_status",
-            "description": "Transition a project between states: active ↔ paused ↔ scrapped. Use 'scrapped' to archive a project permanently (tombstone set). Use resume_project to bring it back.",
+            "description": "Transition project between active/paused/scrapped",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -793,7 +967,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "add_project_note",
-            "description": "Write a research note (.md file) to the project folder. Creates the file inside projects/<project-slug>/ and syncs it to the knowledge graph. Omit name to use the active project.",
+            "description": "Write a .md research note to the project folder",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -809,7 +983,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "add_project_task",
-            "description": "Add a task to an existing project. Each task tracks progress through its lifecycle: pending → in_progress → completed/blocked/failed. Type 'research' triggers a research skill automatically. Type 'build' triggers a build skill.",
+            "description": "Add a task to a project with type/dependencies",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -827,7 +1001,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "update_task_status",
-            "description": "Update a task's status. Lifecycle: pending → in_progress → completed | blocked | failed. Use task_id (preferred) or task_title (fallback). When a task type matches a skill, the skill auto-loads.",
+            "description": "Update task: pending->in_progress->completed/blocked/failed",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -845,7 +1019,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "list_project_tasks",
-            "description": "List all tasks in a project, optionally filtered by status. Shows progress and next task.",
+            "description": "List tasks in a project, filterable by status",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -860,7 +1034,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "suggest_skill",
-            "description": "Suggest using a named skill for a task. Call when the user's request matches one of the available skills. The user will be asked to confirm before the skill activates.",
+            "description": "Suggest loading a named skill for the current task",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -875,7 +1049,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "find_free_port",
-            "description": "Find a free TCP port on the system. Call this before starting any dev server during project testing so it doesn't conflict with Mayday (port 5173) or other running services. Returns the first available port number as a string.",
+            "description": "Find a free TCP port for dev servers",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -889,7 +1063,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "upload_pdf",
-            "description": "Upload a PDF file from your local file system. Extracts all text for search, summary, and graph memory. Optionally link to a project (copies file to project dir). Use this when the user wants to upload a PDF for reading or analysis.",
+            "description": "Upload a PDF, extract text for search and memory",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -905,14 +1079,14 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "read_pdf",
-            "description": "Read text content from an uploaded PDF document. Can read specific pages or the full document.",
+            "description": "Read text content from an uploaded PDF by doc_id or pdf_id",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "doc_id": {"type": "string", "description": "Document ID to read"},
+                    "pdf_id": {"type": "string", "description": "Same as doc_id (alias)"},
                     "pages": {"type": "array", "items": {"type": "integer"}, "description": "Specific page numbers to read (1-indexed). Omit to read all pages."},
                 },
-                "required": ["doc_id"],
             },
         },
     },
@@ -920,7 +1094,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "search_pdfs",
-            "description": "Search uploaded PDF documents by text content. Only use when the user explicitly asks to search their documents or references a specific uploaded file.",
+            "description": "Search uploaded PDFs by text content",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -935,7 +1109,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "list_pdfs",
-            "description": "List all uploaded PDF documents with basic metadata.",
+            "description": "List all uploaded PDFs with metadata",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -946,13 +1120,13 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "delete_pdf",
-            "description": "Delete an uploaded PDF document and all its extracted data.",
+            "description": "Delete an uploaded PDF by doc_id or pdf_id",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "doc_id": {"type": "string", "description": "Document ID to delete"},
+                    "pdf_id": {"type": "string", "description": "Same as doc_id (alias)"},
                 },
-                "required": ["doc_id"],
             },
         },
     },
@@ -960,14 +1134,15 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "rename_pdf",
-            "description": "Rename an uploaded PDF document. Old filename is preserved in search history so it remains findable by its previous name.",
+            "description": "Rename a PDF by doc_id or pdf_id",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "doc_id": {"type": "string", "description": "Document ID to rename"},
+                    "pdf_id": {"type": "string", "description": "Same as doc_id (alias)"},
                     "new_filename": {"type": "string", "description": "New display name for the document"},
                 },
-                "required": ["doc_id", "new_filename"],
+                "required": ["new_filename"],
             },
         },
     },
@@ -975,18 +1150,340 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "capture_page_screenshot",
-            "description": "Navigate to a URL and take a screenshot of the live page. The screenshot is saved and displayed in the chat with an image_url. Use after starting a dev server to show the user what the page looks like.",
+            "description": "Navigate to URL and take a screenshot",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "The URL to navigate to and screenshot (e.g. http://localhost:5173)"},
+                    "url": {"type": "string", "description": "The URL to navigate to and screenshot (e.g. http://localhost:5174)"},
+                    "project_name": {"type": "string", "description": "Project name (optional — uses active project if omitted)"},
                 },
                 "required": ["url"],
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "store_component",
+            "description": "Save a UI component code snippet for reuse",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Component name (e.g. HeroSection, PricingCard)"},
+                    "code": {"type": "string", "description": "Full component source code"},
+                    "description": {"type": "string", "description": "Brief description of what the component does"},
+                    "framework": {"type": "string", "description": "Framework (react, vue, etc.)", "default": "react"},
+                    "tags": {"type": "string", "description": "Comma-separated tags for filtering"},
+                    "replace": {"type": "boolean", "description": "Force replace existing component"},
+                },
+                "required": ["name", "code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_stored_components",
+            "description": "List stored UI components by framework/tag",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "framework": {"type": "string", "description": "Filter by framework (react, vue, etc.)"},
+                    "tag": {"type": "string", "description": "Filter by tag name"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_stored_component",
+            "description": "Retrieve a stored component source code",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Component name to retrieve"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "scaffold_ui_project",
+            "description": "Scaffold Vite+React+TS+Tailwind project from components",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Project name"},
+                    "description": {"type": "string", "description": "Project description"},
+                    "components": {"type": "string", "description": "Comma-separated list of stored component names to include"},
+                    "animation": {"type": "string", "description": "Animation library to configure (e.g. framer-motion, gsap)"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "visual_diff",
+            "description": "Compare screenshot against baseline for visual changes",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Unique name for this visual test (e.g. homepage, pricing-page)"},
+                    "image_data_b64": {"type": "string", "description": "Base64-encoded PNG screenshot data"},
+                    "url": {"type": "string", "description": "URL to navigate to and capture for diff (optional — if omitted, use image_data_b64 directly)"},
+                    "project_name": {"type": "string", "description": "Project name (optional — uses active project if omitted)"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_element",
+            "description": "Check if element exists on a page by selector/text",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full URL of the page to check"},
+                    "selector": {"type": "string", "description": "CSS selector to check (e.g. '.hero-title', '#cta-button')"},
+                    "text": {"type": "string", "description": "Text content to search for on the page"},
+                    "project_name": {"type": "string", "description": "Project name (optional — uses active project if omitted)"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_baseline",
+            "description": "Update visual diff baseline to last captured version",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the visual test baseline to update"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sandbox_start",
+            "description": "Start local execution environment for a project",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name to prepare for execution"},
+                },
+                "required": ["project_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sandbox_exec",
+            "description": "Run a shell command in project directory",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name"},
+                    "command": {"type": "string", "description": "Shell command to run in the project directory"},
+                    "background": {"type": "boolean", "description": "If true, run in background (don't wait for exit). Use to start dev servers.", "default": False},
+                },
+                "required": ["project_name", "command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sandbox_stop",
+            "description": "Stop and cleanup project execution environment",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name"},
+                    "copy_out": {"type": "boolean", "description": "Copy artifacts to host before stopping (default True)", "default": True},
+                },
+                "required": ["project_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sandbox_status",
+            "description": "Check project background process status",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name"},
+                },
+                "required": ["project_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sandbox_write_file",
+            "description": "Write content to a file in project directory",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name"},
+                    "path": {"type": "string", "description": "File path in the project directory (e.g. src/App.tsx)"},
+                    "content": {"type": "string", "description": "File content to write"},
+                },
+                "required": ["project_name", "path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sandbox_read_file",
+            "description": "Read contents of a file in project directory",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name"},
+                    "path": {"type": "string", "description": "File path in the project directory (e.g. src/App.tsx)"},
+                },
+                "required": ["project_name", "path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sandbox_delete_file",
+            "description": "Delete a file/directory in project directory",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name"},
+                    "path": {"type": "string", "description": "File or directory path in the project to delete"},
+                },
+                "required": ["project_name", "path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sandbox_list_files",
+            "description": "List files/dirs in project directory",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name"},
+                    "path": {"type": "string", "description": "Directory path in the project (default: .)", "default": "."},
+                },
+                "required": ["project_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sandbox_sync_from_host",
+            "description": "No-op: files already live on host",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name to sync files from host"},
+                },
+                "required": ["project_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sandbox_sync_to_host",
+            "description": "No-op: files already live on host",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name to sync files to host"},
+                },
+                "required": ["project_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_host_projects",
+            "description": "List unregistered project folders on disk",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "design_generate_layout",
+            "description": "Get MCP search guidance for a page section layout",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section": {"type": "string", "description": "Page section type: hero, about, projects, skills, contact, footer, or custom"},
+                    "description": {"type": "string", "description": "Detailed description of what this section should contain"},
+                    "style": {"type": "string", "description": "Style direction (e.g. 'B&W minimal', 'modern', 'luxury')"},
+                },
+                "required": ["section"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "design_generate_component",
+            "description": "Get MCP search guidance for a UI component",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Component name (PascalCase, e.g. ProjectCard)"},
+                    "description": {"type": "string", "description": "What this component should look like and do"},
+                    "style": {"type": "string", "description": "Style direction (e.g. 'B&W minimal', 'modern glassmorphism')"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "design_write_spec",
+            "description": "Write design_spec.md and architecture.md to project folder",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name"},
+                    "layout_results": {"type": "string", "description": "Summary of what layouts were found for each page section"},
+                    "component_results": {"type": "string", "description": "List of what components were found and stored"},
+                    "design_tokens": {"type": "string", "description": "Design tokens: colors, typography, spacing, radii"},
+                    "architecture": {"type": "string", "description": "Component tree, file structure, and data flow description"},
+                },
+                "required": ["project_name"],
+            },
+        },
+    },
 ]
-
 FUNCTION_MAP = {
     "create_project": create_project,
     "resume_project": resume_project,
@@ -1040,11 +1537,44 @@ FUNCTION_MAP = {
     "list_pdfs": list_pdfs,
     "delete_pdf": delete_pdf,
     "rename_pdf": rename_pdf,
+    "store_component": store_component,
+    "list_stored_components": list_stored_components,
+    "get_stored_component": get_stored_component,
+    "scaffold_ui_project": scaffold_ui_project,
+    "visual_diff": visual_diff_sandbox,
+    "check_element": check_element_sandbox,
+    "update_baseline": update_baseline,
+    "capture_page_screenshot": capture_page_screenshot,
+    "sandbox_start": sandbox_start,
+    "sandbox_exec": sandbox_exec,
+    "sandbox_stop": sandbox_stop,
+    "sandbox_status": sandbox_status,
+    "sandbox_write_file": sandbox_write_file,
+    "sandbox_read_file": sandbox_read_file,
+    "sandbox_delete_file": sandbox_delete_file,
+    "sandbox_list_files": sandbox_list_files,
+    "sandbox_sync_from_host": sandbox_sync_from_host,
+    "sandbox_sync_to_host": sandbox_sync_to_host,
+    "list_host_projects": list_host_projects,
+    "Playwright_navigate": playwright_navigate,
+    "Playwright_screenshot": playwright_screenshot,
+    "Playwright_click": playwright_click,
+    "Playwright_fill": playwright_fill,
+    "Playwright_evaluate": playwright_evaluate,
+    "Playwright_console_logs": playwright_console_logs,
+    "Playwright_get_visible_html": playwright_get_visible_html,
+    "Playwright_get_visible_text": playwright_get_visible_text,
+    "Playwright_expect_response": playwright_expect_response,
+    "Playwright_assert_response": playwright_assert_response,
+    "design_generate_layout": design_generate_layout,
+    "design_generate_component": design_generate_component,
+    "design_write_spec": design_write_spec,
 }
 
 
 def get_tool_definitions(mcp_tools: list[dict] | None = None) -> list[dict]:
     tools = list(LOCAL_TOOL_DEFINITIONS)
+    tools.extend(PLAYWRIGHT_TOOL_DEFINITIONS)
     if mcp_tools:
         tools.extend(mcp_tools)
     return tools
@@ -1053,6 +1583,18 @@ def get_tool_definitions(mcp_tools: list[dict] | None = None) -> list[dict]:
 async def dispatch_call(name: str, arguments: dict, mcp_manager=None) -> str:
     if name in FUNCTION_MAP:
         fn = FUNCTION_MAP[name]
+        if asyncio.iscoroutinefunction(fn):
+            try:
+                return await fn(**arguments, mcp_manager=mcp_manager)
+            except TypeError:
+                try:
+                    return await fn(**arguments)
+                except Exception as e:
+                    logger.exception("Error executing async local function '%s'", name)
+                    return f"Error executing {name}: {e}"
+            except Exception as e:
+                logger.exception("Error executing async local function '%s'", name)
+                return f"Error executing {name}: {e}"
         loop = asyncio.get_running_loop()
         try:
             return await loop.run_in_executor(None, lambda: fn(**arguments))
@@ -1062,3 +1604,89 @@ async def dispatch_call(name: str, arguments: dict, mcp_manager=None) -> str:
     if mcp_manager is not None:
         return await mcp_manager.call_tool(name, arguments)
     return f"Unknown function: {name}"
+
+
+UI_LAYOUTS_TOOL_DEFINITIONS = [
+    {
+        "name": "search_components",
+        "description": "Search ui-layouts.com component registry by name, key, group, or tags.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "q": {"type": "string", "description": "Search query for component name, key, group, or tags"},
+                "limit": {"type": "integer", "description": "Max results (default 20, max 100)"},
+            },
+            "required": ["q"],
+        },
+    },
+    {
+        "name": "get_source_code",
+        "description": "Fetch component source code from ui-layouts.com by component name.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "componentName": {"type": "string", "description": "Component name e.g. 'liquid-glass-weather', 'sparkles-title'"},
+                "maxChars": {"type": "integer", "description": "Max characters to return (default 20000)"},
+            },
+            "required": ["componentName"],
+        },
+    },
+    {
+        "name": "get_docs",
+        "description": "Fetch docs/usage HTML for a ui-layouts component.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Component key (e.g. 'accordion')"},
+                "format": {"type": "string", "enum": ["text", "raw_html", "snippet"], "description": "Output format (default text)"},
+            },
+        },
+    },
+]
+
+MAGIC_UI_TOOL_DEFINITIONS = [
+    {
+        "name": "listRegistryItems",
+        "description": "List Magic UI registry items, filterable by kind and query.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "description": "Kind filter: component, example, style, or registry:ui"},
+                "query": {"type": "string", "description": "Text filter applied to names, titles, descriptions"},
+                "limit": {"type": "integer", "description": "Max items (default 25, max 150)"},
+            },
+        },
+    },
+    {
+        "name": "getRegistryItem",
+        "description": "Get detailed info for a Magic UI registry item, including source code.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Exact registry item name (e.g. 'marquee', 'shimmer-button')"},
+                "includeSource": {"type": "boolean", "description": "Include source code content"},
+                "includeExamples": {"type": "boolean", "description": "Include related example code"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "searchRegistryItems",
+        "description": "Search Magic UI registry items by keyword or use case.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query matched against names, titles, descriptions"},
+                "kind": {"type": "string", "description": "Kind filter: component, example, style"},
+                "limit": {"type": "integer", "description": "Max results (default 25, max 150)"},
+            },
+            "required": ["query"],
+        },
+    },
+]
+
+DESIGN_MCP_TOOL_NAMES = {
+    "search_components", "get_source_code", "get_docs",
+    "listRegistryItems", "getRegistryItem", "searchRegistryItems",
+    "design_generate_layout", "design_generate_component", "design_write_spec",
+}

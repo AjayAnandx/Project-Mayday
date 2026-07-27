@@ -11,6 +11,7 @@ import { ToastContainer } from './components/ui/Toast'
 import { ReminderDialog } from './components/ui/ReminderDialog'
 import { VoiceMode } from './components/voice/VoiceMode'
 import { DocumentPanel } from './components/documents/DocumentPanel'
+import { PreviewPanel } from './components/preview/PreviewPanel'
 import { useNotifications } from './hooks/useNotifications'
 import { useLocation } from './hooks/useLocation'
 
@@ -25,7 +26,7 @@ function AppContent() {
   useEffect(() => {
     const handleNavigate = (e: Event) => {
       const detail = (e as CustomEvent).detail
-      if (detail === 'dashboard' || detail === 'chat' || detail === 'todos' || detail === 'calendar' || detail === 'brain' || detail === 'voice' || detail === 'documents') {
+      if (detail === 'dashboard' || detail === 'chat' || detail === 'todos' || detail === 'calendar' || detail === 'brain' || detail === 'voice' || detail === 'documents' || detail === 'preview') {
         setCurrentPage(detail)
       }
     }
@@ -60,6 +61,7 @@ function AppContent() {
         {currentPage === 'calendar' && <CalendarPanel />}
         {currentPage === 'brain' && <BrainPanel />}
         {currentPage === 'documents' && <DocumentPanel />}
+        {currentPage === 'preview' && <PreviewPanel />}
         {currentPage === 'voice' && <VoiceMode onExit={() => setCurrentPage('dashboard')} />}
       </div>
       <SearchOverlay

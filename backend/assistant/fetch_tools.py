@@ -1,7 +1,7 @@
 FETCH_TOOL_DEFINITIONS = [
     {
         "name": "fetch",
-        "description": "Fetches a URL from the internet and optionally extracts its contents as markdown. Use this to get up-to-date information from the web, news, documentation, etc.",
+        "description": "Fetch a URL and extract contents as markdown.",
         "parameters": {
             "type": "object",
             "properties": {

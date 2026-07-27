@@ -162,12 +162,8 @@ class MCPManager:
             try:
                 await exit_stack.aclose()
                 logger.info("MCP server '%s' disconnected", name)
-            except asyncio.CancelledError:
-                logger.debug("MCP server '%s' close cancelled", name)
-            except RuntimeError:
-                logger.debug("MCP server '%s' close cancel-scope mismatch (expected on disconnect)", name)
             except BaseException:
-                logger.warning("MCP server '%s' close error (suppressed)", name, exc_info=True)
+                logger.debug("MCP server '%s' close error (suppressed — anyio cancel-scope mismatch is expected on disconnect)", name)
         self._sessions.clear()
         self._exit_stacks.clear()
         self._tools.clear()
