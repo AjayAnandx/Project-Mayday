@@ -12,9 +12,14 @@ from backend.core.config import load_config
 from backend.core.data_store import get_store
 from backend.core.operation_log import get_operation_log
 from backend.assistant.llm_client import LLMClient
-from backend.assistant.function_registry import dispatch_call, get_tool_definitions
+from backend.assistant.function_registry import (
+    dispatch_call, get_tool_definitions,
+    DESIGN_TOOL_NAMES,
+    UI_LAYOUTS_TOOL_DEFINITIONS, MAGIC_UI_TOOL_DEFINITIONS,
+    DESIGN_MCP_TOOL_NAMES,
+)
 from backend.assistant.mcp_manager import MCPManager
-from backend.assistant.selenium_tools import SELENIUM_TOOL_DEFINITIONS
+from backend.assistant.playwright_tools import PLAYWRIGHT_TOOL_DEFINITIONS, PLAYWRIGHT_TOOL_NAMES
 from backend.assistant.exa_tools import EXA_TOOL_DEFINITIONS
 from backend.assistant.fetch_tools import FETCH_TOOL_DEFINITIONS
 from backend.assistant.mcp_server_opencode import STATIC_TOOL_DEFINITIONS as OPENCODE_TOOL_DEFINITIONS
@@ -23,7 +28,9 @@ from backend.assistant.memory.conversation_manager import ConversationManager
 from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
 from backend.api.screenshots import get_screenshot_store
 from backend.core.tool_selector import ToolSelector
+from backend.core.query_classifier import QueryClassifier, QueryIntent
 from backend.core.pdf_store import get_pdf_store
+from backend.core.evolution import run_post_mortem
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +102,7 @@ PROJECT_INSTRUCTIONS = """
 - Projects auto-pause after 30 days of no activity.
 - Conversation IDs are auto-linked to the project — no need to call remember() for that.
 - To BUILD code, use opencode tools (opencode_write, opencode_bash, opencode_read, opencode_edit, opencode_glob, opencode_grep).
+- When modifying an existing project, ALWAYS read the file first (opencode_read), then edit surgically with opencode_edit. Only use opencode_write for NEW files or when >80% of a file needs to change.
 
 ### Task Lifecycle
 - add_project_task(project, title, type, depends_on, description): Add a task. Type options: research, general, build. ALWAYS include a description (problem/goal statement) for research tasks.
@@ -108,27 +116,185 @@ PROJECT_INSTRUCTIONS = """
 - After EVERY project/task tool call, tell the user what happened.
 - IMPORTANT: Do NOT ask the user for permission or confirmation between steps. Collect all the information you need upfront, then execute autonomously. The user has already given you full authority to execute project tasks. Just inform them of what you're doing and the results."""
 
-BUILD_MODE_INSTRUCTIONS = """
-### Build Mode — Iterative Project Building
-When the user asks you to build, create, make, scaffold, or set up a project:
-1. Collect all requirements upfront — ask clarifying questions once, then proceed.
-2. Plan — briefly describe your approach.
-3. Create — use opencode_bash (mkdir, git init, npm init) and opencode_write to create files.
-4. Install — run dependency installers (npm install, pip install, etc.).
-5. Code — write the actual source files.
-6. Test — run the test command (npm test, pytest, etc.).
-7. Fix — if tests fail, read the error output, fix the code, and re-run tests.
-8. Complete — when ALL tests pass, stop calling tools and describe what was built.
-You can think out loud between tool calls. Your intermediate thoughts will be shown to the user in real-time.
-Never call the same tool with the same arguments more than 3 times. If you are stuck, explain the issue instead of repeating.
-CRITICAL: Do NOT ask the user "can I proceed?", "should I continue?", or "do you approve?" between steps. Once you understand the requirements, execute everything autonomously. Just inform the user of progress and results.
+WEBSITE_BUILD_PROTOCOL = """
+### Website Build Protocol — 4 Phases
+When the user asks you to build a website, app, landing page, or web interface, follow these 4 phases in order. Do NOT ask for permission between phases.
 
-### Port Management for Dev Servers
-- Before starting ANY dev server (vite, react-scripts, next, etc.), call `find_free_port()` to get an available port.
-- Pass the returned port to the dev command via `--port <port>` or `-- -p <port>` flag. For Vite: `npx vite --port <port>`.
-- Mayday's frontend uses port 5173 — do NOT use that port. `find_free_port` starts searching from 5174.
-- Use the returned port URL (e.g. `http://localhost:5174`) in capture_page_screenshot.
-- Stop dev servers with opencode_stop(pid) when done."""
+**PHASE 0: CLARIFICATION (ONE message — then proceed autonomously)**
+Ask ALL of these in a single response. NEVER ask questions one at a time.
+1. Theme & Style: Preferred color palette or theme? Any reference sites for inspiration?
+2. Target audience: Who is this for? (students, businesses, general, etc.)
+3. Pages & sections: What's needed? (home, about, services, pricing, contact, blog, etc.)
+4. Features: Must-have functionality? (booking, forms, gallery, payment, auth, animated sections, etc.)
+5. Content: Do you have text/images/logos ready, or should I use placeholders?
+
+After user answers → create_project(name, description) → add 3 chained tasks:
+  CRITICAL: You MUST call create_project() BEFORE any sandbox tools. Without a project store entry, the project has no memory and no graph node.
+  add_project_task(project, "Research", "research", description="Research phase")
+  add_project_task(project, "Design", "general", depends_on=[research_task_id], description="Design phase")
+  add_project_task(project, "Build", "build", depends_on=[design_task_id], description="Build phase")
+Then proceed immediately.
+
+**PHASE 1: RESEARCH** (task type: research — auto-loads deep-research skill)
+The deep-research skill is auto-loaded. Use its parallel fan-out, citation discipline, and structured report format.
+Produce exactly 1 document via add_project_note — tailored to the ask/idea:
+  research.md — Covers competitors, architecture, workflow, user navigation, and UI direction in one cohesive report.
+  Use web_search_exa and web_fetch_exa for sourcing. Every claim must cite a source URL.
+Be thorough — 3-5 different queries, follow cross-references, snowball search.
+Update task status to 'completed' with a result summary when done.
+
+**PHASE 2: DESIGN** (task type: general — uses design MCP servers + stored components)
+Output: design_spec.md + architecture.md saved via design_write_spec, containing:
+- Design tokens: color palette as Tailwind config, typography, spacing, radii, shadows
+- Component list: exact components needed, their variants (button sizes, card types, input styles)
+- Page layouts per page (header, hero, sections, footer) with responsive breakpoints
+- Component tree and data flow (props vs API vs static)
+- Animation plan (GSAP, Framer Motion, or none)
+
+DESIGN WORKFLOW (CRITICAL — follow this order):
+1. CALL design_generate_layout(section, description, style) for EACH page section (hero, about, projects, skills, contact, footer). This will tell you what to search for.
+2. CALL search_components(q="<section> layout", limit=5) on @ui-layouts/mcp to discover layout patterns for each section.
+3. CALL get_source_code(componentName="<name>") to retrieve actual code for promising layouts.
+4. CALL design_generate_component(name, description, style) for each UI element (Nav, ProjectCard, ContactForm, etc.). This tells you what to search for.
+5. CALL searchRegistryItems(query="<description>", kind="component") or listRegistryItems(kind="component") on @magicuidesign/mcp to find polished UI components.
+6. CALL getRegistryItem(name="<name>", includeSource=true) to retrieve actual component source code.
+7. CALL store_component(name, code, description, framework="react", tags="portfolio,generated") to save each retrieved component for reuse.
+8. CALL design_write_spec(project_name, layout_results=..., component_results=..., design_tokens=..., architecture=...) — this writes both design_spec.md AND architecture.md to the project folder.
+
+RULES:
+- ALWAYS search BOTH registries before writing any code. Do NOT hand-write components.
+- Store every component you find for reuse via store_component().
+- After all searches are complete, call design_write_spec() to finalize the design docs.
+- The frontend-ui-engineering skill can be manually suggested if the user asks for it.
+
+Update task status to 'completed' when design_spec.md is written.
+
+**PHASE 3: BUILD** (task type: build — auto-loads build skill)
+
+CRITICAL FILE STRUCTURE — Create EXACTLY these files (do NOT skip any):
+```
+project-name/
+├── index.html              # <div id="root"> + <script type="module" src="/src/main.tsx">
+├── package.json            # scripts: dev, build, preview
+├── tsconfig.json           # jsx: "react-jsx", strict: true
+├── vite.config.ts          # @vitejs/plugin-react + @tailwindcss/vite
+├── src/
+│   ├── vite-env.d.ts       # /// <reference types="vite/client" />
+│   ├── main.tsx            # ReactDOM.createRoot + import './index.css'
+│   ├── index.css           # MUST start with @import "tailwindcss" (NOT @tailwind)
+│   ├── App.tsx             # Root component importing from components/
+│   └── components/         # One file per component from Phase 2
+```
+
+3a. Scaffold: Create each file via opencode_write(project_name/path, content).
+    DO NOT use create-vite — it generates wrong Tailwind v3 boilerplate.
+    DO NOT use CDN scripts for Tailwind — use build pipeline only.
+    WRITE every file listed above. Never skip vite-env.d.ts or tsconfig.json.
+
+3b. CSS REQUIREMENTS (violating these = blank page):
+    - src/index.css MUST start with: @import "tailwindcss";
+    - Do NOT use: @tailwind base; @tailwind components; @tailwind utilities; (this is v3)
+    - Add @theme { ... } block for custom design tokens from design_spec
+    - vite.config.ts MUST include: import tailwindcss from '@tailwindcss/vite'
+    - Without these, all Tailwind classes produce blank output
+    - Animation utilities (animate-in, fade-in, slide-in-*, zoom-in-*):
+      These come from tailwindcss-animate. Install it and add to CSS:
+      - npm install tailwindcss-animate
+      - In index.css, add AFTER @import "tailwindcss": @plugin "tailwindcss-animate";
+      - Without this, animation classes like animate-in, fade-in, slide-in-from-bottom-8
+        are silently ignored (no error, just no animation)
+
+3c. Implement: Write components via opencode_write(project_name, src/components/Name.tsx, content)
+    - Type ALL props with interfaces (no implicit any)
+    - Use Tailwind v4 classes (same class names as v3, no migration needed)
+    - Only add import statements for libraries you actually USE in the component code
+
+3d. Install + Dev server:
+    - opencode_bash("npm install", cwd=project_path)
+    - opencode_bash("npx vite --port 5174 --host", cwd=project_path, background=True)
+
+3e. VERIFY (run ALL — do not skip any):
+     1. opencode_bash("npx tsc --noEmit", cwd=project_path) — must pass with zero errors
+     2. opencode_bash("npm run build", cwd=project_path) — must succeed (no runtime errors)
+     3. HEALTH CHECK: opencode_bash("try { (Invoke-WebRequest -Uri http://localhost:5174 -UseBasicParsing).StatusCode } catch { echo 0 }", cwd=project_path) — must return 200
+     4. Playwright_navigate(url="http://localhost:5174") — page must load
+     5. Playwright_screenshot(project_name=project_name) — check image_url in result
+     6. If screenshot is blank/white: check index.css for @import "tailwindcss"
+     7. Playwright_get_visible_text(url="http://localhost:5174") — verify expected text renders
+     8. If text shows "Module not found" or "Failed to load": check imports and dependencies
+    8. DEPENDENCY AUDIT: Read package.json and check each dependency is actually imported.
+       - Grep source files for each dep name (react, framer-motion, lucide-react, etc.)
+       - If a dep is in package.json but NOT imported anywhere: remove it from package.json
+       - If a dep IS imported but not in package.json: npm install it
+       - Unused deps bloat the build; missing deps crash the page
+    9. Fix any issues found and re-verify from step 1
+
+3f. Complete: update_task_status('completed', summary + URL + screenshot)
+    - opencode_stop(pid) to kill dev server
+
+RULES:
+- Phase 0 is exactly ONE message. Ask ALL questions then proceed autonomously.
+- Never ask "can I proceed?", "should I continue?", or "do you approve?" between phases.
+- Each phase feeds the next. No skipping, no reordering.
+- Never re-ask questions already answered in Phase 0.
+- Never call the same tool with the same arguments more than 3 times. Explain if stuck.
+- After EVERY tool call in Phase 3, call update_task_status() to reflect progress.
+- CRITICAL: If screenshot is blank, the #1 cause is missing @import "tailwindcss" in index.css or missing @tailwindcss/vite plugin in vite.config.ts. Check these FIRST.
+- CRITICAL: Without vite-env.d.ts, TypeScript will error on CSS imports.
+
+**REBUILD** (when user says "rebuild X", "fix X", "update project X", "redesign X", "change X", "modify X", "overhaul X"):
+R1. resume_project(name) — auto-discovers if not registered (finds disk folders)
+R2. Review code with opencode_read / opencode_glob / opencode_grep
+R3. EDIT OVER WRITE: For existing files, ALWAYS prefer opencode_edit over opencode_write.
+    - opencode_edit(old_string, new_string) for targeted changes (colors, classes, props, components)
+    - Use replace_all=true in opencode_edit when the same pattern changes everywhere
+    - opencode_write ONLY for new files or when >80% of a file needs to change
+R4. opencode_bash("npm install", cwd=project_path) if deps changed
+R5. Dev server: opencode_bash("npx vite --port 5174 --host", cwd=project_path, background=True)
+R6. VERIFY (run ALL):
+    - opencode_bash("npx tsc --noEmit", cwd=project_path)
+    - opencode_bash("npm run build", cwd=project_path) if project has build script
+    - Playwright_navigate(url="http://localhost:5174")
+    - Playwright_screenshot(project_name=project_name)
+    - Playwright_get_visible_text(url="http://localhost:5174")
+    - If blank: check @import "tailwindcss" in index.css
+    - If animations missing: check @plugin "tailwindcss-animate" in index.css
+    - Dependency audit: grep source for each dep name — remove unused, add missing
+R7. opencode_stop(pid) — kill dev server
+
+CRITICAL:
+- You MUST call create_project() or resume_project() BEFORE any build tools. Without a project store entry, the project has no memory and no graph node and the user cannot find it later.
+- If the project exists as a folder on disk but isn't registered, call resume_project(name) — it auto-discovers disk folders and registers them.
+- list_host_projects() shows unregistered project folders found on disk. Call it to discover projects.
+- Missing @import "tailwindcss" in index.css = blank page. Check this FIRST if rendering fails.
+- Missing vite-env.d.ts = TypeScript errors on CSS imports. Add it if missing.
+- Missing @plugin "tailwindcss-animate" in index.css = animation classes silently ignored. Add it if components use animate-in/fade-in/slide-in-*/zoom-in-*.
+- Unused dependencies in package.json bloat the build. Audit them in step 3e.8.
+- framer-motion and lucide-react are NOT auto-included. Install them only when components import them.
+- Never skip create_project. Always register first, then prepare the project.
+
+**HARD BOUNDARY — DO NOT TOUCH MAYDAY SYSTEM:**
+- Your project tools (opencode_write, opencode_edit, opencode_bash) operate ONLY on the projects directory.
+- Never write, edit, or modify any file in the Mayday system directory (backend/, frontend/, config.yaml, etc.).
+- If the user asks you to modify Mayday itself, say: "I can't modify Mayday's system files. Mayday development must be done manually."
+- Project file paths are relative to the projects directory (e.g. "ajay-portfolio/src/App.tsx"). Do NOT use absolute paths pointing to the Mayday directory."
+
+**REDESIGN** (when user says "redesign X", "change the look of X", "make X look better", "overhaul X"):
+D0. resume_project(name) — load existing project, get file list via opencode_glob
+D1. READ FIRST: Before touching any file, read every file you plan to change with opencode_read.
+    You MUST understand the existing code — structure, imports, styling approach.
+D2. EDIT OVER WRITE: For existing files, ALWAYS prefer opencode_edit over opencode_write.
+    - opencode_edit(old_string, new_string) for: color/class changes, prop additions,
+      layout tweaks, component replacements, adding features
+    - Use replace_all=true in opencode_edit when the same pattern changes everywhere
+      (e.g. renaming a CSS class, changing a brand color)
+    - Use opencode_write ONLY when adding a brand-new file or replacing >80% of content
+D3. PRESERVE STRUCTURE: Do NOT recreate vite.config.ts, tsconfig.json, package.json,
+    index.html, or src/index.css unless you are intentionally changing the build setup.
+    Keep the same file tree — only edit files that need changes.
+D4. PRESERVE IMPORTS: When editing a file, keep existing imports unless they're unused.
+    Add new imports alongside existing ones, don't remove what's already there.
+D5. BUILD & VERIFY: Same as R4-R7 in REBUILD protocol above."""
 
 RESEARCH_MODE_INSTRUCTIONS = """
 ### Research Mode — Comprehensive Multi-Source Investigation
@@ -180,12 +346,91 @@ CORE_TOOL_NAMES = {
     "opencode_bash", "opencode_write", "opencode_read",
     "opencode_edit", "opencode_glob", "opencode_grep",
     "opencode_stop",
-    # Screenshot tools
-    "capture_page_screenshot",
     # Skill suggestion
     "suggest_skill",
     # PDF document tools
-    "upload_pdf", "read_pdf", "search_pdfs", "list_pdfs", "delete_pdf",
+    "upload_pdf", "read_pdf", "search_pdfs", "list_pdfs", "delete_pdf", "rename_pdf",
+    # Scaffold / build tools
+    "store_component", "list_stored_components", "get_stored_component",
+    "scaffold_ui_project",
+    # Visual testing tools
+    "visual_diff", "check_element", "update_baseline",
+    # Sandbox tools
+    "sandbox_start", "sandbox_exec", "sandbox_stop", "sandbox_status",
+    "sandbox_write_file", "sandbox_read_file", "sandbox_delete_file", "sandbox_list_files",
+    "sandbox_sync_from_host", "sandbox_sync_to_host", "list_host_projects",
+    # Playwright browser tools
+    "Playwright_navigate", "Playwright_screenshot", "Playwright_click",
+    "Playwright_fill", "Playwright_evaluate", "Playwright_console_logs",
+    "Playwright_get_visible_html", "Playwright_get_visible_text",
+    "Playwright_expect_response", "Playwright_assert_response",
+    # Design tools
+    *DESIGN_TOOL_NAMES,
+    *DESIGN_MCP_TOOL_NAMES,
+}
+
+BASIC_TOOL_NAMES = {
+    "get_weather", "get_system_info", "get_active_window",
+    "suggest_skill", "unified_search", "find_free_port",
+    "web_search_exa", "web_fetch_exa", "web_search_advanced_exa",
+}
+
+TODO_TOOL_NAMES = {
+    "create_todo", "update_todo", "delete_todo", "list_todos",
+}
+
+CALENDAR_TOOL_NAMES = {
+    "create_event", "update_event", "delete_event", "list_events", "query_events",
+}
+
+MEMORY_TOOL_NAMES = {
+    "remember", "recall", "recall_entity", "forget", "delete_entity", "set_status",
+}
+
+CONVERSATION_TOOL_NAMES = {
+    "get_conversations", "get_conversation_history", "query_operations",
+}
+
+SYSTEM_TOOL_NAMES = {
+    "open_application", "close_application",
+    "set_volume", "get_volume",
+    "copy_to_clipboard",
+    "get_system_info", "get_active_window",
+}
+
+FILE_TOOL_NAMES = {
+    "read_file", "write_file", "append_file", "list_directory",
+}
+
+PROJECT_TOOL_NAMES = {
+    "create_project", "resume_project", "list_projects",
+    "update_project_status", "add_project_note",
+    "add_project_task", "update_task_status", "list_project_tasks",
+    "sandbox_start", "sandbox_exec", "sandbox_stop", "sandbox_status",
+    "sandbox_write_file", "sandbox_read_file", "sandbox_delete_file", "sandbox_list_files",
+    "sandbox_sync_from_host", "sandbox_sync_to_host", "list_host_projects",
+}
+
+SCAFFOLD_TOOL_NAMES = {
+    "store_component", "list_stored_components", "get_stored_component",
+    "scaffold_ui_project",
+}
+
+VISUAL_TEST_TOOL_NAMES = {
+    "visual_diff", "check_element", "update_baseline",
+}
+
+DOCUMENT_TOOL_NAMES = {
+    "upload_pdf", "read_pdf", "search_pdfs", "list_pdfs", "delete_pdf", "rename_pdf",
+}
+
+SCREENSHOT_TOOL_NAMES = {
+    "list_screenshots", "get_screenshot", "delete_screenshot",
+}
+
+NOTIFICATION_TOOL_NAMES = {
+    "create_reminder", "list_reminders", "delete_reminder",
+    "capture_page_screenshot",
 }
 
 GIT_TOOL_NAMES = {
@@ -203,15 +448,7 @@ GITHUB_TOOL_NAMES = {
     "search_code", "search_commits", "search_repositories",
 }
 
-SELENIUM_TOOL_NAMES = {
-    "navigate", "get_an_element", "get_direct_children", "get_elements",
-    "click_to_element", "set_value_to_input_element", "take_screenshot",
-    "run_javascript_in_console", "run_javascript_and_get_console_output",
-    "get_console_logs", "get_network_logs", "get_response",
-    "get_style_an_element", "check_page_ready", "local_storage_add",
-    "local_storage_read", "local_storage_remove", "local_storage_read_all",
-    "local_storage_remove_all",
-}
+SELENIUM_TOOL_NAMES = {}  # Replaced by Playwright — kept empty for backward compat
 
 FETCH_TOOL_NAMES = {"fetch"}
 
@@ -223,12 +460,26 @@ OPENCODE_TOOL_NAMES = {
 
 GROUP_SETS = {
     "core": CORE_TOOL_NAMES,
+    "basic": BASIC_TOOL_NAMES,
+    "todo": TODO_TOOL_NAMES,
+    "calendar": CALENDAR_TOOL_NAMES,
+    "memory": MEMORY_TOOL_NAMES,
+    "conversation": CONVERSATION_TOOL_NAMES,
+    "system": SYSTEM_TOOL_NAMES,
+    "file": FILE_TOOL_NAMES,
+    "project": PROJECT_TOOL_NAMES,
+    "scaffold": SCAFFOLD_TOOL_NAMES,
+    "visual_test": VISUAL_TEST_TOOL_NAMES,
+    "document": DOCUMENT_TOOL_NAMES,
+    "screenshot": SCREENSHOT_TOOL_NAMES,
+    "notification": NOTIFICATION_TOOL_NAMES,
     "git": GIT_TOOL_NAMES,
     "github": GITHUB_TOOL_NAMES,
-    "browser": SELENIUM_TOOL_NAMES,
+    "browser": PLAYWRIGHT_TOOL_NAMES,
     "fetch": FETCH_TOOL_NAMES,
     "opencode": OPENCODE_TOOL_NAMES,
     "skill": set(),
+    "design_mcp": DESIGN_MCP_TOOL_NAMES,
 }
 
 
@@ -245,8 +496,8 @@ CONNECTION_HINT = (
 async def _send_json(ws: WebSocket, data: dict):
     try:
         await ws.send_text(json.dumps(data))
-    except WebSocketDisconnect:
-        logger.debug("WS disconnected during send — suppressed")
+    except (WebSocketDisconnect, RuntimeError):
+        pass
     except Exception as e:
         logger.warning("_send_json failed for type=%s: %s", data.get("type", "?"), e)
 
@@ -336,23 +587,56 @@ async def _run_engine(
     skill_manager: SkillManager | None = None,
     pending_suggestion: list | None = None,
     active_skill: list | None = None,
+    query_classifier: QueryClassifier | None = None,
 ):
     now = datetime.now(timezone.utc).astimezone()
-    system = SYSTEM_PROMPT.format(
-        date=now.strftime("%A, %Y-%m-%d %H:%M:%S %Z (%z)")
+
+    intent = query_classifier.classify(user_text, is_first_message=(len(conv.get_context()) <= 1)) if query_classifier else QueryIntent(
+        intent="general",
+        confidence=1.0,
+        requires_llm=True,
+        tool_choice="auto",
+        active_sections=["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "WEATHER"],
+        active_groups=[],
     )
 
+    if not intent.requires_llm and intent.confidence >= 0.6:
+        greeting = "Hello! How can I help you today?"
+        conv.add_message("assistant", greeting)
+        voice_text = _make_voice_text(greeting)
+        await _send_json(ws, {"type": "token", "content": greeting, "voice_content": voice_text})
+        await _send_json(ws, {"type": "done"})
+        return
+
+    _personality_section = ""
     _personality = load_config().get("personality", {})
     if _personality:
-        system += PERSONALITY_INSTRUCTIONS.format(
+        _personality_section = PERSONALITY_INSTRUCTIONS.format(
             tone=_personality.get("default_tone", "neutral"),
             traits=", ".join(_personality.get("traits", [])),
             rules="\n".join(f"- {r}" for r in _personality.get("rules", [])),
         )
-    system += WEATHER_INSTRUCTIONS
-    system += PROJECT_INSTRUCTIONS
-    system += BUILD_MODE_INSTRUCTIONS
-    system += RESEARCH_MODE_INSTRUCTIONS
+
+    sections = {
+        "BASE": SYSTEM_PROMPT.format(date=now.strftime("%A, %Y-%m-%d %H:%M:%S %Z (%z)")),
+        "PERSONALITY": _personality_section,
+        "WEATHER": WEATHER_INSTRUCTIONS,
+        "PROJECT": PROJECT_INSTRUCTIONS,
+        "BUILD": WEBSITE_BUILD_PROTOCOL,
+        "RESEARCH": RESEARCH_MODE_INSTRUCTIONS,
+    }
+    system_parts = []
+    for section_key in intent.active_sections:
+        content = sections.get(section_key)
+        if content:
+            system_parts.append(content)
+    system = "\n".join(p for p in system_parts if p)
+
+    if "BUILD" in intent.active_sections and _BUILD_REQUEST_KEYWORDS.search(user_text):
+        from backend.core.evolution import get_relevant_preferences
+        prefs = get_relevant_preferences(project_type="", project_name="")
+        if prefs:
+            system += "\n" + prefs
 
     if skill_manager:
         descs = skill_manager.get_skill_descriptions()
@@ -445,13 +729,25 @@ async def _run_engine(
 
     loop = asyncio.get_running_loop()
 
-    if selector is not None:
-        allowed_names = selector.select_tool_names(user_text)
-        filtered_tools = [t for t in tools if t["function"]["name"] in allowed_names]
-        if len(filtered_tools) == 0:
-            filtered_tools = tools
-    else:
+    selected_group_names: set[str] = set()
+    for group_name in intent.active_groups:
+        if group_name in GROUP_SETS:
+            selected_group_names.update(GROUP_SETS[group_name])
+
+    filtered_tools = [t for t in tools if t.get("function", t).get("name", "") in selected_group_names]
+
+    if intent.intent == "general" or intent.confidence < 0.5:
+        if selector is not None:
+            selector_names = selector.select_tool_names(user_text)
+            for t in tools:
+                name = t.get("function", t).get("name", "")
+                if name in selector_names and name not in selected_group_names:
+                    filtered_tools.append(t)
+
+    if len(filtered_tools) == 0:
         filtered_tools = tools
+
+    llm_tool_choice = intent.tool_choice if intent.tool_choice in ("none", "auto") else None
 
     if active_skill and skill_manager:
         skill = active_skill[0]
@@ -460,10 +756,12 @@ async def _run_engine(
             if sd not in filtered_tools:
                 filtered_tools.append(sd)
 
+    send_tools = filtered_tools if llm_tool_choice != "none" else []
+
     try:
         def first_call(msgs):
-            logger.info("Calling LLM with %d tools (filtered from %d): %s", len(filtered_tools), len(tools), [t["function"]["name"] for t in filtered_tools])
-            resp = llm.chat(msgs, stream=False, tools=filtered_tools)
+            logger.info("Calling LLM with %d tools (filtered from %d), tool_choice=%s", len(send_tools), len(tools), llm_tool_choice or "default")
+            resp = llm.chat(msgs, stream=False, tools=send_tools, tool_choice=llm_tool_choice)
             resp.raise_for_status()
             data = resp.json()
             logger.info("LLM response choices: %d", len(data.get("choices", [])))
@@ -499,6 +797,7 @@ async def _run_engine(
     MAX_ITERATIONS = 20
     DUPLICATE_LIMIT = 3
     seen_calls: list[tuple] = []
+    tool_calls_log: list[dict] = []
     opencode_used = False
     iteration = 0
 
@@ -506,9 +805,11 @@ async def _run_engine(
         iteration += 1
 
         if iteration > 1:
+            loop_tools = []
             try:
                 def llm_call(msgs):
-                    resp = llm.chat(msgs, stream=False, tools=filtered_tools)
+                    resp = llm.chat(msgs, stream=False, tools=loop_tools,
+                                    tool_choice=llm_tool_choice)
                     resp.raise_for_status()
                     return llm.extract_response(resp)
                 content, tool_calls = await loop.run_in_executor(None, llm_call, messages)
@@ -572,47 +873,17 @@ async def _run_engine(
                     conv.add_message("tool", result, tool_call_id=tool_call_id)
                     await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
 
-                if fn_name == "capture_page_screenshot":
-                    url = fn_args.get("url", "")
-                    if not url:
-                        result = "Error: No URL provided."
-                    else:
-                        try:
-                            await mcp.call_tool("navigate", {"url": url})
-                        except Exception as e:
-                            result = f"navigate error: {e}"
-                            tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
-                            await _send_json(ws, tool_msg)
-                            conv.add_message("tool", result, tool_call_id=tool_call_id)
-                            continue
-                        await asyncio.sleep(1.5)
-                        ss_dir = os.path.join(os.path.dirname(__file__), "..", "..", "screenshots")
-                        os.makedirs(ss_dir, exist_ok=True)
-                        try:
-                            ss_result = await mcp.call_tool("take_screenshot", {"save_path": ss_dir})
-                        except Exception as e:
-                            result = f"screenshot error: {e}"
-                            tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
-                            await _send_json(ws, tool_msg)
-                            conv.add_message("tool", result, tool_call_id=tool_call_id)
-                            continue
-                        import re as _scr
-                        _scr_match = _scr.search(r"Screenshot saved to (.+\.png)", ss_result)
-                        ss_path = _scr_match.group(1) if _scr_match else ""
-                        if ss_path and os.path.exists(ss_path):
-                            ss_store = get_screenshot_store()
-                            saved = ss_store.add_screenshot(ss_path)
-                            if saved:
-                                tool_msg = {
-                                    "type": "tool_call", "name": fn_name,
-                                    "result": f"Screenshot captured at {url}",
-                                    "image_url": f"/screenshots/{saved}",
-                                }
-                                await _send_json(ws, tool_msg)
-                                conv.add_message("tool", f"Screenshot captured at {url}", tool_call_id=tool_call_id)
-                                seen_calls.append((fn_name, json.dumps(fn_args, sort_keys=True), ""))
-                                continue
-                        result = "Screenshot taken but could not be registered in store."
+                if fn_name in ("capture_page_screenshot", "visual_diff", "check_element",
+                               "Playwright_navigate", "Playwright_screenshot", "Playwright_click",
+                               "Playwright_fill", "Playwright_evaluate", "Playwright_console_logs",
+                               "Playwright_get_visible_html", "Playwright_get_visible_text",
+                               "Playwright_expect_response", "Playwright_assert_response"):
+                    if "project_name" not in fn_args:
+                        from backend.core.project_store import get_project_store
+                        _pstore = get_project_store()
+                        _active = _pstore.list_projects(status="active")
+                        if _active:
+                            fn_args["project_name"] = _active[0]["name"]
 
                 if fn_name in OPENCODE_TOOL_NAMES:
                     opencode_used = True
@@ -620,6 +891,8 @@ async def _run_engine(
                 result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
                 if len(result) > MAX_TOOL_RESULT_LENGTH:
                     result = result[:MAX_TOOL_RESULT_LENGTH] + "\n...[truncated]"
+
+                tool_calls_log.append({"function": {"name": fn_name}, "result": result, "args": fn_args})
 
                 if fn_name == "update_task_status" and skill_manager and not (active_skill and active_skill[0]):
                     new_status = fn_args.get("status", "")
@@ -699,36 +972,27 @@ async def _run_engine(
 
                 tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
 
-                if fn_name == "take_screenshot":
-                    import re as _re
-                    _path_match = _re.search(r"Screenshot saved to (.+\.png)", result)
-                    if _path_match:
-                        src_path = _path_match.group(1)
-                    else:
-                        _start = result.find("screenshot_")
-                        if _start != -1:
-                            src_path = result[_start:].split()[0].rstrip(". \n")
-                        else:
-                            src_path = ""
-                    if src_path and os.path.exists(src_path):
-                        ss_store = get_screenshot_store()
-                        saved = ss_store.add_screenshot(src_path)
-                        if saved:
-                            tool_msg["image_url"] = f"/screenshots/{saved}"
-
-                if fn_name == "get_screenshot":
-                    try:
-                        data = json.loads(result)
-                        if "filename" in data:
-                            tool_msg["image_url"] = f"/screenshots/{data['filename']}"
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                try:
+                    _data = json.loads(result)
+                    if isinstance(_data, dict) and "image_url" in _data:
+                        tool_msg["image_url"] = _data["image_url"]
+                        if "path" in _data:
+                            _host_path = os.path.join(
+                                os.path.dirname(__file__), "..", "..", "screenshots",
+                                os.path.basename(_data["path"])
+                            )
+                            if os.path.exists(_host_path):
+                                ss_store = get_screenshot_store()
+                                ss_store.add_screenshot(_host_path)
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
                 await _send_json(ws, tool_msg)
             except Exception as e:
                 logger.exception("Tool '%s' crashed: %s", fn_name, e)
                 await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": f"Internal error: {e}"})
                 conv.add_message("tool", f"Error: {e}", tool_call_id=tool_call_id)
+                tool_calls_log.append({"function": {"name": fn_name}, "result": f"Error: {e}", "error": True})
 
         if not tool_calls:
             break
@@ -743,7 +1007,8 @@ async def _run_engine(
             messages = [{"role": "system", "content": system}] + conv.get_context()
             try:
                 def final_call(msgs):
-                    resp = llm.chat(msgs, stream=False, tools=[])
+                    resp = llm.chat(msgs, stream=False, tools=[],
+                                    tool_choice=llm_tool_choice)
                     resp.raise_for_status()
                     return llm.extract_response(resp)
                 summary, _ = await loop.run_in_executor(None, final_call, messages)
@@ -792,6 +1057,21 @@ async def _run_engine(
                 body=content[:200],
                 category="event_reminder",
             )
+
+        if opencode_used and tool_calls_log:
+            _project_name = ""
+            from backend.core.project_store import get_project_store
+            _pstore = get_project_store()
+            _active_list = _pstore.list_projects(status="active")
+            if _active_list:
+                _project_name = _active_list[0]["name"]
+            run_post_mortem(
+                project_name=_project_name,
+                user_text=user_text,
+                iteration_count=iteration,
+                tool_calls_list=tool_calls_log,
+                opencode_used=opencode_used,
+            )
     except Exception as e:
         logger.exception("Post-loop processing error: %s", e)
 
@@ -827,14 +1107,16 @@ async def chat_websocket(websocket: WebSocket):
     if mcp_servers:
         for name, cfg in mcp_servers.items():
             if cfg.get("lazy"):
-                if name == "selenium":
-                    mcp.add_static_tools(name, SELENIUM_TOOL_DEFINITIONS)
-                elif name == "exa":
+                if name == "exa":
                     mcp.add_static_tools(name, EXA_TOOL_DEFINITIONS)
                 elif name == "fetch":
                     mcp.add_static_tools(name, FETCH_TOOL_DEFINITIONS)
                 elif name == "opencode":
                     mcp.add_static_tools(name, OPENCODE_TOOL_DEFINITIONS)
+                elif name == "ui-layouts":
+                    mcp.add_static_tools(name, UI_LAYOUTS_TOOL_DEFINITIONS)
+                elif name == "magic-ui":
+                    mcp.add_static_tools(name, MAGIC_UI_TOOL_DEFINITIONS)
     mcp_tools = []
     if mcp._sessions:
         try:
@@ -859,6 +1141,7 @@ async def chat_websocket(websocket: WebSocket):
 
     pending_suggestion: list = []
     active_skill: list = []
+    query_classifier = QueryClassifier()
 
     try:
         while True:
@@ -869,7 +1152,8 @@ async def chat_websocket(websocket: WebSocket):
                 await _run_engine(websocket, user_text, conv, llm, tools, mcp, kg,
                                   selector=selector, skill_manager=skill_manager,
                                   pending_suggestion=pending_suggestion,
-                                  active_skill=active_skill)
+                                  active_skill=active_skill,
+                                  query_classifier=query_classifier)
             elif msg.get("type") == "confirm_skill":
                 skill_name = msg.get("name", "")
                 if skill_manager:
@@ -887,7 +1171,8 @@ async def chat_websocket(websocket: WebSocket):
                         await _run_engine(websocket, f"Activate skill: {skill_name}", conv, llm, tools, mcp, kg,
                                           selector=selector, skill_manager=skill_manager,
                                           pending_suggestion=pending_suggestion,
-                                          active_skill=active_skill)
+                                          active_skill=active_skill,
+                                          query_classifier=query_classifier)
                     else:
                         await _send_json(websocket, {"type": "error", "content": f"Skill '{skill_name}' not found"})
                 pending_suggestion.clear()
@@ -911,11 +1196,9 @@ async def chat_websocket(websocket: WebSocket):
         logger.info("WebSocket disconnected")
     except asyncio.CancelledError:
         logger.info("WebSocket task cancelled (client disconnected)")
+    except RuntimeError:
+        logger.info("WebSocket disconnected (RuntimeError)")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
-        try:
-            await _send_json(websocket, {"type": "error", "content": str(e)})
-        except Exception:
-            pass
     finally:
         await mcp.close()

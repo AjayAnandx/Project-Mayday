@@ -89,6 +89,13 @@ class KnowledgeGraph:
                 if val:
                     self._prop_idx[(node["type"], key, val)] = nid
 
+        if node["type"] in ("build_lesson", "preference", "protocol_lesson"):
+            props = node.get("properties", {})
+            for key in ("build_id", "pref_id", "protocol_id"):
+                val = props.get(key)
+                if val:
+                    self._prop_idx[(node["type"], key, val)] = nid
+
     def _unindex_node(self, node: dict):
         nid = node["id"]
         label_lower = node["label"].strip().lower()
@@ -110,6 +117,13 @@ class KnowledgeGraph:
         if node["type"] in ("todo", "event", "conversation"):
             props = node.get("properties", {})
             for key in ("todo_id", "event_id", "conv_id"):
+                val = props.get(key)
+                if val:
+                    self._prop_idx.pop((node["type"], key, val), None)
+
+        if node["type"] in ("build_lesson", "preference", "protocol_lesson"):
+            props = node.get("properties", {})
+            for key in ("build_id", "pref_id", "protocol_id"):
                 val = props.get(key)
                 if val:
                     self._prop_idx.pop((node["type"], key, val), None)
@@ -330,6 +344,11 @@ class KnowledgeGraph:
     def get_node(self, node_id: str) -> dict | None:
         with self._lock:
             return self._nodes.get(node_id)
+
+    def get_nodes_by_type(self, type: str) -> list[dict]:
+        with self._lock:
+            ids = self._type_idx.get(type, set())
+            return [self._nodes[nid] for nid in ids if nid in self._nodes]
 
     def sync_todo(self, todo: dict):
         with self._lock:

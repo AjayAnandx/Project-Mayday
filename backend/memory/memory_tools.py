@@ -62,7 +62,10 @@ def recall(query: str) -> str:
     return "\n".join(lines)
 
 
-def recall_entity(name: str) -> str:
+def recall_entity(name: str = "", entity: str = "") -> str:
+    name = entity or name
+    if not name:
+        return "Missing required parameter: name or entity"
     kg = get_graph()
     exact = _find_exact_node(kg, name)
     if not exact:
@@ -86,7 +89,10 @@ def recall_entity(name: str) -> str:
     return "\n".join(lines)
 
 
-def delete_entity(name: str) -> str:
+def delete_entity(name: str = "", entity: str = "") -> str:
+    name = entity or name
+    if not name:
+        return "Missing required parameter: name or entity"
     kg = get_graph()
     exact = _find_exact_node(kg, name)
     if not exact:
@@ -115,7 +121,12 @@ def forget(entity: str, relation: str | None = None, value: str | None = None) -
     return f"No matching memory found to forget: {entity} --[{relation}]--> {value}"
 
 
-def set_status(name: str, status: str) -> str:
+def set_status(name: str = "", status: str = "", entity: str = "") -> str:
+    name = entity or name
+    if not name:
+        return "Missing required parameter: name or entity"
+    if not status:
+        return "Missing required parameter: status"
     kg = get_graph()
     exact = _find_exact_node(kg, name)
     if not exact:

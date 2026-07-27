@@ -387,8 +387,15 @@ yellow:  '#eab308'
 - [x] **Removed aggressive PDF PRIORITY RULE (Jul 16)**: System prompt told LLM to call `search_pdfs()` for every exam/event/date/personal question. Replaced with passive "PDF content auto-injected" instruction. Auto-context injection already handles PDF content silently.
 - [x] **Port conflict fix (Jul 15)**: NSSM `MaydayBackend` service on 8771 (old code, can't restart w/o admin). Dev backend moved to port 8772. Vite proxy targets 8772. `package.json` dev script updated. `pymupdf` installed.
 - [x] **Streaming stuck bug analysis (Jul 15)**: Root-caused: `_run_engine` may exit without sending `done` when `_send_json` fails (WS drop); frontend `streaming` never resets on reconnect. Fix plan written to `plan.md` for Jul 16.
-- [ ] **Proactive Suggestions — Need to Refine Idea**: Chat shows clickable suggestion chips (upcoming events, overdue todos, recent activity, general prompts) when the chat page is empty.
-- [ ] **Data Export/Import — Need to Refine Idea**: `GET /api/export` + `POST /api/import` blob endpoints for full data backup and restore.
+- [x] **Project folder routing fix (Jul 18)**: Removed `projects/` prefix in `_project_folder()` — all project storage routes to `C:\Users\hp\Projects\madays projects\` from `config.yaml`. Migrated old `projects.json` entries and moved directories.
+- [x] **Website Build Protocol (Jul 18)**: Replaced `BUILD_MODE_INSTRUCTIONS` with `WEBSITE_BUILD_PROTOCOL` — 4-phase flow (Clarify → Research → Design → Build). One-message clarification, then autonomous execution through all phases. See `backend/api/chat.py:111-179`.
+- [x] **Skill auto-loading for website building (Jul 18)**: Added `task_type: research` to deep-research skill (copied from `.agents` to `agent-skills/skills/`). Added `task_type: build` to frontend-ui-engineering skill. Both auto-load when task transitions to `in_progress`.
+- [x] **Design MCP servers (Jul 18)**: Added `@ui-layouts/mcp` (layout generation) and `@magicuidesign/mcp` (UI component generation) to `config.yaml`. Added `@react-bits` registry (`https://reactbits.dev/r/{name}.json`) to the protocol for shadcn-compatible component imports.
+- [x] **Component Store + Scaffold (Jul 18)**: `backend/core/component_store.py` with `store_component`, `list_stored_components`, `get_stored_component` LLM tools. `scaffold_ui_project` creates a complete Vite + React + TS + Tailwind project from stored components in one call. Auto-replaces with shorter component versions. See `backend/core/component_store.py`, `backend/functions/scaffold_functions.py`.
+- [x] **Visual Testing Tools (Jul 18)**: `visual_diff` captures screenshots via Selenium MCP and compares against baselines (SHA-256 hash). `check_element` navigates to a URL and checks for elements by CSS selector or text. Baselines stored in `baselines/`. See `backend/functions/visual_testing.py`.
+- [x] **Live Preview Panel (Jul 18)**: New `Preview` nav item with iframe-based live preview. URL input with Go/Reload, auto-detect from chat via `preview-url` custom event. Loading spinner + error overlay + empty state. See `frontend/src/components/preview/PreviewPanel.tsx`.
+- [x] **Playwright MCP (Jul 18)**: Added `@executeautomation/playwright-mcp-server` to `config.yaml` (lazy) for optional Playwright-based browser testing alongside Selenium.
+- [x] **8 new LLM tools**: `store_component`, `list_stored_components`, `get_stored_component`, `scaffold_ui_project`, `visual_diff`, `check_element`, `update_baseline`, `find_free_port`. All registered in `function_registry.py` and `CORE_TOOL_NAMES`.
 
 ## How to Run
 
@@ -423,7 +430,7 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - Deepgram TTS requires internet access; falls back to browser SpeechSynthesis if unavailable
 - Frontend WebSocket connects on mount — reconnection logic is basic (3s retry)
 - Electron dev mode requires FastAPI running separately; production mode serves built frontend from FastAPI
-- MCP playwright server disabled (npx EPERM on Windows npm cache). Enable in `config.yaml` when running on Linux/macOS or after fixing npm permissions
+- Playwright MCP server available globally as `@executeautomation/playwright-mcp-server` — no npx needed, reference by direct path in config
 - MCP `mcp_server_git` tools require `repo_path` — LLM may need explicit guidance to pass the correct path
 - LLM model `gemma4:31b-cloud` is cloud-proxied — may have higher latency than local models. Set to any `ollama list` model for local inference
 - Chat engine uses non-streaming LLM calls despite streaming infrastructure existing in `LLMClient.stream_tokens()`

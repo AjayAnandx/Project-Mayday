@@ -1,8 +1,12 @@
-# Implementation Plans
+﻿# Implementation Plans
 
 ---
 
 ## MCP Integration — Implementation Complete
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Connect Mayday's LLM tool-calling system to external MCP (Model Context Protocol) servers — filesystem, GitHub, databases, web search, etc. — by adding a client layer that discovers and calls MCP tools alongside the 9 built-in functions.
@@ -109,6 +113,10 @@ See "Iterative Tool Loop" section for the current architecture (replaced this tw
 
 ## Markdown-Powered LLM Output — Implementation Complete
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 Transform raw LLM plain-text responses into well-structured, formatted output using Markdown rendering. LLM responses (bold, lists, code blocks, tables, links) were displayed verbatim as raw syntax — now rendered as styled HTML matching the black/green theme.
 
@@ -154,6 +162,10 @@ Transform raw LLM plain-text responses into well-structured, formatted output us
 ---
 
 ## Knowledge Graph Brain — Implementation Complete
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Unified knowledge graph as Mayday's persistent memory ("brain") — all todos, events, conversations, user preferences, and semantic relationships stored as typed nodes + edges in a local JSON-backed graph. Interactive visualizer in the frontend (4th tab) using Cytoscape.js.
@@ -345,6 +357,10 @@ def build_context(user_text: str, kg: KnowledgeGraph) -> str:
 
 ## Per-Day Conversation Files — Implementation Complete
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 Replace monolithic `data.json` conversation storage with per-day files in a `conversations/` directory for faster date-based queries and reduced file I/O.
 
@@ -384,6 +400,10 @@ conversations/
 ---
 
 ## Selenium MCP Server — Implementation Complete
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Replace the disabled Playwright MCP server (blocked by npx EPERM on Windows) with a pure Python Selenium-based MCP server for browser automation.
@@ -433,6 +453,10 @@ mcp:
 
 ## Knowledge Graph Brain — Implementation Complete
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 - `backend/memory/knowledge_graph.py`
 - `backend/memory/memory_tools.py`
@@ -459,6 +483,10 @@ mcp:
 ---
 
 ## Screenshot Management System — Implementation Complete
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Persistent screenshot storage with metadata index, REST API for listing/deleting, 3 LLM tools (`list_screenshots`, `get_screenshot`, `delete_screenshot`), and automatic image rendering in chat tool-call bubbles.
@@ -521,6 +549,10 @@ take_screenshot → selenium saves to project root
 ---
 
 ## Operation Log (Historical Activity Tracking) — Implementation Complete
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Give Mayday awareness of past CRUD operations — what was created, updated, or deleted, and when — so the LLM can answer questions like "Did I delete any project yesterday?" or "How many meetings did I cancel this month?"
@@ -662,6 +694,10 @@ User: "Show me recent activity"
 
 ## Knowledge Graph CRUD Fixes — Implementation Complete
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 Fix Mayday's memory system so the LLM can properly CRUD knowledge graph entities: prevent data duplication, enable permanent deletion, clean up accumulated junk, and make the LLM aware of its operations.
 
@@ -720,6 +756,10 @@ New session: remember("project:AGI Personal Assistant", ...)
 ---
 
 ## Tier 3 — Richer Daily Use (In Progress)
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Make Mayday useful for real daily workflows with recurring tasks, cross-type search, notifications, and data portability.
@@ -809,7 +849,11 @@ Unified Search is the **single most impactful feature** for making Mayday feel i
 
 ### 3d. Notification & Reminder System — COMPLETED (Jun 19)
 
-#### Goal
+#### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
+### Goal
 Deliver reliable in-app reminder and event notifications to the user without browser permission dependency, WebSocket proxy issues, or silent scheduler crashes.
 
 #### Status — COMPLETED
@@ -883,6 +927,10 @@ Scheduler fires reminder
 
 ## Duplicate Detection for Todos & Events — Implementation Complete
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 Prevent Mayday from creating duplicate todos/events. When the LLM tries to create an item whose title already exists, the system warns the user and blocks creation. Optional `force=True` bypasses the check. Frontend dialogs show inline duplicate warnings as the user types.
 
@@ -943,6 +991,10 @@ Prevent Mayday from creating duplicate todos/events. When the LLM tries to creat
 ---
 
 ## Voice System Rewrite — Implementation Complete (Jun 21, updated Jun 24)
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Replace unreliable Puter.js cloud STT with browser's built-in SpeechRecognition API, fix echo feedback loop, make TTS reliable with proper error handling and fallbacks, integrate Deepgram for STT/TTS.
@@ -1008,6 +1060,10 @@ User speaks → onResult (state=listening, cooldown passed) → accumulate → 1
 ---
 
 ## Exa MCP Search Server — Implementation Complete (Jun 22)
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Add web search and advanced content fetching to Mayday via the Exa AI Search API MCP server, replacing `mcp-server-fetch` as the primary web tool. Provides web search (basic + advanced) and URL content extraction.
@@ -1075,6 +1131,10 @@ mcp:
 ---
 
 ## Deepgram Voice Replacement — COMPLETED (Jun 23)
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Completely remove Puter.js (STT + TTS) and replace with Deepgram STT + TTS. Deepgram API key stays server-side in `config.yaml`. Backend proxies audio/text to Deepgram APIs.
@@ -1175,6 +1235,10 @@ User can interrupt TTS at any time → state → listening → re-captures mic
 ---
 
 ## 2b. System App Control + File Access — IMPLEMENTED (Jun 27)
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Mayday can open/close apps, adjust volume, clipboard, system info, detect the active window, and access files (create, update, view) — no power/shell commands, no file deletion.
@@ -1383,6 +1447,10 @@ The prompt-based JSON approach was unreliable — LLMs often ignored the JSON in
 
 ### What Was Done (archived)
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 When the LLM returns a long answer with markdown, tables, code blocks, the TTS engine reads everything verbatim — slow, awkward, hits voice output limits. Fix by having the LLM output **two texts** every turn:
 - `ui_display_text` — full detailed response for the chat bubble (unchanged)
@@ -1554,6 +1622,10 @@ useEffect(() => {
 
 ## DSA-Powered Search — Implementation Complete (Jun 28)
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 Replace all O(n) substring scans with hash-based n-gram inverted indexes for 50–700× faster search across todos, events, and conversations. Same accuracy (exact substring match with verification), zero fallback needed.
 
@@ -1617,6 +1689,10 @@ All n-gram index tests pass:
 - Trie remove consistency ✓
 
 ## Weather + Location Integration — Implementation Complete (Jun 28)
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Add real-time weather data and user location to Mayday. Users should be able to ask "What's the weather in Chennai?" and get a natural-language forecast. The LLM should proactively check weather when users mention meetings, events, or travel. Location should be automatically resolved via browser geolocation with IP fallback.
@@ -1690,6 +1766,10 @@ Unknown city: "Could not find location" ✓
 
 
 ## Tool Latency Optimization — Implementation Complete (Jul 2)
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Reduce LLM response latency by optimizing tool selection. Replaced 4 brittle keyword regexes with an inverted group index — TF-IDF weighted, BM25 saturation, group-penalty. No new dependencies, no vector DB, no cloud API.
@@ -1845,6 +1925,10 @@ Phase 1 (Quick Wins) ──→ Phase 2 (Embedding) ──→ Phase 3 (KV Cache) 
 ## Project Tracking System — Implementation Complete (Jul 4)
 
 **Status:** COMPLETED — full architecture implemented.
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Replace the current buggy graph-only project tracking with a dedicated store + REST API + opencode MCP wrapper + auto-pause lifecycle + file system integration. Mayday autonomously creates, researches, and builds projects using two complementary tool sets.
@@ -2228,6 +2312,10 @@ Phase 4: Knowledge Graph Sync
 
 ## Iterative Tool Loop — Implementation Complete (Jul 4)
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 
 Replace the two-call architecture (LLM → tools → LLM → text → done) with a Claude Code-style iterative loop where the LLM can call tools repeatedly, see results, self-correct, and only notify the user when a build goal is complete.
@@ -2358,6 +2446,10 @@ When a build completes:
 ---
 
 ## Skills System — Implementation Complete (Jul 4)
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Add an opencode-style skill system: injectable markdown+tool files that teach the LLM how to perform specific tasks. Skills can add new function tools and follow a suggest→confirm→execute flow.
@@ -2550,7 +2642,11 @@ POST /api/import   ←  Accept same JSON blob
 
 ### 5c. Proactive Suggestions
 
-#### Goal
+#### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
+### Goal
 When the chat page is empty or idle, Mayday shows clickable suggestion chips — upcoming events, overdue todos, recent activity, and general prompts — so the user discovers features without being asked.
 
 #### Architecture
@@ -2594,6 +2690,10 @@ Returns JSON array capped at 5 suggestions:
 ---
 
 ## Project Task System + Auto-Skill Loading — Implementation Complete
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 1. **Task tracking for projects**: Break a project into discrete steps (research, plan, build, test) with dependency tracking, status lifecycle, and system prompt visibility.
@@ -3126,6 +3226,10 @@ Phase 5: Dashboard Backend + Frontend (separate, after Phase 1-4) — COMPLETED
 
 ## Dashboard — Implementation Complete (Jul 12)
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 Provide a default landing page that shows the user an overview of their workspace at a glance — stats, upcoming events, recent activity, live weather, and AI news.
 
@@ -3193,6 +3297,10 @@ App.tsx (default: 'dashboard')
 ---
 
 ## Dev Server + Screenshot Testing — Implementation Complete (Jul 12)
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 The LLM builds a frontend project → starts a dev server → uses Selenium to navigate to `localhost` → takes a screenshot → displays it in chat. All automated in the iterative tool loop.
@@ -3414,6 +3522,10 @@ Phase 3: Test
 
 ## Telegram Bot Integration — Implementation Plan (Jul 10)
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 Allow the user to interact with Mayday from Telegram — send messages, create/check todos and events, manage projects, search, get weather, and access all other LLM tools — via a Telegram bot powered by `python-telegram-bot`.
 
@@ -3464,6 +3576,10 @@ Telegram User → Bot API polling
 ---
 
 ## Production Deployment — Implementation Complete (Jul 12)
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
 
 ### Goal
 Run Mayday 24/7 on a Windows laptop and access it from a phone browser anywhere via Tailscale.
@@ -3873,6 +3989,10 @@ Phase 4: Test
 
 ## PDF Document Management — Partial Implementation (Jul 15)
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 Upload PDF documents → extract text with PyMuPDF (fitz) → index for search → query via LLM tools. Fast CPU-native parsing, no OCR needed for text-native PDFs.
 
@@ -4181,6 +4301,10 @@ except Exception:
 
 ## Research Tools (arXiv, Semantic Scholar, Hugging Face) — Need to Refine
 
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
 ### Goal
 Add 3 research-specific tools so the LLM can search academic papers, models, and datasets during research tasks.
 
@@ -4221,3 +4345,732 @@ Add 3 research-specific tools so the LLM can search academic papers, models, and
 - arXiv has ~5min indexing delay for new submissions
 - HF API returns different schemas for models vs datasets vs papers — handle each `type` separately
 - All three should use a timeout (10s default) to avoid hanging the tool loop
+---
+
+## Redesign Protocol — implementation done
+
+### Status - IMPLEMENTED
+
+All changes below are live. See code for current state.
+
+### Goal
+When the user asks Mayday to **redesign** an existing project, Mayday should edit files in-place instead of recreating everything from scratch. Currently the LLM defaults to "opencode_write" (full file rewrite) because the protocol lacks edit-first guidance and "redesign" isn't a recognized trigger.
+
+### Root Cause
+1. "redesign X" is not listed in the REBUILD trigger words (line 241) — falls through to BUILD protocol which creates fresh
+2. REBUILD says "opencode_write / opencode_edit to make changes" with no preference — LLM defaults to write
+3. "opencode_edit" only replaces first occurrence, no fuzzy error hints — LLM finds it brittle
+4. No system prompt rule says "read first, edit surgically, only write for new files"
+
+### Changes
+
+| Action | File | Change |
+|--------|------|--------|
+| EDIT | backend/api/chat.py:241 | Add "redesign X", "change X", "modify X" to REBUILD trigger words |
+| EDIT | backend/api/chat.py | Insert REDESIGN sub-protocol after REBUILD section (after R7) |
+| EDIT | backend/api/chat.py:102 | Add edit-preference rule to PROJECT_INSTRUCTIONS |
+| EDIT | backend/assistant/mcp_server_opencode.py:305-318 | Enhance opencode_edit with replace_all param + fuzzy error hints |
+| EDIT | backend/assistant/function_registry.py | Update opencode_edit tool definition schema to include new params |
+
+### Protocol Text to Add
+
+After the REBUILD section (after line 267), insert:
+
+REDESIGN (when user says "redesign X", "change the look of X", "make X look better", "overhaul X"):
+D0. resume_project(name) — load existing project, get file list via opencode_glob
+D1. READ FIRST: Before touching any file, read every file you plan to change with opencode_read.
+    You MUST understand the existing code — structure, imports, styling approach.
+D2. EDIT OVER WRITE: For existing files, ALWAYS prefer opencode_edit over opencode_write.
+    - opencode_edit(old_string, new_string) for: color/class changes, prop additions,
+      layout tweaks, component replacements, adding features
+    - Use replace_all=true in opencode_edit when the same pattern changes everywhere
+    - Use opencode_write ONLY when adding a brand-new file or replacing >80% of content
+D3. PRESERVE STRUCTURE: Do NOT recreate vite.config.ts, tsconfig.json, package.json,
+    index.html, or src/index.css unless intentionally changing the build setup.
+D4. PRESERVE IMPORTS: Keep existing imports unless unused. Add new imports alongside.
+D5. BUILD & VERIFY: Same as R4-R7 in REBUILD protocol.
+
+### PROJECT_INSTRUCTIONS Addition
+
+After line 102, add:
+- When modifying an existing project, ALWAYS read the file first (opencode_read),
+  then edit surgically with opencode_edit. Only use opencode_write for NEW files
+  or when >80% of a file needs to change.
+
+### opencode_edit Enhancement
+
+In mcp_server_opencode.py:305-318, add new params:
+- replace_all (bool, default false): when true, replaces ALL occurrences
+- slice [start,end] line range: restrict replacement to a line region
+- On old_string not found: use difflib.get_close_matches() to suggest 3 closest lines
+
+### Sequence Flow
+
+User: "redesign my portfolio"
+  -> chat.py detects "redesign" -> REDESIGN protocol activates
+  -> LLM: resume_project("portfolio")
+  -> LLM: opencode_glob -> reads all project files
+  -> LLM: opencode_edit for each targeted change
+  -> LLM: opencode_write only for NEW components
+  -> LLM: npm install + tsc + screenshot -> verify
+  -> Final summary to user
+
+
+
+---
+
+## Master Genesis â€” Autonomous Website Evolution
+
+### Status - PLANNED
+
+### Goal
+Mayday should get progressively better at creating websites with every build â€” autonomously. After each build, it runs a self-retrospective, extracts structured lessons, stores them as preferences, and those preferences automatically shape the next build. A compounding improvement cycle that doesn't require manual teaching.
+
+`
+Build 1 -> Retrospective -> Store Lessons -> Build 2 (better) -> Retrospective -> ...
+                          ^                                                |
+                          +------- Preferences auto-injected in context ----+
+`
+
+### Architecture
+
+New KG node types:
+
+| Type | Purpose | Fields |
+|------|---------|--------|
+| uild_lesson | Per-build retrospective | project_type, what_worked, what_failed, user_corrections, score, iterations, errors |
+| preference | Cross-project learned rule | category, project_type, 
+ule, confidence, source_builds |
+| protocol_lesson | Protocol improvement | 	rigger_build, efore, fter, impact |
+| component_rank | Component evolution | component_name, uses, pass_rate, project_types, last_used |
+
+### Phase 1: Build Post-Mortem
+
+After every build (post-iterative-loop in chat.py), auto-run a retrospective:
+
+`python
+def run_post_mortem(project_name: str, iteration_count: int, errors: list, corrections: list, conv: ConversationManager):
+    """Analyze the build and extract structured lessons."""
+    - Pull operations log entries for this project
+    - Count: iterations used, tool calls, errors, retries, duplicate detections
+    - Check verification results: tsc pass/fail, build pass/fail, screenshot rendered/failed
+    - Extract user corrections from tool results (e.g., "no, use shadcn")
+    - Compute build score: ratio of passes to total checks
+    - Store structured build_lesson node in KG
+    - Call extract_preferences() to update cross-project preferences
+`
+
+**Stored as:**
+`
+Node: build_lesson
+  project_type: "portfolio"
+  what_worked: ["shadcn Card component", "GSAP hero animation"]
+  what_failed: ["lucide-react icons on mobile"]
+  user_corrections: ["use inline SVGs instead"]
+  build_score: 0.85
+  iterations_used: 12
+  errors_encountered: ["TS2307: module not found"]
+  timestamp: "2026-07-21T..."
+`
+
+**Files to modify:**
+| File | Change |
+|------|--------|
+| ackend/api/chat.py (post-loop) | Call 
+un_post_mortem() after build completes |
+| ackend/core/evolution.py | **CREATE** â€” 
+un_post_mortem(), preference extraction, auto-injection logic |
+| ackend/memory/knowledge_graph.py | Add uild_lesson, preference, protocol_lesson node type handler |
+
+### Phase 2: Automatic Preference Extraction
+
+From accumulated uild_lesson nodes, auto-derive cross-project preferences:
+
+`python
+def extract_preferences() -> list[dict]:
+    """Scan all build_lesson nodes and derive cross-project preferences."""
+    1. Group by project_type (portfolio, landing, dashboard, etc.)
+    2. Collect all what_worked entries -> frequency rank -> "preferred patterns"
+    3. Collect all what_failed entries -> frequency rank -> "anti-patterns"
+    4. Deduplicate user_corrections -> "hard preferences"
+    5. Score each preference by (confirmations / total_builds_of_type)
+    6. Store as preference nodes in KG
+`
+
+**Auto-injected into build context before every new build:**
+`
+### Learned Preferences (from N past builds):
+Project type: portfolio
+  âœ“ Preferred: shadcn Card components for project grids (confirmed 4x)
+  âœ“ Preferred: green accent (#22c55e) on dark backgrounds (confirmed 3x)
+  âœ— Avoid: lucide-react icons (too small on mobile - use inline SVGs) (corrected 2x)
+  âœ— Avoid: Tailwind v3 @tailwind directives in v4 projects (caused blank page 3x)
+`
+
+No explicit 
+ecall() needed â€” these are automatically present in the system prompt.
+
+**Injection point:** In chat.py, when WEBSITE_BUILD_PROTOCOL or REDESIGN protocol is about to be injected, prepend relevant preferences filtered by project_type.
+
+### Phase 3: Component Store Evolution
+
+Auto-curate the component store based on build outcomes:
+
+- **Rank by usage**: component_rank node records each use + build outcome
+- **Deduplicate**: merge components with similar names/tags, keep the variant with highest pass rate
+- **Tag by project type**: when a component succeeds in 3+ portfolio builds, tag project_type: portfolio
+- **Auto-flag**: components that caused TS errors or blank pages get 
+eeds_review: true
+- **Auto-reject**: components that fail visual diff twice in a row get deprecated
+
+### Phase 4: Protocol Self-Improvement
+
+Mayday writes protocol_lessons.md to its own config directory after each build:
+
+`markdown
+# Build Protocol Evolution - auto-generated
+
+## Lesson: Blank page on build #12
+- Cause: missing @tailwindcss/vite in vite.config.ts
+- Fix: Added CRITICAL rule in BUILD protocol step 3b
+- Result: 0 blank pages in last 5 builds (100% fix rate)
+
+## Preference: shadcn Card for portfolio
+- Confirmed across 4 portfolio builds
+- Auto-injected preference with confidence 0.8
+- Component tagged as project_type:portfolio
+`
+
+After sufficient lessons accumulate, Mayday dynamically adjusts its own protocol:
+- Adds new verification steps for known failure patterns
+- Removes steps that never catch issues (reduce overhead)
+- Reorders phases based on average time-to-complete data
+
+### Phase 5: Master Genesis â€” Predictive Intelligence
+
+With 20+ build retrospectives, Mayday reaches "master" level:
+
+| Capability | Description |
+|-----------|-------------|
+| Pattern discovery | "Dashboard projects typically need 12-15 iterations, portfolio needs 8-10" |
+| Predictive component selection | "For portfolio -> shadcn Card + Framer Motion + inline SVGs" (90% confidence) |
+| Auto-skill generation | Writes a custom SKILL.md for each project type embedding all learned preferences |
+| Cross-project transfer | "The animation approach that worked for portfolio also works for landing pages" |
+| Early warning | "This project is following the same error pattern as build #7 â€” recommend checking X first" |
+
+### Implementation Priority
+
+| Step | What | Effort | Dependencies |
+|------|------|--------|-------------|
+| 1 | ackend/core/evolution.py â€” post_mortem() + extract_preferences() | Medium | KG node types |
+| 2 | Wire post_mortem() call after iterative loop in chat.py | Small | Step 1 |
+| 3 | Auto-inject preferences into build context | Small | Step 1 |
+| 4 | Component store auto-curation | Medium | Step 1 + component_store.py |
+| 5 | Protocol lessons store + self-edit | Medium | Steps 1-3 |
+| 6 | Master predictive layer (pattern discovery across 20+ builds) | Large | Steps 1-5 |
+
+
+---
+
+## Intelligent Tool Calling + Input Context Optimization â€” Need to Refine
+
+### Status â€” PLANNED
+
+### Problem
+Every user message â€” even "hello" â€” sends ~100K chars to the LLM:
+- 20.6K system prompt (including BUILD protocol, RESEARCH instructions, etc.)
+- 76.6K tool definitions (95 static tools)
+- 79% of the payload is tool definitions the LLM must parse and then ignore
+
+This wastes tokens AND confuses the LLM with irrelevant tools, causing wrong tool calls for simple queries.
+
+### Core Principle
+Sending fewer irrelevant tools and less irrelevant context improves BOTH latency AND accuracy:
+- Less noise â†’ LLM makes sharper tool decisions
+- No tool defs for simple queries â†’ no wrong tool calls
+- Relevant context only â†’ focused, higher quality responses
+
+### Architecture
+
+`
+User message
+    |
+    v
++----------------------------------------------+
+|  Query Classifier  (sub-ms, regex-based)      |
+|  Returns: intent, confidence, sections[],     |
+|           groups[], tool_choice               |
++------------------+---------------------------+
+                   |
+          +--------+--------+
+          v                  v
+    +-------------+    +----------------------+
+    | Low-cost    |    | Standard path         |
+    | path        |    | (tools + prompt)      |
+    |             |    |                       |
+    | no LLM      |    | ToolSelector selects  |
+    | or tools=[] |    | sub-groups by intent  |
+    +-------------+    +----------------------+
+                                |
+                                v
+                      +-----------------------+
+                      | Prompt Builder         |
+                      | includes sections     |
+                      | by intent only         |
+                      +-----------------------+
+`
+
+### Component 1: Query Classifier (new file)
+
+**ackend/core/query_classifier.py**
+
+Priority-ordered, regex-based, sub-millisecond classification:
+
+`python
+@dataclass
+class QueryIntent:
+    intent: str               # greeting | simple_qa | todo | calendar | memory |
+                              # project | system | file | weather | build | research | general
+    confidence: float         # 0.0 - 1.0
+    requires_llm: bool        # False for greetings
+    tool_choice: str          # "none" | "auto"
+    active_sections: list[str]  # which prompt sections to include
+    active_groups: list[str]    # which tool groups to activate
+`
+
+Classification priority (highest to lowest):
+
+| Priority | Intent | Trigger Examples | Sections | Tools | tool_choice |
+|----------|--------|-----------------|----------|-------|-------------|
+| 1 | build | "build website", "scaffold", "create project" | ALL | 25-30 | auto |
+| 2 | research | "research X", "investigate", "find out about" | ALL | full | auto |
+| 3 | project | "update task", "resume project", "add note" | +PROJECT | 15-20 | auto |
+| 4 | todo | "create todo", "list tasks", "remind" | +TODO | 10-12 | auto |
+| 5 | calendar | "add event", "what's on", "schedule" | +CALENDAR | 10-12 | auto |
+| 6 | memory | "remember", "recall", "forget" | +MEMORY | 8-10 | auto |
+| 7 | system | "open chrome", "volume up" | +SYSTEM | 15-18 | auto |
+| 8 | weather | "weather", "forecast", "rain" | +WEATHER | 6-8 | auto |
+| 9 | simple_qa | "what time", "who are you", "date" | BASE | 5 basic | none |
+| 10 | greeting | "hi", "hello", "thanks", "bye" | - | - | no LLM |
+| 11 | general | everything else | FULL | ALL | auto |
+
+Safeguards:
+- If confidence < 0.5 and priority is low: upgrade to next higher priority
+- If no patterns match: general (full context, all tools â€” same as today)
+- First message in a conversation always gets general (safe start)
+
+### Component 2: Tool Sub-Groups (modify existing)
+
+Split CORE_TOOL_NAMES (75 tools, always sent) into focused sub-groups:
+
+| Group | Tools | Trigger keywords |
+|-------|-------|-----------------|
+| basic | get_weather, get_system_info, get_active_window, suggest_skill | Always active (5 tools) |
+| todo | create_todo, list_todos, update_todo, delete_todo, check_duplicates | "todo", "task", "remind" |
+| calendar | create_event, list_events, update_event, delete_event, query_events | "event", "calendar", "schedule" |
+| memory | remember, recall, recall_entity, forget, delete_entity, set_status | "remember", "forget", "memory" |
+| conversation | get_conversations, get_conversation_history, query_operations | "conversation", "history" |
+| system | open_application, close_application, set/get_volume, copy_to_clipboard, get_system_info, get_active_window | "open app", "volume", "clipboard" |
+| file | read_file, write_file, append_file, list_directory | "read file", "write file", "list" |
+| project | create_project, resume_project, list_projects, update_project_status, add_project_note, add_project_task, update_task_status, list_project_tasks | "project", "task" |
+| scaffold | store_component, list_stored_components, get_stored_component, scaffold_ui_project, find_free_port | "scaffold", "component" |
+| visual_test | visual_diff, check_element, update_baseline | "visual", "diff", "test" |
+| document | upload_pdf, read_pdf, search_pdfs, list_pdfs, delete_pdf, rename_pdf | "pdf", "document", "upload" |
+| screenshot | list_screenshots, get_screenshot, delete_screenshot | "screenshot" |
+| notification | remind, capture_page_screenshot | "remind", "notify" |
+| design_mcp | search_components, get_source_code, get_docs, listRegistryItems, getRegistryItem, searchRegistryItems | "design", "layout", "component" |
+
+Impact per query type:
+
+| Query | Today: tools sent | After: tools sent | Tokens saved |
+|-------|------------------|-------------------|-------------|
+| "hello" | 75 core + 20 MCP = 95 | 5 basic = 5 | ~95% |
+| "what time is it" | 95 | 5 basic = 5 | ~95% |
+| "create a todo" | 95 | 5 basic + 5 todo = 10 | ~89% |
+| "add an event" | 95 | 5 basic + 5 calendar = 10 | ~89% |
+| "build a website" | 95 | 5 basic + 8 project + 5 scaffold + 7 opencode = 25 | ~74% |
+
+### Component 3: Conditional System Prompt (modify prompt assembly)
+
+System prompt sections and their sizes:
+
+| Section | Chars | Include when intent is... |
+|---------|-------|--------------------------|
+| SYSTEM_PROMPT | 1,562 | Always |
+| PERSONALITY | 2,687 | Always |
+| WEATHER | 588 | weather, general |
+| PROJECT_INSTRUCTIONS | 2,682 | project, build, general |
+| WEBSITE_BUILD_PROTOCOL | 10,857 | build only |
+| RESEARCH_MODE | 2,167 | research only |
+| SKILL_DESCRIPTIONS | 125 | Always |
+
+Intent-based system prompt sizes:
+
+| Intent | Sections included | Chars | vs Today (20,668) |
+|--------|------------------|-------|-------------------|
+| greeting | Base + Personality | 4,249 | -79% |
+| simple_qa | Base + Personality | 4,249 | -79% |
+| todo | Base + Personality + Project | 6,931 | -66% |
+| calendar | Base + Personality + Project | 6,931 | -66% |
+| weather | Base + Personality + Weather | 4,837 | -77% |
+| build | Base + Personality + Project + Build | 17,788 | -14% |
+| research | Base + Personality + Project + Build + Research | 19,955 | -3% |
+| general | ALL (same as today) | 20,668 | 0% |
+
+### Component 4: Tool Description Shortening (no quality loss)
+
+Current average description: 131 chars. Target: 50-60 chars.
+
+Examples of safe shortening:
+
+| Tool | Current | Shortened | Saved |
+|------|---------|-----------|-------|
+| delete_todo | "Delete a todo by ID" | "Delete a todo" | 40% |
+| open_application | "Open or launch a desktop application by name. Searches Start Menu, PATH, Registry, common install dirs." | "Open a desktop app by name (searches Start Menu, PATH, Registry)" | 45% |
+| remember | "Store a fact or relationship in long-term memory. The entity is the subject, relation connects it to the value." | "Store a fact (entity to relation to value) in long-term memory" | 50% |
+| design_generate_component | 352 chars | ~120 chars | 66% |
+
+Estimated total saving: ~38K chars (50% of 76.6K tool defs)
+
+### Component 5: Tool Choice + Streaming
+
+tool_choice parameter support in llm_client.py:
+
+| Intent | tool_choice | Effect |
+|--------|------------|--------|
+| greeting | No LLM call | 0 latency |
+| simple_qa | "none" | LLM sees tools but won't call them |
+| todo/calendar | "auto" | Default - LLM decides |
+| build/research | "auto" | Default - LLM decides |
+
+Streaming for non-tool responses: Switch to streaming mode when no tools are expected. Perceived latency drops from "wait 4s for full response" to "see first token in 500ms."
+
+### Component 6: Iterative Loop Tool Cache
+
+After iteration 1 of the build loop, the LLM already has all tool definitions in context. For iterations 2+:
+- Send tools=[] instead of re-sending all 25-30 tools
+- Tool calls still work - the LLM remembers tool schemas from context
+- Only re-send if a new skill was activated mid-loop
+
+Saves ~20K tokens per iteration x up to 20 iterations = up to 380K tokens per build.
+
+### Safety Net: Graceful Degradation
+
+| Failure Mode | Behavior | Impact |
+|-------------|----------|--------|
+| Classifier returns empty | Fall back to general (full context, all tools) | Same as today |
+| Confidence < 0.5 | Upgrade to next higher priority intent | Slightly more context |
+| Tool group selector returns empty | All tools passed to LLM (current behavior) | Same as today |
+| Multiple intents match | Use highest priority match | Build > research > project > ... > simple |
+
+### Expected Combined Impact
+
+| Query | Today | After | Latency | Quality |
+|-------|-------|-------|---------|---------|
+| "hello" | 5s, 25K tokens | 10ms, 0 tokens (cached) | 99.8% faster | Same |
+| "what time" | 5s, 25K tokens | 1.5s, 1.5K tokens | 70% faster | Same |
+| "create a todo" | 6s, 25K tokens | 3s, 3K tokens | 50% faster | Same |
+| "add event" | 6s, 25K tokens | 3s, 3K tokens | 50% faster | Same |
+| "build website" | 20s, 25Kx20 iters | 12s, 10Kx1 + 0Kx19 iters | 40% faster | Same |
+| "general question" | 6s, 25K tokens | 4s, 15K tokens | 33% faster | Same |
+
+### Implementation Order
+
+| Step | What | Effort | Impact |
+|------|------|--------|--------|
+| 1 | Query Classifier - create query_classifier.py with all patterns | Small | Foundation |
+| 2 | Tool sub-groups - split CORE_TOOL_NAMES, add to GROUP_SETS | Medium | -93% tool tokens for simple queries |
+| 3 | Conditional prompt - use intent to decide which sections to include | Medium | -79% system prompt for simple queries |
+| 4 | Tool description shortening - trim all 95 tool descriptions | Medium | -50% across all tool defs |
+| 5 | tool_choice + streaming - add to llm_client.py | Small | -40% latency for simple_qa |
+| 6 | Iterative loop cache - send tools=[] after iteration 1 | Small | -90% tokens in build iterations |
+
+### Files Summary
+
+| Action | File | Change |
+|--------|------|--------|
+| CREATE | backend/core/query_classifier.py | QueryIntent dataclass + priority-ordered classification |
+| MODIFY | backend/api/chat.py | Split CORE_TOOL_NAMES into sub-groups; conditional system prompt assembly; route through classifier |
+| MODIFY | backend/api/chat.py GROUP_SETS | Add new sub-groups alongside existing git/github/browser/fetch/opencode |
+| MODIFY | backend/assistant/llm_client.py | Add tool_choice param + streaming mode |
+| MODIFY | backend/assistant/function_registry.py | Shorten all 75 tool descriptions by ~50% |
+| MODIFY | backend/assistant/exa_tools.py | Shorten 3 tool descriptions |
+| MODIFY | backend/assistant/playwright_tools.py | Shorten 10 tool descriptions |
+| MODIFY | backend/assistant/mcp_server_opencode.py | Shorten 7 tool descriptions |
+
+---
+
+## Research Store — Need to Refine
+
+### Status — PLANNED
+
+### Goal
+A dedicated **Research Store** system (mirroring the `ProjectStore` pattern) for conducting structured deep research with configurable depth, automatic paper discovery/download, citation management, and multi-format output generation (Markdown reports, Word docs, PowerPoint decks, infographics).
+
+### Conceptual Architecture
+
+```
+LLM Tool Call
+     │
+     ▼
+┌──────────────────────────────────────────────────────────┐
+│  ResearchStore (backend/core/research_store.py)           │
+│  - Singleton, JSON-backed (research.json), thread-safe    │
+│  - CRUD for research projects                             │
+│  - Paper management (add, update, delete, search)           │
+│  - Finding/note management                                │
+│  - Auto-sync to Knowledge Graph + Operation Log           │
+└──────────┬───────────────────────────────────────────────┘
+           │
+     ┌─────┴─────┬──────────────┬────────────────┐
+     ▼           ▼              ▼                ▼
+┌──────────┐ ┌────────┐ ┌──────────────┐ ┌────────────────┐
+│ Paper     │ │ Report  │ │ Infographic  │ │ REST API        │
+│ Downloader│ │ Gen.    │ │ Gen.         │ │ (api/research)  │
+│           │ │         │ │              │ │                 │
+│ arXiv/URL │ │ MD/DOCX │ │ matplotlib   │ │ List/Create/    │
+│ → PDF     │ │ /PPTX   │ │ → PNG        │ │ Export/Delete   │
+└──────────┘ └────────┘ └──────────────┘ └────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────┐
+│  Frontend (react/research/)          │
+│  - ResearchPanel (list + search)     │
+│  - ResearchDetail (papers + findings)│
+│  - ResearchDialog (create)           │
+│  - Nav: "Research" tab (BookOpen)    │
+└──────────────────────────────────────┘
+```
+
+### Data Model
+
+```json
+{
+  "id": "res_" + uuid4.hex[:12],
+  "topic": "Quantum Computing in Drug Discovery",
+  "slug": "quantum-computing-in-drug-discovery",
+  "type": "technical",
+  "depth": 3,
+  "status": "active",
+  "created_at": "2026-07-24T10:00:00",
+  "updated_at": "2026-07-24T14:30:00",
+  "summary": "Executive summary written by LLM after research completes...",
+  "research_questions": [
+    "What quantum algorithms exist for molecular simulation?",
+    "Which pharma companies are investing in QC?"
+  ],
+  "papers": [
+    {
+      "id": "pap_abc123",
+      "title": "Quantum advantage in drug discovery: a review",
+      "url": "https://arxiv.org/abs/1234.56789",
+      "doi": "10.1234/example",
+      "authors": ["Smith, J.", "Jones, A."],
+      "source": "arxiv",
+      "citation": "Smith, J., & Jones, A. (2026). Quantum advantage...",
+      "citation_style": "apa",
+      "downloaded": true,
+      "local_path": "research/quantum-computing/papers/abc123.pdf",
+      "notes": "Key review covering NISQ algorithms",
+      "relevance": 0.92,
+      "added_at": "2026-07-24T11:00:00"
+    }
+  ],
+  "findings": [
+    {
+      "id": "fin_def456",
+      "content": "Quantum annealing shows promise for protein folding up to 100 amino acids",
+      "paper_id": "pap_abc123",
+      "confidence": "medium",
+      "created_at": "2026-07-24T12:00:00"
+    }
+  ],
+  "sources": [
+    {
+      "url": "https://example.com/article",
+      "title": "Web article title",
+      "type": "webpage",
+      "accessed_at": "2026-07-24T10:30:00"
+    }
+  ],
+  "generated_outputs": [
+    {
+      "id": "out_xyz",
+      "path": "research/quantum-computing/report.md",
+      "format": "md",
+      "generated_at": "2026-07-24T14:00:00"
+    }
+  ],
+  "conversation_ids": ["conv_..."],
+  "graph_node_id": "node_..."
+}
+```
+
+### Depth Levels
+
+| Level | Name | Sources | Approach |
+|-------|------|---------|----------|
+| 1 | Quick | 3–5 | Web search, summarize key points |
+| 2 | Standard | 5–10 | Multi-source validation, basic citations, 1–2 papers |
+| 3 | Deep | 10–20 | Parallel sub-agents, paper downloads, snowball references, organized findings |
+| 4 | Comprehensive | 20+ | Full academic workflow, all papers downloaded, multi-format export (MD+DOCX+PPTX+infographic) |
+
+### Files to Create/Modify
+
+#### New Backend Core Files
+
+| File | Purpose |
+|------|---------|
+| `backend/core/research_store.py` | **ResearchStore** — Singleton, JSON-backed (`research.json`), thread-safe. CRUD for research projects, papers, findings. Graph sync + operation log. |
+| `backend/core/paper_downloader.py` | `download_from_arxiv(url)` — parse arxiv ID, httpx GET PDF to `research/{slug}/papers/`. `download_from_url(url)` — generic PDF download with content-type validation. SHA-256 dedup. |
+| `backend/core/report_generator.py` | `generate_markdown(research)` — full report with sections. `generate_docx(research)` — python-docx styled document. `generate_pptx(research)` — python-pptx slide deck. `generate_infographic(research, chart_type)` — matplotlib chart saved as PNG. |
+
+#### New Backend Functions
+
+| File | Purpose |
+|------|---------|
+| `backend/functions/research_functions.py` | 9 LLM-callable functions (see below) |
+
+#### New REST API
+
+| File | Purpose |
+|------|---------|
+| `backend/api/research.py` | REST endpoints (see below) |
+
+#### New Frontend Files
+
+| File | Purpose |
+|------|---------|
+| `frontend/src/types/research.ts` | TypeScript interfaces |
+| `frontend/src/hooks/useResearch.ts` | React hook for CRUD + export |
+| `frontend/src/components/research/ResearchPanel.tsx` | Main list page with search, status badges, depth indicator |
+| `frontend/src/components/research/ResearchDetail.tsx` | Full detail view: papers table, findings list, export buttons |
+| `frontend/src/components/research/ResearchDialog.tsx` | Create form: topic, type dropdown, depth slider, research questions |
+
+#### Modified Files
+
+| File | Change |
+|------|--------|
+| `backend/assistant/function_registry.py` | Import 9 functions, add 9 tool definitions, register in FUNCTION_MAP |
+| `backend/api/chat.py` | Add `RESEARCH_TOOL_NAMES` set, add to `CORE_TOOL_NAMES` + `GROUP_SETS` |
+| `backend/main.py` | Register `research.py` router |
+| `config.yaml` | Add `data.research_path` to configure `research.json` location |
+| `requirements.txt` | Add `python-docx`, `python-pptx`, `matplotlib`, `Pillow` |
+| `frontend/src/components/layout/Sidebar.tsx` | Add `research` to `Page` type, add nav item with `BookOpen` icon |
+| `frontend/src/App.tsx` | Add routing for `research` page |
+
+### LLM Functions (`research_functions.py`)
+
+| Function | Params | Description |
+|----------|--------|-------------|
+| `create_research` | `topic`, `type` (11 types), `depth` (1–4), `questions[]?` | Start new research project, create store entry + graph node |
+| `resume_research` | `topic` | Load full research context: summary, papers, findings, outputs |
+| `list_research` | `status?` | List all research projects with depth/status badges |
+| `update_research_status` | `topic`, `status` | active / paused / completed |
+| `add_paper` | `topic`, `title`, `url`, `authors?`, `notes?` | Add paper reference + auto-download PDF if arXiv/PDF URL |
+| `add_finding` | `topic`, `content`, `paper_title?`, `confidence` (high/medium/low) | Record a finding with optional citation link to a paper |
+| `generate_report` | `topic`, `format` (md/docx/pptx) | Generate and save a formatted report to outputs folder |
+| `generate_infographic` | `topic`, `chart_type` (bar/pie/line), `metric?` | Generate matplotlib infographic PNG |
+| `research_deep_dive` | `topic`, `follow_up_questions[]` | Continue research with follow-up questions, discover more papers |
+
+### REST API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/research` | List (filter by `status`, `q` search) |
+| `POST` | `/api/research` | Create new research |
+| `GET` | `/api/research/{id}` | Detail with papers + findings + outputs |
+| `PUT` | `/api/research/{id}` | Update summary / status |
+| `DELETE` | `/api/research/{id}` | Delete research + graph cleanup |
+| `POST` | `/api/research/{id}/papers` | Add paper (auto-download if arXiv/PDF) |
+| `POST` | `/api/research/{id}/findings` | Add finding |
+| `POST` | `/api/research/{id}/export?format=md\|docx\|pptx` | Generate report → return file download |
+| `POST` | `/api/research/{id}/infographic?chart_type=bar\|pie\|line` | Generate infographic → return PNG |
+
+### Integration with Existing Infrastructure
+
+| System | How it integrates |
+|--------|-------------------|
+| **Knowledge Graph** | Research → `concept` node with `type:research`; papers → `concept` with `type:paper`; findings → `concept` with `type:finding`. Edges: `has_paper`, `has_finding`, `has_output`. |
+| **Operation Log** | Every create/update/delete recorded with `entity_type="research"` |
+| **Project Store** | Research can optionally be linked to a Project (e.g. a `research` type task auto-links a ResearchStore entry) |
+| **Exa MCP Search** | `web_search_exa` / `web_search_advanced_exa` used during research (LLM calls these naturally) |
+| **Existing Research Tools** | `search_arxiv`, `search_semantic_scholar`, `search_huggingface` (from `research_tools.py`) feed papers into the Research Store's paper list |
+| **Deep-Research Skill** | Auto-loaded when depth >= 3, provides parallel fan-out + citation discipline workflow |
+| **Dashboard** | Research stats count + latest active research shown in dashboard |
+
+### Example LLM Workflow
+
+```
+User: "Research quantum computing in drug discovery at depth 3"
+
+LLM:
+1. create_research(topic="quantum computing drug discovery", type="technical", depth=3)
+2. → web_search_exa("quantum computing drug discovery 2026") → multiple results
+3. → search_arxiv("quantum computing drug discovery") → paper list
+4. → search_semantic_scholar("quantum drug discovery") → more papers + citations
+5. → add_paper(topic=..., url=..., title=...) x5 (auto-downloads arXiv PDFs)
+6. → add_finding(topic=..., content=..., paper_title=..., confidence=...) xN
+7. → generate_report(topic=..., format="md") → full markdown report
+8. → generate_report(topic=..., format="docx") → Word document
+9. → generate_report(topic=..., format="pptx") → PowerPoint deck
+10. → generate_infographic(topic=..., chart_type="bar") → findings chart PNG
+11. → update_research_status(topic=..., status="completed")
+12. Final summary to user with links to all generated outputs
+```
+
+### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| arXiv PDF download fails (404) | Log error, mark paper `downloaded: false`, return URL for manual access |
+| arXiv API rate-limited | Catch HTTP 429, exponential backoff, return partial results |
+| Semantic Scholar rate-limited | Catch HTTP 429, return "rate limited, try again in 30s" |
+| Paper URL is not a PDF and not arXiv | Store citation + URL, mark `downloaded: false` (no auto-download) |
+| python-docx / python-pptx not installed | `generate_report` returns MD fallback with clear error about missing dependency |
+| matplotlib fails to render | Return text-based data summary instead |
+| Depth 1 with no web results | Return "Could not find sources — try depth 2 or rephrase topic" |
+| Research with same topic exists | Alert user, offer to resume existing research instead of creating duplicate |
+| User adds paper but DOI/URL is invalid | Store with `downloaded: false`, flag for manual correction |
+
+### Dependencies
+
+```
+# requirements.txt — add:
+python-docx>=1.1.0          # Word document generation
+python-pptx>=1.0.0          # PowerPoint generation
+matplotlib>=3.8.0           # Infographic charts
+Pillow>=10.0.0              # Image processing for infographics
+```
+
+### Implementation Order
+
+```
+Phase 1: Core Backend
+  ├── backend/core/research_store.py     ResearchStore (CRUD, papers, findings, outputs)
+  ├── backend/core/paper_downloader.py   arXiv + URL PDF downloader
+  └── backend/core/report_generator.py   MD + DOCX + PPTX + infographic generator
+
+Phase 2: LLM Layer
+  ├── backend/functions/research_functions.py   9 LLM-callable functions
+  ├── backend/assistant/function_registry.py    Import + 9 tool defs + FUNCTION_MAP
+  └── backend/api/chat.py                       Add RESEARCH_TOOL_NAMES + group
+
+Phase 3: REST API
+  ├── backend/api/research.py             9 REST endpoints
+  └── backend/main.py                     Register router
+
+Phase 4: Frontend
+  ├── frontend/src/types/research.ts      TypeScript interfaces
+  ├── frontend/src/hooks/useResearch.ts   React hook
+  ├── frontend/src/components/research/ResearchPanel.tsx
+  ├── frontend/src/components/research/ResearchDetail.tsx
+  └── frontend/src/components/research/ResearchDialog.tsx
+
+Phase 5: Integration
+  ├── frontend/src/components/layout/Sidebar.tsx    Add nav item
+  ├── frontend/src/App.tsx                          Add routing
+  ├── config.yaml                                   Add research_path
+  └── requirements.txt                              Add deps
+```
+

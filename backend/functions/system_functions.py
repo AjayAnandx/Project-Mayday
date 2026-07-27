@@ -7,6 +7,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from backend.core.config import load_config
+
 logger = logging.getLogger(__name__)
 
 _KNOWN_APPS: dict[str, list[str]] = {
@@ -337,6 +339,14 @@ _FILE_WHITELIST = [
     Path.home() / "Desktop",
     Path.cwd(),
 ]
+
+# Add projects_dir from config if configured
+_cfg = load_config()
+_cfg_dir = _cfg.get("data", {}).get("projects_dir", "")
+if _cfg_dir:
+    _cfg_path = Path(_cfg_dir).resolve()
+    if _cfg_path not in _FILE_WHITELIST:
+        _FILE_WHITELIST.append(_cfg_path)
 
 
 def _is_path_allowed(path: Path) -> bool:

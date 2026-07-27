@@ -38,8 +38,9 @@ class ScreenshotStore:
             return None
         filename = os.path.basename(src_path)
         dest = os.path.join(SCREENSHOTS_DIR, filename)
-        shutil.copy2(src_path, dest)
-        os.remove(src_path)
+        if os.path.normpath(src_path) != os.path.normpath(dest):
+            shutil.copy2(src_path, dest)
+            os.remove(src_path)
         entry = {
             "filename": filename,
             "timestamp": datetime.now().isoformat(),

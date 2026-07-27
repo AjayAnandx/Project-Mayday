@@ -1,0 +1,110 @@
+=== MANUAL TEST PLAN — Mayday Intelligent Tool Calling + Input Context ===
+
+Greeting shortcuts (no LLM call → instant response):
+  [ ] "hello"              → instant "Hello! How can I help you today?"
+  [ ] "hi"                 → instant greeting
+  [ ] "hey"                → instant greeting
+  [ ] "good morning"       → instant greeting
+  [ ] "thanks"             → instant greeting
+  [ ] "bye"                → instant greeting
+  [ ] "what's up"          → instant greeting
+
+Simple QA (tool_choice=none → no tools sent, faster):
+  [ ] "what time is it"    → LLM answers without calling any tools
+  [ ] "what date is today" → LLM answers without calling tools
+  [ ] "who are you"        → LLM answers without calling tools
+  [ ] "how are you"        → LLM answers without calling tools
+  [ ] "can you help me"    → LLM answers without calling tools
+
+Todo CRUD:
+  [ ] "create a todo buy milk"     → creates todo, shows tool_call + summary
+  [ ] "list all todos"             → calls list_todos
+  [ ] "mark task as done"          → calls update_todo
+  [ ] "delete todo"                → calls delete_todo
+
+Calendar:
+  [ ] "create an event meeting tomorrow at 3pm"  → creates event
+  [ ] "what's on my calendar"                     → lists events
+  [ ] "add event dentist on Friday"               → creates event
+
+Memory:
+  [ ] "remember that I prefer dark mode"          → stores memory
+  [ ] "what do you know about me"                 → recalls memories
+  [ ] "forget dark mode preference"               → forgets
+  [ ] "tell me about project X"                   → recall_entity
+
+PDF document functions (with alias params):
+  [ ] upload_pdf(file_path="...", filename="test.pdf")
+  [ ] read_pdf(pdf_id="<id>")                     → should work (alias!)
+  [ ] read_pdf(doc_id="<id>")                     → should work (original)
+  [ ] delete_pdf(pdf_id="<id>")                   → should work (alias!)
+  [ ] delete_pdf(doc_id="<id>")                   → should work (original)
+  [ ] rename_pdf(pdf_id="<id>", new_filename="new.pdf")
+
+Memory entity functions (with alias params):
+  [ ] recall_entity(entity="project X")           → should work (alias!)
+  [ ] recall_entity(name="project X")             → should work (original)
+  [ ] delete_entity(entity="old project")          → should work (alias!)
+  [ ] set_status(entity="project X", status="paused") → should work (alias!)
+
+System commands:
+  [ ] "open chrome"          → calls open_application
+  [ ] "what's my volume"    → calls get_volume
+  [ ] "set volume to 50"    → calls set_volume
+  [ ] "system info"         → calls get_system_info
+
+Weather:
+  [ ] "weather in London"           → calls get_weather
+  [ ] "weather"                     → calls get_weather (default location)
+
+Project management:
+  [ ] "create project test project"               → create_project
+  [ ] "list projects"                             → list_projects
+  [ ] "resume project test project"               → resume_project
+  [ ] "add task to test project: research phase"  → add_project_task
+  [ ] "update task status to completed"           → update_task_status
+
+Build/Scaffold:
+  [ ] "build a landing page"       → classifier detects "build" intent
+  [ ] "scaffold a website"         → classifier detects "build" intent
+  [ ] "create a react app"         → classifier detects "build" intent
+
+Research:
+  [ ] "research TypeScript vs Python"    → classifier detects "research"
+  [ ] "find out about quantum computing" → classifier detects "research"
+
+General fallback (all tools available):
+  [ ] "what is the meaning of life"      → general, all groups available
+  [ ] "tell me a joke"                   → general, all groups available
+
+Iterative loop tool cache (tools=[] after iteration 1):
+  [ ] Start a build project with multiple steps
+  [ ] Verify subsequent iterations DON'T send tool definitions again
+  [ ] Verify tool calls still work (LLM remembers from context)
+
+Conditional prompt verification:
+  [ ] "hello" → system prompt ~4.2K chars (BASE + Personality only)
+  [ ] "create todo" → system prompt ~6.9K chars (BASE + Personality + Project)
+  [ ] "build website" → system prompt ~17.8K chars (BASE + Personality + Project + Build)
+  [ ] "weather" → system prompt ~4.8K chars (BASE + Personality + Weather)
+  [ ] "general question" → system prompt ~20.7K chars (all sections)
+
+WebSocket error handling:
+  [ ] Disconnect mid-response → no warning logs (silent suppress)
+  [ ] Rapid send/receive during disconnect → no crash
+
+Edge cases:
+  [ ] Empty message → handled gracefully
+  [ ] Very long message → handled gracefully
+  [ ] Multiple intents → highest priority wins (build > research > project > ...)
+  [ ] Gibberish input → classified as "general" (safe fallback)
+  [ ] First message in session → always classified as "general" (safe start)
+
+
+
+opencode_bash
+Command not allowed: try { (Invoke-WebRequest -Uri http://localhost:5174 -UseBasi...
+opencode_bash
+Command not allowed: dir /S /B ajay-portfolio...
+opencode_bash
+Command not allowed: type tsc_out.txt...

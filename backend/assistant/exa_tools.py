@@ -1,7 +1,7 @@
 EXA_TOOL_DEFINITIONS = [
     {
         "name": "web_search_exa",
-        "description": "Search the web for any topic and get clean, ready-to-use content with citations. Use this for general web searches, current events, finding information, news, and research. Returns structured results with titles, URLs, and content snippets.",
+        "description": "Search the web for any topic, returns structured results with citations.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -26,7 +26,7 @@ EXA_TOOL_DEFINITIONS = [
     },
     {
         "name": "web_fetch_exa",
-        "description": "Get the full content of one or more webpages from known URLs. Use this when you need to read articles, documentation pages, or any webpages in full detail. Returns page content as clean text.",
+        "description": "Fetch full content of one or more webpages from known URLs.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -52,7 +52,7 @@ EXA_TOOL_DEFINITIONS = [
     },
     {
         "name": "web_search_advanced_exa",
-        "description": "Advanced web search with full control over filters, domains, date ranges, and content options. Use for targeted research, filtering by specific sites, date ranges, getting summaries or highlights, and searching within specific categories.",
+        "description": "Advanced web search with domain/date/category filters and highlight control.",
         "parameters": {
             "type": "object",
             "properties": {
