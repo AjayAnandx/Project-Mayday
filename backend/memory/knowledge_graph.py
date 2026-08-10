@@ -587,6 +587,19 @@ class KnowledgeGraph:
                 return self._nodes[nid]
             return None
 
+    def set_node_type(self, node_id: str, type: str) -> bool:
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None:
+                return False
+            if node["type"] == type:
+                return True
+            self._unindex_node(node)
+            node["type"] = type
+            self._index_node(node)
+            self._save()
+            return True
+
     def repair_graph(self) -> dict:
         with self._lock:
             report = {"junk_scraped": 0, "projects_scraped": [], "errors": []}
@@ -600,6 +613,15 @@ class KnowledgeGraph:
                 if n["type"] == "project" and n["label"] in project_labels:
                     scraped_ids.add(nid)
                     report["projects_scraped"].append(n["label"])
+            re_typed = 0
+            for n in list(self._nodes.values()):
+                if n["type"] == "project" and n["label"].strip().lower().startswith("research:"):
+                    self._unindex_node(n)
+                    n["type"] = "research"
+                    self._index_node(n)
+                    re_typed += 1
+            if re_typed:
+                report["research_retyped"] = re_typed
             for nid in scraped_ids:
                 self._unindex_node(self._nodes[nid])
                 self._nodes[nid]["properties"]["status"] = "scraped"

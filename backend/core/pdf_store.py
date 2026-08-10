@@ -70,6 +70,11 @@ class PDFStore:
                     return {"status": "duplicate", **existing}
 
             import fitz
+            if not file_bytes.lstrip(b"\xef\xbb\xbf\x00\xff").startswith(b"%PDF"):
+                raise ValueError(
+                    "Not a valid PDF (missing %PDF header). If you have markdown, "
+                    "convert it with convert_md_to_pdf first, then upload the result."
+                )
             doc_id = uuid.uuid4().hex[:12]
             pdf_path = self._pdf_path(doc_id)
             with open(pdf_path, "wb") as f:

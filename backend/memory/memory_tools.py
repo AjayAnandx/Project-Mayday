@@ -1,7 +1,7 @@
 from backend.core.operation_log import get_operation_log
 from backend.memory.knowledge_graph import get_graph
 
-_PREFIXES = ("project:", "tag:", "date:", "concept:")
+_PREFIXES = ("project:", "research:", "tag:", "date:", "concept:")
 
 
 def _find_exact_node(kg, name: str) -> dict | None:

@@ -38,6 +38,15 @@ export interface SearchDocumentResult {
   snippet: string
 }
 
+export interface SearchResearchResult {
+  id: string
+  kind: 'topic' | 'note' | 'report' | 'artifact'
+  topic: string
+  slug: string
+  filename: string
+  snippet: string
+}
+
 export interface SearchResults {
   todos: SearchTodoResult[]
   events: SearchEventResult[]
@@ -45,4 +54,5 @@ export interface SearchResults {
   graph_nodes: SearchGraphResult[]
   operations: SearchOperationResult[]
   documents: SearchDocumentResult[]
+  research: SearchResearchResult[]
 }

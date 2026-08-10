@@ -113,7 +113,6 @@ mayday/
 │   │   │   ├── brain/                # Graph visualization
 │   │   │   ├── dashboard/            # Statistics widgets
 │   │   │   ├── documents/            # PDF viewer
-│   │   │   ├── preview/              # Live preview iframe
 │   │   │   ├── search/               # Ctrl+K search overlay
 │   │   │   ├── voice/                # Voice mode UI
 │   │   │   └── ui/                   # Shared primitives (Button, Input, Modal, etc.)

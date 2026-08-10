@@ -19,7 +19,7 @@ See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (
 | Styling | Tailwind CSS (black + green custom palette) |
 | Desktop | Electron (BrowserWindow + FastAPI subprocess) |
 | Backend | FastAPI + uvicorn |
-| Data | Todos/events in `data.json`; conversations in per-day files under `conversations/`; operations in per-month files under `operations/` |
+| Data | Todos/events in `data.json`; conversations in per-day files under `conversations/`; operations in per-month files under `operations/`; research store at `data.research_path` (config.yaml) with topics under `topics\{slug}\` (notes/*.md + outputs/) |
 | Chat streaming | WebSocket (`/ws/chat` — token-by-token) |
 | LLM | Ollama local — `gemma4:31b-cloud` |
 | STT | Web Speech API `SpeechRecognition` (frontend, on-device, primary) |
@@ -39,8 +39,8 @@ See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (
 - Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
 - **Dashboard** is the default landing page (stats summary, upcoming events, recent activity, weather widget, AI news feed)
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
-- 45 built-in function tools: 8 project/task + 5 todo/event CRUD + 2 event query + 5 memory + 2 conversation + 3 screenshot + 3 notifications/reminder + 3 misc (set_status, suggest_skill, capture_page_screenshot) + 11 system/file + query_operations + unified_search + get_weather
-- MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`), Selenium browser (`mcp-server-selenium`), opencode wrapper (`mcp_server_opencode` — bash, write, read, edit, glob, grep, stop)
+- 60+ built-in function tools: 8 project/task + 5 todo/event CRUD + 2 event query + 5 memory + 2 conversation + 3 screenshot + 3 notifications/reminder + 3 misc (set_status, suggest_skill, capture_page_screenshot) + 11 system/file + query_operations + unified_search + get_weather + 11 sandbox + 5 scaffold/component + 3 visual testing + 8 browser/playwright
+- MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`), Selenium browser (`mcp-server-selenium`), opencode wrapper (`mcp_server_opencode` — bash, write, read, edit, glob, grep, stop), UI design (`@ui-layouts/mcp`, `@magicuidesign/mcp`), Playwright browser (`@executeautomation/playwright-mcp-server`)
 - Tool selection: Inverted group index (TF-IDF weighted, BM25 saturation, group-penalty) — replaces 4 hand-written keyword regexes; **92.2% precision, 90.8% recall**, <<0.01ms per query
 - `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
 - `mcp_server_git` — 12 tools for local git operations (status, log, diff, commit, branch)
@@ -86,6 +86,13 @@ mayday/
 │   │   ├── operation_log.py          # Per-month operation log (indexed, thread-safe)
 │   │   ├── search_index.py           # Hash-based n-gram index + trie + TF-IDF ranker
 │   │   ├── tool_selector.py          # Inverted group index for LLM tool selection
+│   │   ├── project_runner.py         # Isolated subprocess sandbox per project (allowlist, PID tracking)
+│   │   ├── sandbox.py                # 11 sandbox LLM tools wrapping ProjectRunner
+│   │   ├── component_store.py        # Reusable UI component CRUD (JSON-backed)
+│   │   ├── dev_monitor.py            # HTTP health pinger + auto-restart for dev servers
+│   │   ├── evolution.py              # Post-build iteration analysis (ops log + graph)
+│   │   ├── query_classifier.py       # Regex intent classifier for query routing
+│   │   ├── local_playwright.py       # Direct Playwright wrapper (navigate, screenshot, interact)
 │   ├── memory/
 │   │   ├── __init__.py
 │   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
@@ -96,13 +103,23 @@ mayday/
 │   │   ├── mcp_manager.py            # MCP stdio connection, tool discovery, dispatch
 │   │   ├── exa_tools.py              # Static tool defs for 3 Exa search/fetch tools
 │   │   ├── skill_manager.py           # SkillManager — scan SKILL.md files, registry, apply
+│   │   ├── playwright_runner.py       # Thin adapter delegating to local_playwright
+│   │   ├── playwright_tools.py        # Static tool defs for 7 Playwright actions
 │   │   └── memory/
 │   │       └── conversation_manager.py  # Context window (last 20 messages)
 │   ├── functions/
 │   │   ├── todo_functions.py         # Todo CRUD implementations
 │   │   ├── calendar_functions.py     # Event CRUD + search implementations
 │   │   ├── document_functions.py     # PDF upload/read/search/list/delete/rename + project copy
-│   │   └── system_functions.py       # System control + file access tools (11 tools)
+│   │   ├── system_functions.py       # System control + file access tools (11 tools)
+│   │   ├── browser_functions.py      # Selenium/Playwright browser tools for LLM
+│   │   ├── scaffold_functions.py     # UI scaffold + component store tools
+│   │   ├── visual_testing.py         # Visual diff + element check tools
+│   │   └── research_functions.py     # Research CRUD + notes + search + promote LLM tools
+│   ├── core/
+│   │   ├── research_store.py         # ResearchStore (config-path JSON store, topic notes/promote/graph sync)
+│   │   ├── research_index.py         # Folder-level NgramIndex/SearchRanker over topics + notes + artifacts
+│   │   └── report_generator.py       # Markdown report builder + chart JSON generator
 │   └── voice/
 │       ├── router.py                 # Voice REST + WebSocket endpoints
 │       ├── deepgram_stt.py           # Deepgram STT WebSocket relay
@@ -192,6 +209,8 @@ mayday/
 ├── screenshots/                     # Screenshot images + index.json
 ├── operations/                      # Per-month operation log files
 │   └── YYYY-MM.json                 # All operations from that month
+├── docker/
+│   └── Dockerfile                   # Playwright sandbox container for project builds
 ├── docs/
 │   └── adr.md                       # Architecture Decision Record (15 decisions)
 ├── plan.md                          # MCP integration plan
@@ -242,6 +261,15 @@ mayday/
 | `GET` | `/api/dashboard/ai-news` | AI news from Exa API (cached 1h) |
 | `GET` | `/api/voice/status` | Backend voice status (STT/TTS engine info) |
 | `POST` | `/api/voice/transcribe` | Upload audio blob for transcription (stub) |
+| `GET` | `/api/research` | List research records (filter `?status=&type=&q=`) |
+| `POST` | `/api/research` | Create research record |
+| `GET` | `/api/research/types` | Research type + status catalogs |
+| `GET` | `/api/research/:topic` | Research record detail |
+| `PUT` | `/api/research/:topic/status` | Update research status (draft/active/completed/archived) |
+| `POST` | `/api/research/:topic/data-points` | Add data point with source URL |
+| `POST` | `/api/research/:topic/notes` | Add note to research record |
+| `GET` | `/api/research/:topic/notes` | List notes |
+| `POST` | `/api/research/promote` | Promote research → project (moves topic/file to project dir, archives record) |
 
 ### WebSocket
 | Path | Description |
@@ -393,9 +421,14 @@ yellow:  '#eab308'
 - [x] **Design MCP servers (Jul 18)**: Added `@ui-layouts/mcp` (layout generation) and `@magicuidesign/mcp` (UI component generation) to `config.yaml`. Added `@react-bits` registry (`https://reactbits.dev/r/{name}.json`) to the protocol for shadcn-compatible component imports.
 - [x] **Component Store + Scaffold (Jul 18)**: `backend/core/component_store.py` with `store_component`, `list_stored_components`, `get_stored_component` LLM tools. `scaffold_ui_project` creates a complete Vite + React + TS + Tailwind project from stored components in one call. Auto-replaces with shorter component versions. See `backend/core/component_store.py`, `backend/functions/scaffold_functions.py`.
 - [x] **Visual Testing Tools (Jul 18)**: `visual_diff` captures screenshots via Selenium MCP and compares against baselines (SHA-256 hash). `check_element` navigates to a URL and checks for elements by CSS selector or text. Baselines stored in `baselines/`. See `backend/functions/visual_testing.py`.
-- [x] **Live Preview Panel (Jul 18)**: New `Preview` nav item with iframe-based live preview. URL input with Go/Reload, auto-detect from chat via `preview-url` custom event. Loading spinner + error overlay + empty state. See `frontend/src/components/preview/PreviewPanel.tsx`.
-- [x] **Playwright MCP (Jul 18)**: Added `@executeautomation/playwright-mcp-server` to `config.yaml` (lazy) for optional Playwright-based browser testing alongside Selenium.
 - [x] **8 new LLM tools**: `store_component`, `list_stored_components`, `get_stored_component`, `scaffold_ui_project`, `visual_diff`, `check_element`, `update_baseline`, `find_free_port`. All registered in `function_registry.py` and `CORE_TOOL_NAMES`.
+- [x] **Sandbox + Project Runner**: `backend/core/project_runner.py` manages isolated subprocess sandboxes per project slug (command allowlist, destructive pattern blocking, PID tracking). `backend/core/sandbox.py` wraps it with 11 LLM tools (`sandbox_start`, `sandbox_exec`, `sandbox_stop`, `sandbox_status`, `sandbox_write/read/delete/list_files`, `sandbox_sync_from/to_host`, `list_host_projects`). Docker sandbox container at `docker/Dockerfile` for containerized builds. See `backend/core/project_runner.py`, `backend/core/sandbox.py`.
+- [x] **Tool argument repair (Aug 10)**: `dispatch_call` now auto-repairs sloppy LLM tool calls — param aliases (`project`→`name`, `file_name`→`filename`, `title`→`filename`, `topic_name`→`topic`), unknown kwargs stripped, per-tool defaults (`add_project_note`/`add_research_note` filename→`notes.md`, `create_research` type→`market`). On failure, returns an actionable error listing expected params so the iterative loop self-corrects. `create_project` gained a `description` param (stored on the project record); WEBSITE_BUILD_PROTOCOL updated to match. See `backend/assistant/function_registry.py`, `backend/test_dispatch_repair.py` (13 tests).
+- [x] **Query Classifier (Jul 18)**: `backend/core/query_classifier.py` uses regex-based intent matching to classify queries into categories (build, research, debug, etc.) with confidence scores, activating relevant prompt sections and tool groups.
+- [x] **Evolution System (Jul 18)**: `backend/core/evolution.py` runs post-build iteration analysis — aggregates operation log entries and knowledge graph data to log build outcomes, errors, and tool usage for iterative improvement.
+- [x] **Dev Monitor (Jul 18)**: `backend/core/dev_monitor.py` periodically HTTP-pings dev server URLs and auto-restarts them (via ProjectRunner) up to 3 times on failure, tracking restart count and last command.
+- [x] **Local Playwright (Jul 18)**: `backend/core/local_playwright.py` provides a direct Playwright wrapper (sync API) for browser automation — navigate, screenshot, click, fill, get_text, get_html, evaluate. Exposed as LLM tools via `backend/assistant/playwright_runner.py` and `backend/assistant/playwright_tools.py`. See `backend/core/local_playwright.py`.
+- [x] **Playwright MCP (Jul 18)**: Added `@executeautomation/playwright-mcp-server` to `config.yaml` (lazy) for optional Playwright-based browser testing alongside Selenium.
 
 ## How to Run
 
@@ -448,6 +481,7 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 | `date` | `#525252` (dark gray) | Ellipse |
 | `project` | `#f59e0b` (amber) | Rounded rectangle |
 | `personality` | `#ec4899` (pink) | Ellipse |
+| `research` | `#14b8a6` (cyan) | Ellipse |
 
 ## Relevant Files
 - `frontend/tailwind.config.js`: Black/green color palette
@@ -465,7 +499,7 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `frontend/src/services/api.ts`: Typed REST client
 - `backend/api/chat.py`: WebSocket endpoint with LLM streaming + tool dispatch
 - `backend/assistant/llm_client.py`: Ollama HTTP client
-- `backend/assistant/function_registry.py`: 43 tool definitions + dispatch (9 todo/event + 5 memory + 3 screenshot + 4 conversation/operations + 3 reminders + `suggest_skill` + `capture_page_screenshot` + 11 system/file + 8 project/task)
+- `backend/assistant/function_registry.py`: 43 tool definitions + dispatch (9 todo/event + 5 memory + 3 screenshot + 4 conversation/operations + 3 reminders + `suggest_skill` + `capture_page_screenshot` + 11 system/file + 8 project/task). `dispatch_call` auto-repairs sloppy LLM args: `_PARAM_ALIASES`, `_TOOL_DEFAULTS`, unknown-kwarg stripping, actionable errors listing expected params
 - `backend/assistant/exa_tools.py`: Static tool definitions for 3 Exa search/fetch tools
 - `config.yaml`: Shared config (Ollama, voice, server)
 - `plan.md`: MCP integration architecture and implementation plan
@@ -509,3 +543,22 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `frontend/src/hooks/useDocuments.ts`: Document CRUD + search hook
 - `frontend/src/components/documents/DocumentPanel.tsx`: Document list with viewer modal
 - `frontend/src/types/document.ts`: TypeScript interfaces for documents
+- `backend/core/project_runner.py`: Subprocess sandbox manager (allowlist, PID tracking, dev servers)
+- `backend/core/sandbox.py`: 11 sandbox LLM tools (start/exec/stop/status/file ops/sync/host projects)
+- `backend/core/component_store.py`: Reusable UI component CRUD (JSON-backed)
+- `backend/core/dev_monitor.py`: Dev server health pinger + auto-restart
+- `backend/core/evolution.py`: Post-build iteration analysis
+- `backend/core/query_classifier.py`: Regex intent classifier for query routing
+- `backend/core/local_playwright.py`: Direct Playwright wrapper (navigate, screenshot, interact)
+- `backend/assistant/playwright_runner.py`: Thin Playwright adapter for LLM dispatch
+- `backend/assistant/playwright_tools.py`: Static tool defs for 7 Playwright actions
+- `backend/functions/browser_functions.py`: Browser automation LLM tools
+- `backend/functions/scaffold_functions.py`: UI scaffold + component store LLM tools
+- `backend/functions/visual_testing.py`: Visual diff + element check LLM tools
+- `backend/core/research_store.py`: ResearchStore — config-path JSON store (`data.research_path`), topics under `topics\{slug}\` with `notes/*.md` + `outputs/`, graph `research:` nodes, promote-to-project, legacy migration
+- `backend/core/research_index.py`: Folder-level NgramIndex/SearchRanker over topic metadata + notes/report/artifact full text (auto-rebuild on store save)
+- `backend/core/report_generator.py`: Markdown report builder + chart JSON generator
+- `backend/functions/research_functions.py`: 12 LLM tools for research (create/resume/list/update_status/add_data_point/add_entity/add_finding/generate_report/generate_chart/add_research_note/list_research_notes/search_research/promote_research_to_project)
+- `backend/api/research.py`: REST endpoints for research records + notes + promote
+- `backend/test_research_store.py`: 10 tests — mocked store/config/op-log, zero repo pollution
+- `backend/test_dispatch_repair.py`: 13 tests — tool-call argument repair (aliases, defaults, unknown-kwarg stripping, actionable errors) via `dispatch_call`

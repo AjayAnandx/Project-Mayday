@@ -21,5 +21,7 @@ export interface WsResponse {
   name?: string
   result?: string
   image_url?: string
+  artifact_url?: string
+  artifact_title?: string
   conversation?: Conversation
 }

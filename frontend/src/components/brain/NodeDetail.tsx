@@ -9,6 +9,9 @@ const typeColors: Record<string, string> = {
   conversation: 'bg-overlay0 text-text',
   tag: 'bg-orange-500 text-crust',
   date: 'bg-overlay1 text-text',
+  project: 'bg-amber-500 text-crust',
+  research: 'bg-cyan-500 text-crust',
+  document: 'bg-purple-500 text-white',
 }
 
 interface NodeDetailProps {

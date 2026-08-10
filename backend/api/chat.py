@@ -20,7 +20,6 @@ from backend.assistant.function_registry import (
 )
 from backend.assistant.mcp_manager import MCPManager
 from backend.assistant.playwright_tools import PLAYWRIGHT_TOOL_DEFINITIONS, PLAYWRIGHT_TOOL_NAMES
-from backend.assistant.exa_tools import EXA_TOOL_DEFINITIONS
 from backend.assistant.fetch_tools import FETCH_TOOL_DEFINITIONS
 from backend.assistant.mcp_server_opencode import STATIC_TOOL_DEFINITIONS as OPENCODE_TOOL_DEFINITIONS
 from backend.assistant.skill_manager import get_skill_manager, SkillManager
@@ -47,7 +46,7 @@ You also have web search tools available:
 Rule of thumb: complex → Exa tools, simple URL fetch → fetch tool.
 Do not say you lack access. You have the tools.
 Be concise, helpful, and friendly. When you use a tool, explain what you did.
-You also have PDF document tools: list_pdfs, search_pdfs, read_pdf, upload_pdf, delete_pdf, rename_pdf.
+You also have PDF document tools: list_pdfs, search_pdfs, read_pdf, upload_pdf, delete_pdf, rename_pdf. To create a real PDF from a markdown file, use convert_md_to_pdf (never write markdown with a .pdf extension).
 Relevant PDF content is automatically injected into your context when appropriate — use search_pdfs() only when you need to find something specific in uploaded documents.
 Current date and time (your local timezone): {date}"""
 
@@ -99,6 +98,7 @@ PROJECT_INSTRUCTIONS = """
 - To LIST active projects, call list_projects(status="active"). Filters: active, paused, scrapped.
 - To UPDATE status, call update_project_status(name, status). Valid statuses: active, paused, scrapped.
 - To add research notes, call add_project_note(name, filename, content). This writes a .md to the project folder.
+- To add notes for a RESEARCH TOPIC (create_research), call add_research_note(topic, filename, content) — this writes to the topic's notes folder under the Mayday Research folder, NOT to a project folder. Use search_research(query) to find previously researched topics; promote_research_to_project(topic) turns a research topic into a full project.
 - Projects auto-pause after 30 days of no activity.
 - Conversation IDs are auto-linked to the project — no need to call remember() for that.
 - To BUILD code, use opencode tools (opencode_write, opencode_bash, opencode_read, opencode_edit, opencode_glob, opencode_grep).
@@ -128,7 +128,7 @@ Ask ALL of these in a single response. NEVER ask questions one at a time.
 4. Features: Must-have functionality? (booking, forms, gallery, payment, auth, animated sections, etc.)
 5. Content: Do you have text/images/logos ready, or should I use placeholders?
 
-After user answers → create_project(name, description) → add 3 chained tasks:
+After user answers → create_project(name, description="<what the user wants built>") → add 3 chained tasks:
   CRITICAL: You MUST call create_project() BEFORE any sandbox tools. Without a project store entry, the project has no memory and no graph node.
   add_project_task(project, "Research", "research", description="Research phase")
   add_project_task(project, "Design", "general", depends_on=[research_task_id], description="Design phase")
@@ -311,6 +311,7 @@ When the user says "research &lt;topic&gt;", "investigate", "find out about", "l
 9. ITERATE — If new questions or leads emerge during research, add follow-up tasks automatically.
 
 - Always include a description (goal/problem statement) when creating research tasks.
+- create_research(type=...) accepts: market, technical, financial, sales, business, academic, competitive, product, domain, person_org, legal, trend, community. Omit type for a general market-style research.
 - For complex research: break into multiple sub-tasks with depends_on so each piece can be tackled in order.
 - After each sub-task completes, check what's next via list_project_tasks or get_active_task.
 - Document findings as .md files in the project folder so results persist.
@@ -364,6 +365,13 @@ CORE_TOOL_NAMES = {
     "Playwright_fill", "Playwright_evaluate", "Playwright_console_logs",
     "Playwright_get_visible_html", "Playwright_get_visible_text",
     "Playwright_expect_response", "Playwright_assert_response",
+    # Research tools
+    "create_research", "resume_research", "list_research",
+    "update_research_status", "add_data_point", "add_entity",
+    "add_finding", "generate_report", "generate_chart",
+    "generate_combined_report",
+    "add_research_note", "list_research_notes",
+    "search_research", "promote_research_to_project",
     # Design tools
     *DESIGN_TOOL_NAMES,
     *DESIGN_MCP_TOOL_NAMES,
@@ -422,6 +430,16 @@ VISUAL_TEST_TOOL_NAMES = {
 
 DOCUMENT_TOOL_NAMES = {
     "upload_pdf", "read_pdf", "search_pdfs", "list_pdfs", "delete_pdf", "rename_pdf",
+    "convert_md_to_pdf",
+}
+
+RESEARCH_TOOL_NAMES = {
+    "create_research", "resume_research", "list_research",
+    "update_research_status", "add_data_point", "add_entity",
+    "add_finding", "generate_report", "generate_chart",
+    "generate_combined_report",
+    "add_research_note", "list_research_notes",
+    "search_research", "promote_research_to_project",
 }
 
 SCREENSHOT_TOOL_NAMES = {
@@ -479,6 +497,7 @@ GROUP_SETS = {
     "fetch": FETCH_TOOL_NAMES,
     "opencode": OPENCODE_TOOL_NAMES,
     "skill": set(),
+    "research": RESEARCH_TOOL_NAMES,
     "design_mcp": DESIGN_MCP_TOOL_NAMES,
 }
 
@@ -707,6 +726,44 @@ async def _run_engine(
                     memory_lines += "\n\n".join(_doc_lines)
                     memory_lines += "\n\n### IMPORTANT: Use the document content above to answer. Do NOT search the web — the answer is in these uploaded documents."
 
+            # Research auto-context injection (active topics via keyword match)
+            from backend.core.research_store import get_research_store
+            _rs = get_research_store()
+            _active_research = _rs.list_projects(status="active")
+            _matched_research = []
+            for _rp in _active_research:
+                if any(kw in _rp["topic"].lower() for kw in keywords):
+                    _full = _rs._get_by_topic(_rp["topic"])
+                    if _full:
+                        _matched_research.append(_full)
+            if _matched_research:
+                _rs_lines = []
+                for _rp in _matched_research:
+                    _rs_lines.append(f"Active research: {_rp['topic']} ({_rp['type']})")
+                    if _rp.get("summary"):
+                        _rs_lines.append(f"  Summary: {_rp['summary'][:200]}")
+                    for _dp in _rp.get("data_points", [])[:3]:
+                        _u = f" {_dp.get('unit', '')}" if _dp.get('unit') else ""
+                        _rs_lines.append(f"  - {_dp['label']}: {_dp['value']}{_u}")
+                if _rs_lines:
+                    memory_lines += "\n" if memory_lines else ""
+                    memory_lines += "\n".join(_rs_lines)
+
+            # Research folder search across ALL topics (active + completed)
+            from backend.core.research_index import get_research_index
+            _research_hits = get_research_index().search(" ".join(keywords), limit=4)
+            if _research_hits:
+                _rsc_lines = ["Past research found in the research folder:"]
+                for _rh in _research_hits:
+                    _rsc_lines.append(f"- [{_rh['kind']}] {_rh['topic']}"
+                                      + (f" / {_rh['filename']}" if _rh.get('filename') else ""))
+                _notes = _rs.list_research_notes(_research_hits[0]["topic"])
+                if _notes:
+                    _note_names = ", ".join(n["filename"] for n in _notes[:5])
+                    _rsc_lines.append(f"  Notes: {_note_names}")
+                memory_lines += "\n" if memory_lines else ""
+                memory_lines += "\n".join(_rsc_lines)
+
             if memory_lines:
                 system += f"\n\n### Relevant memories:\n{memory_lines}\n###"
 
@@ -771,6 +828,14 @@ async def _run_engine(
     except asyncio.CancelledError:
         logger.info("WebSocket client disconnected during first LLM call")
         return
+    except httpx.TimeoutException:
+        logger.warning("LLM timed out on first call (large prompt / slow cloud model)")
+        await _send_json(ws, {"type": "error", "content": "The model took too long to respond and timed out. Large research or build prompts on the cloud model can exceed the timeout — retry the request, or set `ollama.timeout` in config.yaml to a larger value."})
+        try:
+            await _send_json(ws, {"type": "done"})
+        except Exception:
+            logger.warning("Failed to send done after TimeoutException — client may have disconnected")
+        return
     except httpx.ConnectError:
         await _send_json(ws, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
         try:
@@ -815,6 +880,10 @@ async def _run_engine(
                 content, tool_calls = await loop.run_in_executor(None, llm_call, messages)
             except asyncio.CancelledError:
                 logger.info("WebSocket client disconnected during iterative tool loop")
+                break
+            except httpx.TimeoutException:
+                logger.warning("LLM timed out in iterative tool loop")
+                await _send_json(ws, {"type": "error", "content": "The model took too long to respond and timed out. Retry the request, or increase `ollama.timeout` in config.yaml."})
                 break
             except httpx.ConnectError:
                 await _send_json(ws, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
@@ -984,6 +1053,12 @@ async def _run_engine(
                             if os.path.exists(_host_path):
                                 ss_store = get_screenshot_store()
                                 ss_store.add_screenshot(_host_path)
+                    if isinstance(_data, dict) and "artifact" in _data:
+                        artifact = _data["artifact"]
+                        if isinstance(artifact, dict) and "url" in artifact:
+                            tool_msg["artifact_url"] = artifact["url"]
+                            tool_msg["artifact_title"] = artifact.get("title", "Artifact")
+                            result = _data.get("message", result.split("}")[0] if "}" in result else result)
                 except (json.JSONDecodeError, TypeError):
                     pass
 
@@ -1016,6 +1091,8 @@ async def _run_engine(
                     content = summary
             except asyncio.CancelledError:
                 logger.info("WebSocket client disconnected during final summary")
+            except httpx.TimeoutException:
+                logger.warning("LLM timed out during final summary call")
             except Exception as e:
                 logger.error("Final summary call failed: %s", e)
 
@@ -1107,9 +1184,7 @@ async def chat_websocket(websocket: WebSocket):
     if mcp_servers:
         for name, cfg in mcp_servers.items():
             if cfg.get("lazy"):
-                if name == "exa":
-                    mcp.add_static_tools(name, EXA_TOOL_DEFINITIONS)
-                elif name == "fetch":
+                if name == "fetch":
                     mcp.add_static_tools(name, FETCH_TOOL_DEFINITIONS)
                 elif name == "opencode":
                     mcp.add_static_tools(name, OPENCODE_TOOL_DEFINITIONS)

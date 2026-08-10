@@ -78,6 +78,11 @@ export function useChat() {
               image_url: data.image_url,
             })
             setToolCallCount((c) => c + 1)
+            if (data.artifact_url) {
+              window.dispatchEvent(new CustomEvent('open-artifact', {
+                detail: { url: data.artifact_url, title: data.artifact_title || 'Artifact' },
+              }))
+            }
             break
           case 'done':
             setStreaming(false)

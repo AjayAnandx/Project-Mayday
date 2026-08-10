@@ -11,7 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
 from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications, location, projects, dashboard, documents
+from backend.api.research import router as research_router
 from backend.voice import router as voice_router
+from backend.core.config import load_config as _load_config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -62,6 +64,7 @@ app.include_router(location.router)
 app.include_router(projects.router)
 app.include_router(dashboard.router)
 app.include_router(documents.router)
+app.include_router(research_router)
 app.include_router(voice_router)
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "screenshots")
@@ -71,6 +74,10 @@ app.mount("/screenshots", StaticFiles(directory=SCREENSHOTS_DIR), name="screensh
 PDFS_DIR = os.path.join(os.path.dirname(__file__), "..", "pdfs")
 os.makedirs(PDFS_DIR, exist_ok=True)
 app.mount("/pdfs", StaticFiles(directory=PDFS_DIR), name="pdfs")
+
+RESEARCH_OUTPUTS_DIR = _load_config().get("data", {}).get("research_outputs_dir", "")
+if RESEARCH_OUTPUTS_DIR and os.path.isdir(RESEARCH_OUTPUTS_DIR):
+    app.mount("/research", StaticFiles(directory=RESEARCH_OUTPUTS_DIR), name="research")
 
 
 @app.get("/api/health")

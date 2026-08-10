@@ -1,8 +1,82 @@
 import json
+import re
 import httpx
 
 from backend.core.config import load_config
 from backend.assistant.function_registry import get_tool_definitions
+
+_TOOL_CALL_BLOCK_RE = re.compile(
+    r'<\|tool_call[^>]*>(.*?)<\|?tool_call\|?>',
+    re.DOTALL,
+)
+
+_FUNC_CALL_RE = re.compile(
+    r'call:(\w+)\(([^)]*)\)',
+)
+
+_ARG_RE = re.compile(
+    r'(\w+)=(?:"([^"]*)"|\'([^\']*)\'|(\S+))',
+)
+
+
+def _parse_tool_call_text(text: str) -> tuple[str | None, list[dict] | None]:
+    if not text or "<|tool" not in text:
+        return text, None
+
+    blocks = _TOOL_CALL_BLOCK_RE.findall(text)
+    if not blocks:
+        return text, None
+
+    cleaned = _TOOL_CALL_BLOCK_RE.sub("", text).strip()
+
+    parsed_tool_calls = []
+    for block in blocks:
+        block = block.strip()
+
+        try:
+            tc = json.loads(block)
+            name = tc.get("name", tc.get("function", ""))
+            args = tc.get("arguments", tc.get("parameters", {}))
+            if isinstance(args, str):
+                args = json.loads(args)
+            parsed_tool_calls.append({
+                "id": f"call_{name}",
+                "type": "function",
+                "function": {"name": name, "arguments": args},
+            })
+            continue
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        m = _FUNC_CALL_RE.search(block)
+        if m:
+            name = m.group(1)
+            args_str = m.group(2)
+            args = {}
+            for am in _ARG_RE.finditer(args_str):
+                val = am.group(2) or am.group(3) or am.group(4)
+                args[am.group(1)] = val
+            parsed_tool_calls.append({
+                "id": f"call_{name}",
+                "type": "function",
+                "function": {"name": name, "arguments": args},
+            })
+            continue
+
+        try:
+            tc = json.loads("{" + block + "}")
+            name = tc.get("name", "")
+            args = {k: v for k, v in tc.items() if k != "name"}
+            if name:
+                parsed_tool_calls.append({
+                    "id": f"call_{name}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": args},
+                })
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return cleaned or None, parsed_tool_calls if parsed_tool_calls else None
 
 
 class LLMClient:
@@ -11,7 +85,13 @@ class LLMClient:
         self.api_key = cfg.get("api_key", "")
         self.model = cfg.get("model", "gemma4:31b-cloud")
         self.endpoint = cfg.get("endpoint", "http://localhost:11434/v1/chat/completions")
-        self._http = httpx.Client(timeout=120)
+        read_timeout = float(cfg.get("timeout", 600))
+        self._http = httpx.Client(timeout=httpx.Timeout(
+            connect=15.0,
+            read=read_timeout,
+            write=60.0,
+            pool=15.0,
+        ))
 
     def _build_headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
@@ -39,7 +119,11 @@ class LLMClient:
         msg = choice["message"]
         content = msg.get("content")
         tool_calls = msg.get("tool_calls")
-        return content, tool_calls
+
+        if tool_calls:
+            return content, tool_calls
+
+        return _parse_tool_call_text(content)
 
     def extract_stream_chunk(self, line: bytes) -> tuple[str | None, list[dict] | None, bool]:
         if line.startswith(b"data: "):
@@ -50,6 +134,16 @@ class LLMClient:
             delta = data["choices"][0]["delta"]
             content = delta.get("content")
             tool_calls = delta.get("tool_calls")
+
+            if tool_calls:
+                return content, tool_calls, False
+
+            if content and "<|tool" in content:
+                cleaned, parsed = _parse_tool_call_text(content)
+                if parsed:
+                    return cleaned, parsed, False
+                return content, None, False
+
             return content, tool_calls, False
         return None, None, False
 
