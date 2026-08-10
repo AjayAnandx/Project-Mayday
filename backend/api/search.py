@@ -3,6 +3,7 @@ from fastapi import APIRouter, Query
 from backend.core.data_store import get_store
 from backend.core.operation_log import get_operation_log
 from backend.core.pdf_store import get_pdf_store
+from backend.core.research_index import get_research_index
 from backend.memory.knowledge_graph import get_graph
 
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -81,6 +82,8 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
         for d in documents
     ]
 
+    research_results = get_research_index().search(q, limit)
+
     return {
         "todos": [
             {
@@ -111,6 +114,17 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
             for op in operations[:limit]
         ],
         "documents": document_results[:limit],
+        "research": [
+            {
+                "id": f"{r['kind']}:{r['slug']}:{r.get('filename', '')}",
+                "kind": r["kind"],
+                "topic": r["topic"],
+                "slug": r["slug"],
+                "filename": r.get("filename", ""),
+                "snippet": r["snippet"],
+            }
+            for r in research_results
+        ],
     }
 
 

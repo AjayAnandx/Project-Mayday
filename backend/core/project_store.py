@@ -96,7 +96,7 @@ class ProjectStore:
             pass
         return False
 
-    def create_project(self, name: str, tasks: list[dict] | None = None) -> dict:
+    def create_project(self, name: str, tasks: list[dict] | None = None, description: str = "") -> dict:
         with self._lock:
             name = name.strip()
             if not name:
@@ -115,6 +115,7 @@ class ProjectStore:
                 "id": project_id,
                 "name": name,
                 "status": "active",
+                "description": description.strip(),
                 "created_at": _utcnow(),
                 "last_activity": _utcnow(),
                 "folder": folder_name,

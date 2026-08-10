@@ -2,10 +2,13 @@ ollama:
   api_key: ""  # Leave empty for local Ollama
   model: gemma4:31b-cloud
   endpoint: http://localhost:11434/v1/chat/completions
+  timeout: 600  # Read timeout in seconds (large research/build prompts need longer)
 
 data:
   storage_path: data.json
   projects_dir: C:\Users\hp\Projects\madays projects
+  research_path: C:\Users\hp\Projects\Mayday Research\research.json
+  research_outputs_dir: C:\Users\hp\Projects\Mayday Research\topics
 
 server:
   host: 0.0.0.0

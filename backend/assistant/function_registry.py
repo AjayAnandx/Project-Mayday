@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 from pathlib import Path
 
@@ -27,12 +28,24 @@ from backend.functions.project_functions import (
 )
 from backend.functions.document_functions import (
     upload_pdf, read_pdf, search_pdfs, list_pdfs, delete_pdf, rename_pdf,
+    convert_md_to_pdf,
 )
 from backend.functions.scaffold_functions import (
     store_component, list_stored_components, get_stored_component, scaffold_ui_project,
 )
+from backend.functions.research_functions import (
+    create_research, resume_research, list_research,
+    update_research_status, add_data_point,
+    add_entity, add_finding,
+    generate_report, generate_chart, generate_combined_report,
+    add_research_note, list_research_notes,
+    promote_research_to_project, search_research,
+)
 from backend.functions.visual_testing import (
     update_baseline,
+)
+from backend.functions.exa_functions import (
+    web_search_exa, web_fetch_exa, web_search_advanced_exa,
 )
 from backend.functions.browser_functions import (
     capture_page_screenshot, visual_diff_sandbox, check_element_sandbox,
@@ -890,11 +903,12 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_project",
-            "description": "Create a new project with optional tasks",
+            "description": "Create a new project with optional tasks and description",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Project name"},
+                    "description": {"type": "string", "description": "Optional project description / goal statement"},
                     "tasks": {
                         "type": "array",
                         "description": "Optional task list. Each: {title: str, type?: 'research'|'general'|'build', depends_on?: string[]}",
@@ -972,10 +986,10 @@ LOCAL_TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Project name (optional — uses active project if omitted)"},
-                    "filename": {"type": "string", "description": "Filename, e.g. research.md or architecture.md"},
+                    "filename": {"type": "string", "description": "Filename, e.g. research.md or architecture.md (optional — defaults to notes.md)"},
                     "content": {"type": "string", "description": "Markdown content of the note"},
                 },
-                "required": ["filename", "content"],
+                "required": ["content"],
             },
         },
     },
@@ -1001,12 +1015,12 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "update_task_status",
-            "description": "Update task: pending->in_progress->completed/blocked/failed",
+            "description": "Update task status: pending->in_progress->completed/blocked/failed. task_id can be the task ID or the exact task title — either works.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Project name"},
-                    "task_id": {"type": "string", "description": "Task ID (returned when task was created, optional if task_title provided)"},
+                    "task_id": {"type": "string", "description": "Task ID or exact task title (optional if task_title provided)"},
                     "status": {"type": "string", "enum": ["in_progress", "completed", "blocked", "failed"], "description": "New status"},
                     "result": {"type": "string", "description": "Result summary (saved to knowledge graph, optional)"},
                     "task_title": {"type": "string", "description": "Task title fallback if task_id is unknown (optional)"},
@@ -1063,15 +1077,14 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "upload_pdf",
-            "description": "Upload a PDF, extract text for search and memory",
+            "description": "Upload a PDF, extract text for search and memory. file_path and filename are aliased: pass the absolute path as file_path (or path/file), and the display name as filename (or name). If only filename is given, the file is searched for in the project/Desktop/Documents folders.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "Absolute path to the PDF file"},
-                    "filename": {"type": "string", "description": "Display name for the document"},
+                    "file_path": {"type": "string", "description": "Absolute path to the PDF file (alias: path, file)"},
+                    "filename": {"type": "string", "description": "Display name for the document (alias: name)"},
                     "project_name": {"type": "string", "description": "Optional project name to link this document to"},
                 },
-                "required": ["file_path", "filename"],
             },
         },
     },
@@ -1143,6 +1156,23 @@ LOCAL_TOOL_DEFINITIONS = [
                     "new_filename": {"type": "string", "description": "New display name for the document"},
                 },
                 "required": ["new_filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "convert_md_to_pdf",
+            "description": "Convert a markdown (.md) file to a real, openable PDF. Use this whenever a report or document exists as markdown and the user wants a PDF — do NOT save markdown text with a .pdf extension. The markdown file can be passed as md_path, path, or md_file (they are aliases); output file is md_path with .pdf suffix unless output_path/name given.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "md_path": {"type": "string", "description": "Absolute path to the markdown file (alias: path, md_file)"},
+                    "path": {"type": "string", "description": "Alias for md_path — absolute path to the markdown file"},
+                    "md_file": {"type": "string", "description": "Alias for md_path — absolute path to the markdown file"},
+                    "output_path": {"type": "string", "description": "Optional absolute output path for the PDF"},
+                    "name": {"type": "string", "description": "Optional output filename (no extension) — PDF is written next to the md file"},
+                },
             },
         },
     },
@@ -1483,8 +1513,241 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_research",
+            "description": "Start a research project with topic, type, depth, and optional questions. Auto-creates sequential tasks from type template. Type options: market, technical, financial, sales, business, academic, competitive, product, domain, person_org, legal, trend, community (default: market).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "type": {"type": "string", "enum": ["market", "technical", "financial", "sales", "business", "academic", "competitive", "product", "domain", "person_org", "legal", "trend", "community"], "description": "Research type — determines task template (optional — defaults to market)"},
+                    "depth": {"type": "integer", "description": "Research depth 1-4 (default 2)"},
+                    "questions": {"type": "array", "items": {"type": "string"}, "description": "Optional list of research questions to investigate"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "resume_research",
+            "description": "Load full research context by topic: summary, data points, entities, findings, task progress",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic to resume"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_research",
+            "description": "List all research projects with type, status, and counts",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["active", "paused", "completed"], "description": "Filter by status (optional)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_research_status",
+            "description": "Change a research project status: active, paused, or completed",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "status": {"type": "string", "enum": ["active", "paused", "completed"], "description": "New status"},
+                },
+                "required": ["topic", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_data_point",
+            "description": "Add a structured data point (metric/KPI) to a research project",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "label": {"type": "string", "description": "Data point label (e.g. 'Global TAM 2026')"},
+                    "value": {"type": "string", "description": "Numeric value (e.g. '42.5B', '38%')"},
+                    "unit": {"type": "string", "description": "Unit (USD, %, users, etc.)"},
+                    "confidence": {"type": "string", "enum": ["high", "medium", "low"], "description": "Confidence level"},
+                    "sources": {"type": "array", "items": {"type": "string"}, "description": "Source URLs"},
+                },
+                "required": ["topic", "label", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_entity",
+            "description": "Add an entity (company, person, technology) to a research project",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "name": {"type": "string", "description": "Entity name"},
+                    "type": {"type": "string", "description": "Entity type (company, person, technology, institution)"},
+                    "description": {"type": "string", "description": "Brief description of the entity"},
+                    "relevance": {"type": "number", "description": "Relevance score 0.0-1.0"},
+                    "sources": {"type": "array", "items": {"type": "string"}, "description": "Source URLs"},
+                },
+                "required": ["topic", "name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_finding",
+            "description": "Add a research finding with optional source URLs",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "content": {"type": "string", "description": "Finding content"},
+                    "confidence": {"type": "string", "enum": ["high", "medium", "low"], "description": "Confidence level"},
+                    "sources": {"type": "array", "items": {"type": "string"}, "description": "Source URLs"},
+                },
+                "required": ["topic", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_report",
+            "description": "Generate a Markdown report from research data. PDF via pandoc if available.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "format": {"type": "string", "enum": ["md", "pdf"], "description": "Output format: md (default) or pdf (requires pandoc)"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_chart",
+            "description": "Generate an interactive chart (bar/pie/line) from collected data points. Opens in preview window.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "chart_type": {"type": "string", "enum": ["bar", "pie", "line"], "description": "Chart type (default bar). Pie auto-fallsback to bar if >20 data points."},
+                    "metric": {"type": "string", "description": "Optional metric label for the dataset"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_combined_report",
+            "description": "Generate a combined research report across multiple topics (or all completed). Supports MD and PDF formats.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topics": {"type": "array", "items": {"type": "string"}, "description": "List of research topic names. Omit to include all completed topics."},
+                    "title": {"type": "string", "description": "Report title (default: 'Combined Research Report')"},
+                    "format": {"type": "string", "enum": ["md", "pdf"], "description": "Output format: md (default) or pdf"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_research_note",
+            "description": "Write a .md research note into the research topic's notes folder (topics/{slug}/notes). Use for research notes — NOT add_project_note (that writes to project folders).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "filename": {"type": "string", "description": "Filename, e.g. findings.md or competitors.md (optional — defaults to notes.md)"},
+                    "content": {"type": "string", "description": "Full Markdown note content"},
+                },
+                "required": ["topic", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_research_notes",
+            "description": "List all .md research notes stored for a research topic",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_research",
+            "description": "Search across ALL research topics (active + completed): topic metadata, notes/*.md full text, report.md, and artifact filenames. Use when the user asks about any previously researched topic.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query (topic, keyword, or phrase)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "promote_research_to_project",
+            "description": "Promote a research topic into the project store: creates a project, copies notes+outputs into the project folder, links conversations, archives the research record as completed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic to promote"},
+                    "name": {"type": "string", "description": "Optional project name (defaults to the topic name)"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
 ]
 FUNCTION_MAP = {
+    "create_research": create_research,
+    "resume_research": resume_research,
+    "list_research": list_research,
+    "update_research_status": update_research_status,
+    "add_data_point": add_data_point,
+    "add_entity": add_entity,
+    "add_finding": add_finding,
+    "generate_report": generate_report,
+    "generate_chart": generate_chart,
+    "generate_combined_report": generate_combined_report,
+    "add_research_note": add_research_note,
+    "list_research_notes": list_research_notes,
+    "search_research": search_research,
+    "promote_research_to_project": promote_research_to_project,
     "create_project": create_project,
     "resume_project": resume_project,
     "list_projects": list_projects,
@@ -1531,12 +1794,16 @@ FUNCTION_MAP = {
     "list_directory": list_directory,
     "get_weather": get_weather,
     "find_free_port": find_free_port_wrapper,
+    "web_search_exa": web_search_exa,
+    "web_fetch_exa": web_fetch_exa,
+    "web_search_advanced_exa": web_search_advanced_exa,
     "upload_pdf": upload_pdf,
     "read_pdf": read_pdf,
     "search_pdfs": search_pdfs,
     "list_pdfs": list_pdfs,
     "delete_pdf": delete_pdf,
     "rename_pdf": rename_pdf,
+    "convert_md_to_pdf": convert_md_to_pdf,
     "store_component": store_component,
     "list_stored_components": list_stored_components,
     "get_stored_component": get_stored_component,
@@ -1575,29 +1842,117 @@ FUNCTION_MAP = {
 def get_tool_definitions(mcp_tools: list[dict] | None = None) -> list[dict]:
     tools = list(LOCAL_TOOL_DEFINITIONS)
     tools.extend(PLAYWRIGHT_TOOL_DEFINITIONS)
+    from backend.assistant.exa_tools import EXA_TOOL_DEFINITIONS
+    for td in EXA_TOOL_DEFINITIONS:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": td["name"],
+                "description": td.get("description", ""),
+                "parameters": td.get("parameters", {"type": "object", "properties": {}}),
+            },
+        })
     if mcp_tools:
         tools.extend(mcp_tools)
     return tools
 
 
+# Argument repair for sloppy LLM tool calls: alias names, fill defaults,
+# drop unknown kwargs. Kept in one place so every local tool benefits.
+_PARAM_ALIASES: dict[str, dict[str, str]] = {
+    "create_project": {"project": "name", "project_name": "name", "desc": "description"},
+    "resume_project": {"project": "name", "project_name": "name"},
+    "update_project_status": {"project": "name", "project_name": "name"},
+    "add_project_note": {"project": "name", "project_name": "name", "file_name": "filename", "title": "filename"},
+    "add_project_task": {"project": "name", "project_name": "name", "task": "title", "task_title": "title"},
+    "update_task_status": {"project": "name", "project_name": "name", "task_title": "title"},
+    "list_project_tasks": {"project": "name", "project_name": "name"},
+    "add_research_note": {"project": "topic", "topic_name": "topic", "file_name": "filename", "title": "filename"},
+    "create_research": {"project": "topic", "topic_name": "topic"},
+    "resume_research": {"project": "topic", "topic_name": "topic"},
+    "update_research_status": {"project": "topic", "topic_name": "topic"},
+    "add_data_point": {"project": "topic", "topic_name": "topic"},
+    "add_entity": {"project": "topic", "topic_name": "topic"},
+    "add_finding": {"project": "topic", "topic_name": "topic"},
+    "list_research_notes": {"project": "topic", "topic_name": "topic"},
+    "generate_report": {"project": "topic", "topic_name": "topic"},
+    "generate_chart": {"project": "topic", "topic_name": "topic"},
+    "search_research": {"q": "query"},
+    "promote_research_to_project": {"project": "topic", "topic_name": "topic"},
+}
+
+_TOOL_DEFAULTS: dict[str, dict[str, object]] = {
+    "add_project_note": {"filename": "notes.md"},
+    "add_research_note": {"filename": "notes.md"},
+    "create_research": {"type": "market"},
+}
+
+
+def _expected_params(fn) -> list[str]:
+    try:
+        return [p for p in inspect.signature(fn).parameters if p != "mcp_manager"]
+    except (ValueError, TypeError):
+        return []
+
+
+def _repair_arguments(name: str, fn, arguments: dict) -> tuple[dict, list[str]]:
+    """Return repaired args + human-readable repair notes."""
+    args = dict(arguments)
+    notes: list[str] = []
+    expected = set(_expected_params(fn))
+    if not expected:
+        return args, notes
+
+    for alias, canonical in _PARAM_ALIASES.get(name, {}).items():
+        if alias in args and canonical not in args and canonical in expected:
+            args[canonical] = args.pop(alias)
+
+    for kw in [k for k in args if k not in expected]:
+        notes.append(f"unexpected argument '{kw}' ignored")
+        del args[kw]
+
+    for param, default in _TOOL_DEFAULTS.get(name, {}).items():
+        if param not in args and param in expected:
+            args[param] = default
+            notes.append(f"missing '{param}' — used default '{default}'")
+
+    return args, notes
+
+
+def _actionable_error(name: str, fn, error: Exception, notes: list[str]) -> str:
+    expected = ", ".join(_expected_params(fn)) or "see tool schema"
+    parts = [f"Error executing {name}: {error}", f"Expected parameters: {expected}."]
+    if notes:
+        parts.append("Repair notes: " + "; ".join(notes) + ".")
+    parts.append("Call this tool again with the correct arguments.")
+    return " ".join(parts)
+
+
+async def _invoke(fn, args: dict, mcp_manager=None) -> str:
+    if asyncio.iscoroutinefunction(fn):
+        try:
+            return await fn(**args, mcp_manager=mcp_manager)
+        except TypeError:
+            try:
+                return await fn(**args)
+            except TypeError:
+                raise
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: fn(**args))
+
+
 async def dispatch_call(name: str, arguments: dict, mcp_manager=None) -> str:
     if name in FUNCTION_MAP:
         fn = FUNCTION_MAP[name]
-        if asyncio.iscoroutinefunction(fn):
-            try:
-                return await fn(**arguments, mcp_manager=mcp_manager)
-            except TypeError:
-                try:
-                    return await fn(**arguments)
-                except Exception as e:
-                    logger.exception("Error executing async local function '%s'", name)
-                    return f"Error executing {name}: {e}"
-            except Exception as e:
-                logger.exception("Error executing async local function '%s'", name)
-                return f"Error executing {name}: {e}"
-        loop = asyncio.get_running_loop()
         try:
-            return await loop.run_in_executor(None, lambda: fn(**arguments))
+            return await _invoke(fn, arguments, mcp_manager)
+        except TypeError as e:
+            args, notes = _repair_arguments(name, fn, arguments)
+            try:
+                return await _invoke(fn, args, mcp_manager)
+            except Exception as e2:
+                logger.exception("Error executing local function '%s' (after argument repair)", name)
+                return _actionable_error(name, fn, e2, notes)
         except Exception as e:
             logger.exception("Error executing local function '%s'", name)
             return f"Error executing {name}: {e}"

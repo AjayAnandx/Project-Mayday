@@ -12,6 +12,7 @@ const typeColors: Record<string, string> = {
   project: '#f59e0b',
   personality: '#ec4899',
   document: '#a855f7',
+  research: '#14b8a6',
 }
 
 const typeShapes: Record<string, string> = {
@@ -25,6 +26,7 @@ const typeShapes: Record<string, string> = {
   project: 'roundrectangle',
   personality: 'ellipse',
   document: 'ellipse',
+  research: 'ellipse',
 }
 
 interface GraphCanvasProps {

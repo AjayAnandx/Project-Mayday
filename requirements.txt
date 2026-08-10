@@ -8,6 +8,8 @@ sounddevice>=0.5.0
 soundfile>=0.12.0
 
 playwright>=1.61.0
+fpdf2>=2.8.0
+markdown>=3.6
 
 # Voice pipeline (optional — uncomment to enable backend STT/TTS/VAD)
 # faster-whisper>=1.0.0

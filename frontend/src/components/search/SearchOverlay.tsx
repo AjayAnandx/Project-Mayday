@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Search, ListTodo, CalendarDays, MessageSquare, BrainCircuit, History, Loader2, X } from 'lucide-react'
+import { Search, ListTodo, CalendarDays, MessageSquare, BrainCircuit, History, FlaskConical, Loader2, X } from 'lucide-react'
 import { useSearch } from '../../hooks/useSearch'
 import type { SearchResults } from '../../types/search'
 
@@ -44,6 +44,7 @@ export function SearchOverlay({ open, onClose, onNavigate }: SearchOverlayProps)
     { key: 'conversations', icon: MessageSquare, label: 'Conversations', page: 'chat', render: (c) => `${c.title} (${c.date})` },
     { key: 'graph_nodes', icon: BrainCircuit, label: 'Memories', page: 'brain', render: (n) => `[${n.type}] ${n.label}` },
     { key: 'operations', icon: History, label: 'Operations', page: 'chat', render: (o) => `[${o.timestamp.slice(0, 10)}] ${o.action} ${o.entity_type} '${o.entity_name}'` },
+    { key: 'research', icon: FlaskConical, label: 'Research', page: 'chat', render: (r) => `[${r.kind}] ${r.topic}${r.filename ? ' / ' + r.filename : ''} — ${r.snippet}` },
   ]
 
   const hasResults = results && sections.some(s => results[s.key].length > 0)

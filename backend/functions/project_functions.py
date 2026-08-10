@@ -12,21 +12,22 @@ def _project_folder(project: dict) -> Path:
     return store.projects_dir / folder
 
 
-def create_project(name: str, tasks: list[dict] | None = None) -> str:
+def create_project(name: str, tasks: list[dict] | None = None, description: str = "") -> str:
     store = get_project_store()
-    result = store.create_project(name, tasks)
+    result = store.create_project(name, tasks, description)
     if "error" in result:
         return result["error"]
     task_count = len(result.get("tasks", []))
     project_root = store.projects_dir
+    desc_line = f" Description: {result['description']}" if result.get("description") else ""
     if task_count:
         return (
             f"Project '{result['name']}' created with {task_count} tasks. "
-            f"Progress: 0/{task_count}. Folder: {project_root / result['folder']}"
+            f"Progress: 0/{task_count}. Folder: {project_root / result['folder']}{desc_line}"
         )
     return (
         f"Project '{result['name']}' created (status: {result['status']}). "
-        f"Folder: {project_root / result['folder']}"
+        f"Folder: {project_root / result['folder']}{desc_line}"
     )
 
 
@@ -138,7 +139,11 @@ def update_project_status(name: str = "", status: str = "", project: str = "") -
     return f"Project '{name}' status updated to '{status}'."
 
 
-def add_project_note(filename: str, content: str, name: str = "", project: str = "") -> str:
+def add_project_note(filename: str = "", content: str = "", name: str = "", project: str = "", file_name: str = "") -> str:
+    if not filename and file_name:
+        filename = file_name
+    if not filename:
+        filename = "notes.md"
     store = get_project_store()
     if not name and project:
         name = project
@@ -215,13 +220,42 @@ def update_task_status(name: str = "", task_id: str = "", status: str = "in_prog
     store = get_project_store()
     project_obj = store.find_project_by_name(name)
     if not project_obj:
+        from backend.core.research_store import get_research_store
+        research = get_research_store()._get_by_topic(name)
+        if research:
+            return (
+                f"'{name}' is a **research project**, not a regular project. "
+                f"Manage it with research tools instead: resume_research(topic=\"{name}\"), "
+                f"then update its tasks via update_research_status(topic=\"{name}\", status=...) "
+                f"or add data with add_data_point/add_finding."
+            )
+        fuzzy = store.fuzzy_search(name)
+        if fuzzy:
+            suggestions = "\n".join(f"  - {p['name']} ({p['status']})" for p in fuzzy)
+            return f"No project found with the name '{name}'.\nDid you mean one of these?\n{suggestions}"
         return f"No project found with the name '{name}'."
 
-    task = next((t for t in project_obj.get("tasks", []) if t["id"] == task_id), None)
-    if not task and task_title:
-        task = next((t for t in project_obj.get("tasks", []) if t["title"].lower() == task_title.strip().lower()), None)
+    def _match(t):
+        if task_id and t["id"] == task_id:
+            return True
+        if not task_id and not task_title:
+            return False
+        candidates = [task_id, task_title or ""]
+        return any(c and t["title"].strip().lower() == c.strip().lower() for c in candidates)
+
+    task = next((t for t in project_obj.get("tasks", []) if _match(t)), None)
     if not task:
-        return f"Task not found. Use list_project_tasks to see available tasks."
+        tasks = project_obj.get("tasks", [])
+        if tasks:
+            listing = "\n".join(
+                f"  - {t['title']} ({t['status']})" for t in tasks
+            )
+            return (
+                f"Task '{task_id or task_title}' not found in project '{name}'. "
+                f"Available tasks:\n{listing}\n"
+                f"Pass the exact task title, or create a new task with add_project_task(name=\"{name}\", title=...) if it doesn't exist yet."
+            )
+        return f"No tasks exist in project '{name}' yet. Create one with add_project_task(name=\"{name}\", title=...)."
 
     updated = store.update_task_status(project_obj["id"], task["id"], status, result)
     if "error" in updated:

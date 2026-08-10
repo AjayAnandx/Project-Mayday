@@ -23,7 +23,30 @@ def _check_path(path: str) -> Path:
     raise PermissionError(f"Access denied: path not in allowed directories")
 
 
-def upload_pdf(file_path: str, filename: str, project_name: str = "") -> str:
+def _find_file(filename: str) -> Path | None:
+    for base in ALLOWED_PATHS:
+        try:
+            for p in base.rglob(filename):
+                if p.is_file():
+                    return p
+        except OSError:
+            continue
+    return None
+
+
+def upload_pdf(file_path: str = "", filename: str = "", project_name: str = "",
+               name: str = "", path: str = "", file: str = "") -> str:
+    filename = filename or name
+    file_path = file_path or path or file
+    if not file_path and filename:
+        found = _find_file(filename)
+        if found:
+            file_path = str(found)
+    if not file_path:
+        return ("Missing required parameter: file_path. Pass the absolute path "
+                "to the PDF (or filename if the file is in the project directory).")
+    if not filename:
+        filename = Path(file_path).name
     try:
         resolved = _check_path(file_path)
     except PermissionError as e:
@@ -168,3 +191,22 @@ def copy_to_project(doc: dict, project_id: str):
         import shutil
         dst = doc_path / doc.get("filename", doc["id"])
         shutil.copy2(str(src_path), str(dst))
+
+
+def convert_md_to_pdf(md_path: str = "", output_path: str = "",
+                      name: str = "", path: str = "", md_file: str = "") -> str:
+    from backend.core.md_to_pdf import convert_md_to_pdf as _convert
+
+    md_path = md_path or path or md_file
+    if not md_path:
+        return "Missing required parameter: md_path. Pass the absolute path to the markdown file."
+    if not output_path and name:
+        from pathlib import Path
+        base = Path(md_path).with_suffix("")
+        output_path = str(base.with_name(f"{name}.pdf"))
+    result = _convert(md_path, output_path or None)
+    if result.get("status") != "ok":
+        return f"Error: {result.get('message', 'conversion failed')}"
+    size_kb = result["size"] / 1024
+    return (f"Converted markdown to PDF: `{result['pdf_path']}` "
+            f"({size_kb:.1f} KB). Source: {result['source_md']}")
