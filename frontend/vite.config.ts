@@ -21,6 +21,8 @@ export default defineConfig({
       },
       '/screenshots': 'http://localhost:8772',
       '/pdfs': 'http://localhost:8772',
+      '/research': 'http://localhost:8772',
+      '/projects': 'http://localhost:8772',
     },
   },
 })

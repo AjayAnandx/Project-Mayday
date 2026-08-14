@@ -182,6 +182,15 @@ def list_research_notes(topic: str):
     return result
 
 
+@router.get("/{topic}/outputs")
+def list_research_outputs(topic: str):
+    store = get_research_store()
+    result = store.list_outputs(topic)
+    if isinstance(result, dict) and "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 @router.post("/promote")
 def promote_research(body: ResearchPromote):
     store = get_research_store()

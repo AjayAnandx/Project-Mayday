@@ -5232,63 +5232,520 @@ MODIFY:
 - Full backend suite: 160 passed; `npx tsc --noEmit` clean
 - Live dispatch verification of all 3 original failing calls on real stores (then cleaned up)
 
-## Need to Implement: Song Playback via Free YouTube API + In-App Embed Player
+## Need to Implement: Music — Playback, Vibe Engine, History & Trending (ytmusicapi + yt-dlp)
 
-### Status - NEED TO IMPLEMENT
+### Status — NEED TO IMPLEMENT (stack approved Aug 2026: open-source, no API key)
 
 ### Goal
-Mayday plays songs on demand (text chat + voice) using the free YouTube Data API for search and an in-app iframe embed player for playback. Zero paid services, zero new binaries.
+Mayday plays songs on demand (text + voice), builds per-song radio mixes and mood playlists, auto-tracks play history with language detection, and surfaces new trending songs matching user taste — via chat/voice tools and a dashboard widget.
 
-### Cost Check (verified Aug 2026)
-- YouTube Data API v3: 100% free - no paid tier exists,  per call, no credit card required
-- Default quota: 10,000 units/day per project (resets midnight PT)
-- search.list = 100 units → ~100 song searches/day (plenty for personal use)
-- videos.list = 1 unit (metadata/duration)
-- Cannot buy more quota - audit form only. Not needed at this scale.
-- Playback via official iframe embed: free, no API key needed for the player itself
-- Only setup cost: free Google Cloud API key (enable YouTube Data v3, ~10 min, no card)
+### Stack (verified Aug 2026)
+- `ytmusicapi` (MIT, pip) — search (`filter="songs"`), radio (`get_watch_playlist`), mood catalog (`get_mood_playlists` / `get_mood_categories`), charts (`get_charts(country="IN")`) for trending
+- `yt-dlp` (Unlicense, pip, ships the Windows exe) — `-g -f best` progressive stream URL (audio+video combined, no ffmpeg merge needed) for a ~480p mini video window
+- Language detection: Unicode-script heuristic (Tamil / Devanagari / Latin / other) + known romanized-Tamil artist list + LLM language tag assist
+- Risks: both unofficial → occasional Google breakage, patched via `pip update`; yt-dlp IP rate-limits → optional `cookies.txt`; stream URLs expire ~6h → re-resolve
+- No paid services, no API keys, no quota. One new binary (yt-dlp exe via pip) — documented in CLAUDE.md.
 
-### Architecture (reuses existing artifact pipeline - no new frontend panel)
+### Architecture
 `
-User: "play virtual insanity" (text or voice)
-  → LLM calls play_song(artist, track)
-  → backend/core/youtube_client.py → YouTube Data API search.list (1 free call)
-  → returns {"message": "...", "artifact": {"url": "https://www.youtube-nocookie.com/embed/{videoId}?autoplay=1", "title": "Artist - Track"}}
-  → chat.py parses artifact (existing :1035) → tool_call msg with artifact_url
-  → useChat dispatches open-artifact event (existing)
-  → App.tsx renders existing ArtifactPanel iframe split-panel → song plays in-app
+User: "play virtual insanity" / "radio like jamiroquai" / "something chill" / "what's trending in Tamil" (text or voice)
+  → LLM iterative loop calls one of 6 music tools
+  → backend/core/youtube_client.py   (ytmusicapi → videoId / track list; yt-dlp -g → stream URL)
+  → backend/functions/media_functions.py (tool impls, language tagging)
+  → chat.py emits WS {"type":"music", ...} + tool_call bubble
+  → useMusicPlayer.ts (queue, controls) → PlayerBar native <video> plays
+  → on track start: POST /api/music/history (language auto-detected)
+  → Dashboard MusicWidget: top played + language mix + trending (cached 1h)
 `
+
+### WebSocket Protocol Additions
+```
+← {"type":"music","action":"play","track":{video_id,title,artist,thumb,language,stream_url},"queue":[...]}
+← {"type":"music","action":"ended"}                        # auto-advance trigger
+→ {"type":"music_command","action":"play","video_id":"..."} # widget/tab click-to-play
+← {"type":"music","action":"playing","queue":[...]}         # state sync (queue/controls)
+```
 
 ### Files
 CREATE:
-- backend/core/youtube_client.py (~80 lines) - search_song(artist, track, max_results=3):
-  - GET googleapis.com/youtube/v3/search?part=snippet&type=video&videoCategoryId=10&q={artist}+{track}&key={key} (Music category)
-  - Returns videoId, title, channel, thumbnail; optional 1-unit videos.list for duration
-  - Handles quotaExceeded / network / missing key with clear messages
-  - No-key fallback → YouTube results-page URL (youtube.com/results?search_query=...) so playback works keyless
-- backend/functions/media_functions.py (~50 lines) - play_song(artist, track) LLM function returning artifact JSON shape
-- backend/test_youtube_client.py (optional) - mocked HTTP tests
+- backend/core/youtube_client.py (~170 lines):
+  - search_song(artist, track, max_results=3) — ytmusicapi search → videoId, title, artist, thumbnail, duration, language hint
+  - resolve_stream(video_id) — yt-dlp -g -f best subprocess (~200-500ms), progressive URL
+  - get_radio(seed_id, n=20) — get_watch_playlist → radio mix tracks
+  - get_moods() / get_mood_tracks(mood_id) — mood/genre catalog + playlist tracks
+  - get_chart_trending(country="IN", n=15) — get_charts trending/viral → track list
+  - _detect_language(title, artist) — script heuristic + romanized-Tamil list (shared with music_history)
+  - cookies/backoff: optional music.cookies_file → yt-dlp --cookies; 2 retries w/ backoff; human-readable errors
+- backend/core/music_history.py (~100 lines) — thread-safe JSON store (music_history.json, data_store.py pattern):
+  - record_play(track), top_played(n, language=None, days=None), language_stats(), most_played_artists(n), total_plays()
+- backend/api/music.py (~80 lines) — REST router (/api/music), registered in backend/main.py:
+  - POST /api/music/history — record a play (frontend fires on track start)
+  - GET /api/music/history/stats — top_played (week/all) + language_stats + most_played_artists
+  - GET /api/music/trending — chart picks biased by dominant history language + artists (TTL cache 3600s, _ai_news_cache pattern in dashboard.py:20-22)
+- backend/functions/media_functions.py (~110 lines) — 6 tools (below); TOOL_DEFINITIONS + FUNCTION_MAP per function_registry.py:316/:1736 pattern; results tag language; summary doubles as TTS via _make_voice_text (chat.py:524)
+- backend/test_youtube_client.py — mocked ytmusicapi + yt-dlp subprocess: search/resolve/radio/mood/charts, language detection, error paths
+- backend/test_music_history.py — record/dedup, top_played (language/day filters), language_stats, persistence, concurrency (test_operation_log pattern)
+- frontend/src/hooks/useMusicPlayer.ts — session queue, current track, playing state, auto-advance (video.onended / music ended), controls (play/pause/next/prev/seek/volume), music + music_command WS handling, POST /api/music/history on track start
+- frontend/src/components/player/PlayerBar.tsx — persistent Spotify-clone bottom bar: thumbnail, title/artist (language badge), seek bar, volume, prev/play/next, mini video window (native <video> ~320x180, click-to-expand), queue toggle
+- frontend/src/components/player/PlayerQueue.tsx — session queue list, click-to-jump, clear
+- frontend/src/components/dashboard/MusicWidget.tsx — top played (week), language mix bars, 5 trending picks (click → music_command play)
+- frontend/src/types/music.ts — MusicTrack, MusicMessage, HistoryStats interfaces
 
 MODIFY:
-- config.yaml - new section: youtube: { api_key: "" } with YOUTUBE_API_KEY env var / .env fallback (existing dotenv pattern)
-- backend/assistant/function_registry.py - play_song tool def + FUNCTION_MAP
-- backend/api/chat.py - add play_song to CORE_TOOL_NAMES + GROUP_SETS + one system-prompt line
-- frontend/src/components/research/ArtifactPanel.tsx - add allow="autoplay; encrypted-media" to iframe for autoplay
-- electron/main.ts - optional autoplayPolicy: 'no-user-gesture-required' in webPreferences
-- CLAUDE.md - tool + key requirement line
+- requirements.txt — add ytmusicapi>=1.12, yt-dlp
+- backend/assistant/function_registry.py — 6 tool defs + FUNCTION_MAP; _PARAM_ALIASES (track→song, seed→seed_track); _TOOL_DEFAULTS (mood→chill, count→10)
+- backend/api/chat.py — 6 names to CORE_TOOL_NAMES (chat.py:325); new "music" group in GROUP_SETS (chat.py:479); one system-prompt line; music WS emission next to artifact handling (chat.py:1056); inbound music_command handler in chat_websocket (chat.py:1162)
+- backend/api/dashboard.py — add music block (top played + language mix) to GET /api/dashboard
+- frontend/src/App.tsx — mount <PlayerBar /> above page content (App.tsx:63-101 layout)
+- frontend/src/context/ChatContext.tsx — forward music WS messages to useMusicPlayer listeners; expose sendMusicCommand
+- frontend/src/components/dashboard/DashboardPanel.tsx + frontend/src/hooks/useDashboard.ts — add MusicWidget + fetch /api/music/history/stats + /api/music/trending
+- frontend/src/hooks/useChat.ts + frontend/src/services/websocket.ts — pass-through of music message type (unknown types already ignored — no protocol break)
+- electron/main.ts — optional autoplayPolicy: 'no-user-gesture-required'
+- config.yaml — optional music: { cookies_file: "" } (no API keys)
+- CLAUDE.md — music section: stack, 6 tools, endpoints, yt-dlp-binary note
+- docs/adr.md — new ADR: open-source music stack rationale (no key/quota/iframe restrictions; unofficial-lib risk accepted w/ fallback seam)
+
+### LLM Tools (6)
+| Tool | Params | Behavior |
+|------|--------|----------|
+| play_song | artist, track | search → resolve stream → emit music play + tool bubble |
+| play_radio | seed_track | search seed → get_radio → queue of 20 → play first |
+| play_mood | mood (chill/focus/party/…) | mood catalog → playlist tracks → queue → play first |
+| queue_song | artist, track | search → append to queue (no immediate play) |
+| discover_trending | language?, count=10 | charts → filter/rank by history language + artists → list; "play #3" → play_song |
+| my_top_songs | n=10, language? | from music history store |
 
 ### Voice + Text
-Voice uses the same WebSocket engine → tool call fires identically from both channels. Natural-language summary in the tool result doubles as TTS text via existing _make_voice_text path. No extra voice work.
+Same WebSocket engine → identical tool flow from both channels; tool summary doubles as TTS via existing _make_voice_text path. "What's trending in Tamil" works fully by voice. No extra voice work.
 
 ### Verify
-1. Manual: play_song("jamiroquai", "virtual insanity") in text + voice → panel opens with autoplaying embed, tool bubble shows song info
-2. Keyless run → results-page fallback opens
-3. Quota error → human-readable message, no crash
-4. npx tsc --noEmit in frontend/
+1. Manual: play_song("jamiroquai", "virtual insanity") in text + voice → PlayerBar streams with mini video window; history records with language tag
+2. play_radio / play_mood("chill") → queues populate, auto-advance; seek/volume/next/prev work
+3. discover_trending → chart picks biased by top language (e.g. Tamil); my_top_songs accurate
+4. Dashboard MusicWidget shows top played + language mix + clickable trending
+5. Errors: expired stream → re-resolve; rate-limit → cookies hint; no internet → readable message; unavailable video → skip next
+6. Backend test suites pass; npx tsc --noEmit clean
 
 ### Edge Cases
-- No API key → results-page fallback (still free, no Google account needed)
-- quotaExceeded → clear error + fallback suggestion
+- Romanized Tamil titles misdetected → artist-list heuristic + LLM tag + user correction via chat
+- No history yet → trending = global IN charts; language fallback EN
+- Stream URL expiry (~6h) → re-resolve on resume/replay; history stores metadata only
+- Unavailable/embargoed video → skip to next queue item
+- yt-dlp rate-limited → cookies.txt opt-in (config), backoff retries
 - Song not found → error message; LLM suggests nearest match
-- Autoplay blocked (dev browser/Electron policy) → Electron autoplayPolicy flag; embed has YouTube's own play button as fallback
-- Multiple plays → panel reload swaps embed URL (existing RefreshCw/onClose controls)
+- Queue is session-only; play history is persistent
+
+### Scope Guardrails
+- Queue session-only (no persistence); history persistent
+- Max 6 LLM tools; no recommendation ML — heuristics only
+- No song downloader / full-song cache
+
+---
+
+## Chart Visualization with Auto-Open in New Tab (Research + Projects) — Plan for Aug 11
+
+### Goal
+Enable Mayday to collect data points for both Research topics and Projects, generate interactive charts (bar/pie/line), and automatically open them in a new browser tab when the LLM generates them.
+
+### Current State
+- **Research**: Full data collection (`data_points`, `entities`, `findings`), `generate_chart` tool + REST endpoint, Chart.js HTML output in side panel iframe (`ArtifactPanel.tsx`)
+- **Projects**: Task management only, no `data_points` array, no chart generation
+- **UI**: Charts only open in chat side panel (520px wide iframe), no dedicated visualization page
+
+### User Requirements
+1. Both Research AND Projects can collect data points and generate charts
+2. Charts auto-open in new browser tab when generated via LLM
+3. No new tab in navigation — use auto-open behavior
+
+### Phase 1: Add Data Points to Projects (Backend)
+**Files to modify:**
+- `backend/core/project_store.py` — Add `data_points: []` to project schema (like research)
+- `backend/functions/project_functions.py` — Add `add_project_data_point`, `list_project_data_points` tools
+- `backend/api/projects.py` — Add `POST/GET /api/projects/{id}/data-points` endpoints
+
+**Schema addition to project:**
+```python
+"data_points": [
+    {"id": "dp_xxx", "label": "Q4 Revenue", "value": "$2.5M", "unit": "USD", "confidence": "high", "sources": [...], "created_at": "..."}
+]
+```
+
+### Phase 2: Unified Chart Generation (Backend)
+**Files to modify:**
+- `backend/core/report_generator.py` — Add `generate_project_chart(project_id, chart_type, metric?)` function (reuse Chart.js logic from `generate_chart`)
+- `backend/functions/project_functions.py` — Add `generate_project_chart` LLM tool
+- `backend/functions/research_functions.py` — Ensure `generate_chart` returns `artifact` dict with `url` + `title` for new-tab behavior
+- `backend/api/projects.py` — Add `POST /api/projects/{id}/generate-chart` endpoint
+- `backend/api/research.py` — Update `generate_chart` to support new-tab flag
+
+**Chart output path:**
+- Research: `/research/{slug}/outputs/chart_{timestamp}/index.html`
+- Projects: `/projects/{slug}/outputs/chart_{timestamp}/index.html`
+
+### Phase 3: Auto-Open in New Browser Tab (Frontend + Backend)
+**Files to modify:**
+- `backend/api/chat.py` (lines ~1056-1061) — When tool result contains `artifact` with `url`, dispatch WebSocket message with `open_in_new_tab: true`
+- `frontend/src/hooks/useChat.ts` — Handle new `open_in_new_tab` field in `tool_call` message: `window.open(url, '_blank')`
+- `frontend/src/components/chat/MessageBubble.tsx` — Add "Open in New Tab" button on tool_call bubbles for charts (fallback if auto-open blocked by popup blocker)
+
+**WebSocket message addition:**
+```json
+{
+  "type": "tool_call",
+  "name": "generate_chart",
+  "result": "...",
+  "artifact_url": "/projects/proj_xyz/outputs/chart_.../index.html",
+  "artifact_title": "Q4 Metrics",
+  "open_in_new_tab": true
+}
+```
+
+### Phase 4: Popup Blocker Handling
+- If `window.open()` returns `null` (blocked), show toast: "Popup blocked — click to open chart"
+- Add `target="_blank"` link in tool_call bubble as fallback
+
+### Flow Summary
+```
+User: "Create a bar chart of my project's Q4 metrics"
+    ↓
+LLM calls generate_project_chart(project_id="proj_xyz", chart_type="bar")
+    ↓
+Backend generates chart.html → saves to project/outputs/chart_*/index.html
+    ↓
+Backend returns { artifact: { url: "/projects/proj_xyz/outputs/chart_.../index.html", title: "Q4 Metrics" } }
+    ↓
+WebSocket sends tool_call with { artifact_url, artifact_title, open_in_new_tab: true }
+    ↓
+Frontend useChat.ts → window.open(url, '_blank') → New browser tab opens with Chart.js chart
+```
+
+### Estimate
+- **Phase 1**: ~2-3 hours (project data points)
+- **Phase 2**: ~2-3 hours (unified chart generation)
+- **Phase 3**: ~1-2 hours (auto-open + fallback)
+- **Total**: ~5-8 hours
+
+---
+
+## Universal Data Analysis Pipeline (Excel + Web + Auto-Charts) — Plan for Aug 11
+
+### Goal
+Enable Mayday to analyze ANY data request by:
+1. **Excel/CSV upload** → parse → structured data points
+2. **Web search** (Exa) → fetch sources → LLM extracts structured data
+3. **Auto-store** as data_points in Research or Project
+4. **Auto-select chart type** (line/bar/pie) based on data shape
+5. **Auto-open** interactive Chart.js chart in new browser tab
+
+### Current State
+
+| Capability | Status | Location |
+|------------|--------|----------|
+| Web search (Exa) | ✅ | `backend/assistant/exa_tools.py` |
+| PDF upload/analysis | ✅ | `backend/functions/document_functions.py` |
+| Research data_points | ✅ | `backend/core/research_store.py` |
+| Chart generation (Chart.js) | ✅ | `backend/core/report_generator.py` |
+| Excel/CSV upload | ❌ | — |
+| Web → structured data pipeline | ❌ | — |
+| Auto chart type selection | ❌ Manual param | — |
+| Auto-open in new tab | ⚠️ Planned | Plan Phase 3 |
+
+---
+
+### Phase 0: Excel/CSV Upload & Parsing (New)
+**Files to create/modify:**
+- `backend/functions/data_import.py` (NEW) — Excel/CSV parsing with `pandas`/`openpyxl`
+- `backend/api/data_import.py` (NEW) — `POST /api/data/import` endpoint
+- `frontend/src/components/data/DataImportPanel.tsx` (NEW) — Drag-drop Excel/CSV zone
+- `backend/requirements.txt` — Add `pandas`, `openpyxl`
+
+**Tool: `import_data(file_id, sheet_name?, header_row?)`**
+```python
+# Returns: { columns: [...], rows: [...], dtypes: {...}, sample: [...], detected: {date_cols: [], numeric_cols: [], categorical_cols: []} }
+```
+
+**Frontend:** Drag-drop zone in new "Data" tab + ChatPanel file upload (reuse PDF pattern)
+
+---
+
+### Phase 1: Web Search → Structured Data Pipeline (New)
+**Files to create/modify:**
+- `backend/functions/web_research.py` (NEW) — LLM-guided extraction pipeline
+- `backend/core/extraction_pipeline.py` (NEW) — Search → Extract → Structure → Store
+
+**Tools:**
+```python
+# 1. Search & fetch via Exa
+web_search_and_fetch(query: str, max_sources: int = 10, source_type: str = "news|academic|web") -> list[dict]
+    # Returns: [{"url": "...", "title": "...", "content": "...", "score": 0.9}, ...]
+
+# 2. Extract structured data from sources (LLM-based)
+extract_data_from_sources(sources: list[dict], schema: dict, context: str = "") -> list[dict]
+    # schema = {"columns": ["year", "role", "postings", "salary"], "types": {"year": "int", "postings": "int", "salary": "float"}}
+    # context = "ML Engineer vs Full Stack Engineer growth 2015-2024"
+    # Returns: [{"year": 2020, "role": "ML Engineer", "postings": 12500, "salary": 145000}, ...]
+
+# 3. Batch store as data_points
+batch_add_data_points(topic: str, data_points: list[dict], store_type: str = "research") -> dict
+    # store_type: "research" | "project"
+```
+
+**Flow:**
+```
+User: "ML Engineer vs Full Stack growth 2015-2024"
+    ↓
+LLM: web_search_and_fetch("ML Engineer job postings 2015-2024 Stack Overflow survey")
+    ↓
+LLM: extract_data_from_sources(sources, schema={year, role, postings, salary}, context="...")
+    ↓
+LLM: batch_add_data_points("Engineering Growth 2015-2024", extracted_data, "research")
+    ↓
+LLM: generate_chart(topic="Engineering Growth 2015-2024", chart_type="auto")
+    ↓
+Chart auto-opens in new tab (multi-line: x=year, y=postings, 2 lines)
+```
+
+---
+
+### Phase 2: Auto Chart Type Selection (Enhancement)
+**Files to modify:**
+- `backend/core/report_generator.py` — Add `suggest_chart_type(data_points, context)`
+- `backend/functions/research_functions.py` — `chart_type="auto"` default
+- `backend/functions/project_functions.py` — Same for projects
+- `backend/functions/data_import.py` — Auto-suggest after import
+
+**Logic:**
+```python
+def suggest_chart_type(data_points: list, context: str = "") -> str:
+    # Detect time series: labels parseable as dates/years (2020, 2021, "Q1 2020", "Jan 2020")
+    # Detect multi-series: multiple entities per time point (role="ML Engineer" + role="Full Stack")
+    # Rules:
+    #   - Time series + multi-series → "line" (best for growth comparison)
+    #   - Time series + single series → "line"
+    #   - Categorical (single time) + multi-entity → "bar"
+    #   - Parts of whole (percentages sum to 100) → "pie"
+    #   - Distribution → "histogram" (future)
+    # Context keywords: "growth", "trend", "over time" → prefer "line"
+```
+
+---
+
+### Phase 3: Project Data Points + Chart Generation (From Previous Plan)
+**Files to modify:**
+- `backend/core/project_store.py` — Add `data_points: []` to project schema
+- `backend/functions/project_functions.py` — `add_project_data_point`, `list_project_data_points`, `generate_project_chart`
+- `backend/api/projects.py` — `POST/GET /api/projects/{id}/data-points`, `POST /api/projects/{id}/generate-chart`
+
+---
+
+### Phase 4: Auto-Open in New Tab (From Previous Plan)
+**Files to modify:**
+- `backend/api/chat.py` (lines ~1056-1061) — When tool result contains `artifact` with `url`, dispatch WebSocket message with `open_in_new_tab: true`
+- `frontend/src/hooks/useChat.ts` — Handle `open_in_new_tab` field in `tool_call`: `window.open(url, '_blank')`
+- `frontend/src/components/chat/MessageBubble.tsx` — Add "Open in New Tab" button on tool_call bubbles for charts (fallback if popup blocked)
+
+**WebSocket message addition:**
+```json
+{
+  "type": "tool_call",
+  "name": "generate_chart",
+  "result": "...",
+  "artifact_url": "/projects/proj_xyz/outputs/chart_.../index.html",
+  "artifact_title": "Engineering Growth 2015-2024",
+  "open_in_new_tab": true
+}
+```
+
+---
+
+### Phase 5: Unified Data Analysis UI (Frontend)
+**Files to create:**
+- `frontend/src/components/data/AnalysisPanel.tsx` — Main workspace with tabs:
+  - Tab 1: **Import** — Excel/CSV drag-drop, preview, column type detection
+  - Tab 2: **Web Research** — Query input → search results → extraction preview → confirm store
+  - Tab 3: **Data Points** — Editable table (add/edit/delete rows), filter by column
+  - Tab 4: **Charts** — Auto-generated + manual chart builder, history of generated charts
+- `frontend/src/hooks/useDataAnalysis.ts` — State management (imported data, extracted data, data_points, charts)
+- `frontend/src/components/layout/Sidebar.tsx` — Add "Data" nav item (icon: Database/Table)
+
+**Integration with Chat:**
+- ChatPanel file upload: Excel/CSV → calls `import_data` → shows preview → "Analyze" button
+- Web Research tab: natural language query → LLM orchestrates search→extract→store→chart
+
+---
+
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     USER REQUEST                                 │
+│  "Analyze ML vs Full Stack growth 2015-2024"                    │
+│  [Upload Excel] → "Analyze this file"                           │
+└────────────────────────────┬────────────────────────────────────┘
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    LLM ORCHESTRATOR                              │
+│  1. Detects: needs data → chooses source                         │
+│  2. If file: import_data()                                       │
+│  3. If web: web_search_and_fetch() → extract_data_from_sources() │
+│  4. batch_add_data_points()                                      │
+│  5. generate_chart(chart_type="auto")                            │
+└────────────────────────────┬────────────────────────────────────┘
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      DATA STORES                                 │
+│  Research: topics/{slug}/data_points.json                       │
+│  Projects: projects/{slug}/data_points.json                     │
+└────────────────────────────┬────────────────────────────────────┘
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    CHART GENERATION                              │
+│  report_generator.py → Chart.js HTML → /outputs/chart_*/index.html │
+└────────────────────────────┬────────────────────────────────────┘
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    FRONTEND                                      │
+│  WebSocket tool_call {artifact_url, open_in_new_tab: true}       │
+│  → window.open() → New tab with interactive Chart.js             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### New Tools Summary
+
+| Tool | Purpose | Source |
+|------|---------|--------|
+| `import_data(file_id, sheet?)` | Parse Excel/CSV → structured data | Local file |
+| `web_search_and_fetch(query, max_sources, source_type)` | Exa search + fetch content | Exa MCP |
+| `extract_data_from_sources(sources, schema, context)` | LLM extracts structured rows | LLM + sources |
+| `batch_add_data_points(topic, data_points, store_type)` | Bulk store | Research/Project |
+| `suggest_chart_type(data_points, context)` | Auto-select line/bar/pie | Heuristic + context |
+| `generate_chart(topic, chart_type="auto")` | Create + open chart | Chart.js |
+
+---
+
+### Estimate
+
+| Phase | Effort |
+|-------|--------|
+| 0: Excel/CSV Import | 4-6 hrs |
+| 1: Web → Data Pipeline | 6-8 hrs |
+| 2: Auto Chart Type | 2-3 hrs |
+| 3: Project Data Points | 3-4 hrs |
+| 4: Auto-Open New Tab | 2-3 hrs |
+| 5: Unified UI | 6-8 hrs |
+| **Total** | **23-32 hrs** |
+
+---
+
+### Implementation Order (Recommended)
+
+1. **Phase 0 + 3** — Foundation: Excel import + Project data_points (independent, parallelizable)
+2. **Phase 1** — Web pipeline (most complex, depends on Phase 0/3 stores)
+3. **Phase 2** — Auto chart type (enhances all chart generation)
+4. **Phase 4** — Auto-open new tab (UX polish)
+5. **Phase 5** — Unified UI (frontend integration)
+
+---
+
+### Clarifying Decisions Needed
+
+| Decision | Options | Recommendation |
+|----------|---------|----------------|
+| Web extraction method | LLM-based (flexible) / CSS selectors (fast) / Hybrid | Hybrid: LLM for schema, selectors for known sites |
+| Schema definition | User provides / LLM infers / Templates | Templates for common types (jobs, stocks, sales) + LLM infer |
+| Data validation | Auto outlier detection / Manual review / Both | Auto-detect + "Review before chart" toggle |
+| Chart library | Chart.js (current) / Plotly / ECharts | Chart.js (lightweight, already working) |
+| Storage unification | Research + Project separate / Unified "Dataset" concept | Keep separate, add `store_type` param to tools |
+
+---
+
+## DSPy System Prompt Optimization — Research Report (Aug 13)
+
+### Status — PLANNED (research complete, no code changes yet)
+
+### Goal
+Apply DSPy ("program, don't prompt") techniques to Mayday's system prompt + tool-calling architecture to: (1) reduce input tokens, (2) improve tool-call accuracy, (3) keep/improve latency, (4) make prompt enhancement systematic instead of hand-edited.
+
+### What the DSPy Tutorials Teach (https://dspy.ai/tutorials/)
+- **Signatures replace prompt strings**: `"question -> answer"` typed contracts; the docstring is the optimizable instruction; adapters auto-render the prompt.
+- **Modules**: `Predict`, `ChainOfThought` (adds reasoning), `ReAct` (thought → tool_name → args → observation loop, auto `finish` tool, `max_iters=20`, overridable `truncate_trajectory` on context overflow).
+- **Tools are plain Python functions**: schema introspected from `inspect.signature` + type hints; docstring = description; errors become observations, not crashes; 10s timeout wrapping.
+- **ToolHop tutorial (Advanced Tool Use)**: agent with a unique tool set per request; tool selection declared as signature output fields (`next_selected_fn`, `args: dict`); tools exposed as metadata only; `finish` terminates loop. Baseline GPT-4o 35% → **60.7% after SIMBA compile (71% relative gain)**.
+- **Optimizers**: `BootstrapFewShot` (demos from successful traces; 4 bootstrapped + 16 labeled default), `BootstrapRS`, `COPRO` (instructions), `MIPROv2` (instructions+demos jointly), **SIMBA** (mini-batch weak-spot patching), **GEPA** (reflective evolution; needs `Prediction(score, feedback)` metrics; two-LM split: strong `reflection_lm` + cheap `task_model`).
+- **`dspy.History`**: conversation history is an input field — caller appends turns; few-shot demos stay single-turn.
+- **Native function calling is a one-flag adapter option** (`ChatAdapter(use_native_function_calling=True)`) — same `Tool` object works text-based or native (critical for Ollama models).
+- **MCP bridge**: `dspy.Tool.from_mcp_tool(session, tool)` — Mayday's 8 MCP servers need zero rewriting.
+- **Compile economics**: `.compile()` is expensive (GEPA/MIPROv2 = hundreds of dollars, ~1330–2045 metric calls on 2 predictors × 100 examples); runtime inference on the saved artifact is unchanged. "Compile once, serve many times."
+
+### Mayday Current Baseline (measured from code)
+| Component | Today |
+|-----------|-------|
+| System prompt | 7 hand-authored sections (chat.py:38–347); WEBSITE_BUILD_PROTOCOL ~180 lines alone; personality ~32; + dynamic blocks: ~23 skill descriptions, active projects, full active-skill body, memory auto-context (incl. 4,000-char PDF dumps), recent operations |
+| Tool definitions | 99 hand-written schemas in `LOCAL_TOOL_DEFINITIONS` (function_registry.py:328–1873) + ~22 static + MCP → **~121–200 tools, est. 15K–40K tokens/request** (iteration 1 only) |
+| Iterative loop | Max 20 iterations; system prompt re-sent unchanged each iteration (chat.py:1123); `tools=[]` on iterations 2+ (chat.py:916); duplicate guard 3×; final summary call |
+| Context window | Last 20 messages, **no compaction** (conversation_manager.py:33–37); tool results capped at 50,000 chars each (chat.py:547) |
+| Sampling | No `temperature`/`top_p` ever set (llm_client.py:102–114); non-streaming is the production path |
+| Tool parsing | Dual-path: native `tool_calls` OR regex/text fallback for `<|tool_call|>` blocks (llm_client.py:22–79) |
+| Tool filtering | Regex QueryClassifier hard groups + ToolSelector TF-IDF fallback (0.9 threshold, core always on); empty → all tools |
+| Arg repair | `dispatch_call` auto-repairs aliases/unknown kwargs/defaults (function_registry.py:2008–2081) |
+
+### Proposed DSPy-Style Architecture
+1. **Signatures per intent** — one signature per intent group (build/research/todo/calendar/memory/data/general); current section prose becomes the optimizable `instructions` string.
+2. **Typed tool selection** — tool name as `Literal[...]` output field, args as `dict` — invalid tool names impossible by construction; the regex fallback parser becomes unnecessary.
+3. **Schema introspection** — generate tool schemas from `inspect.signature` + type hints instead of 99 hand-written ones; compact metadata rendering (name + one-line docstring).
+4. **Bootstrapped demos** — `BootstrapFewShot`/`SIMBA` extract successful tool-use traces from Mayday's own conversations/ + operations/ logs.
+5. **History compaction** — `truncate_trajectory`-style summarizer for old tool observations; shrink the 50K-char result cap; keep recent turns raw.
+6. **MCP bridge** — `dspy.Tool.from_mcp_tool` for all 8 existing MCP servers.
+7. **Evaluation harness** — dev set from real user turns; deterministic metrics (tool name ∈ known set, args validate, dispatch success) + `SemanticF1` for answer quality.
+
+### Expected Impact
+
+**Input token reduction (per turn):**
+| Component | Today (est.) | After | Reduction |
+|-----------|--------------|-------|-----------|
+| System prompt sections | ~800–4,500 tok | Compiled instructions + demos (GEPA-distilled) | 40–70% |
+| Skill descriptions (23) | ~1,000–1,500 tok | Only active skills bound | 60–80% |
+| Tool definitions | 15K–40K tok (121–200 schemas) | Compact metadata + per-intent binding | 50–80% |
+| Conversation window | 2K–100K+ tok worst case | Trajectory compaction; result caps 50K→5K | 50–90% |
+| Per-iteration re-send | Full context × up to 20 iterations | Compressed context × same loop | 40–80% |
+
+Net: **~2–4× less total input tokens across a typical multi-tool turn.**
+
+**Tool call accuracy:**
+- `Literal`-typed tool names + JSON-schema-validated args eliminate invalid calls by construction; `dispatch_call` repair becomes a safety net.
+- Bootstrapped demos from own traces teach correct arg formats per tool.
+- Tutorial evidence: ToolHop 35% → 60.7% (SIMBA, 71% relative gain). Mayday's ToolSelector (92.2% precision / 90.8% recall) provides a ready-made structured signal for the metric.
+
+**Latency:**
+- Compilation is offline; the served artifact is just prompts+demos — runtime unchanged.
+- Fewer prefill tokens → faster time-to-first-token; savings compound over the 20-iteration loop.
+- Do NOT blindly adopt `dspy.ReAct`'s loop: Mayday's `tools=[]` on iterations 2+ fixes a real bug (silent second call) — preserve it.
+
+**Prompt enhancement:**
+- Every prompt decision currently hand-made and never measured → DSPy closes the loop: metric-driven compile against recorded conversations.
+- Per-intent optimization (build/research/tool-selection fail differently → optimize separately).
+- Two-LM split: cheap local Ollama task model + strong cloud `reflection_lm` for GEPA.
+- LM-cache-aware rollout design + `dspy.Cache` for free prompt caching.
+
+### Migration Roadmap (Phased, Low-Risk)
+| Phase | Work | Risk | Effort |
+|-------|------|------|--------|
+| 0. Instrument | Log full prompts + tool traces per turn; build 200–500-case dev set from conversations/ | None | 1–2 days |
+| 1. Signatures | Convert 7 prompt sections → signature instructions; adapters render prompts; A/B vs current | Low | 3–5 days |
+| 2. Tool introspection | Generate schemas from `inspect.signature` (keep hand-written as overrides) | Low | 2–3 days |
+| 3. BootstrapFewShot | Bootstrapped demos for tool-calling steps from own traces | Low | 2 days |
+| 4. History compaction | `truncate_trajectory`-style summarizer; shrink 50K-char result cap | Medium | 2–3 days |
+| 5. GEPA/MIPROv2 | Offline instruction evolution per intent; serve saved artifacts | Medium | 1 week |
+| 6. Optional | Full `dspy.ReAct` + MCP bridge + native-function-calling adapter | Higher | 1–2 weeks |
+
+### Risks & Caveats
+- Do not replace the engine wholesale — iterative loop (duplicate guard, repair, fallback summary) encodes hard-won bug fixes; full ReAct adoption is Phase 6+ and optional.
+- Compile cost is real (hundreds of dollars of LM calls for GEPA/MIPROv2); keep task model local (Ollama), reflection model cheap.
+- DSPy = new dependency, but pure Python, works with any OpenAI-compatible endpoint (Ollama fits).
+- `gemma4:31b-cloud` text-based tool calls remain a model quirk; typed signatures + adapter are more robust than the current regex fallback, and `use_native_function_calling` is one flag.
+- Keep the deterministic-metric rule: "a flaky metric corrupts the bootstrap family."
+
+### Bottom Line
+Treat the 7 prompt sections as optimizable signatures; get tool-call correctness from typed output fields + bootstrapped demos instead of prose; get token savings from compact tool metadata + trajectory compaction (50K-char tool results are the biggest leak); get prompt enhancement from a metric-driven offline compile loop using existing conversation/operation logs as the training set. Expected: **30–70% input-token reduction, double-digit tool-call accuracy gains, zero runtime latency regression**, and a prompt system that improves itself from usage data.

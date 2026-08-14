@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -139,7 +140,7 @@ def update_project_status(name: str = "", status: str = "", project: str = "") -
     return f"Project '{name}' status updated to '{status}'."
 
 
-def add_project_note(filename: str = "", content: str = "", name: str = "", project: str = "", file_name: str = "") -> str:
+def add_project_note(filename: str = "", content: str = "", name: str = "", project: str = "", file_name: str = "", force: bool = False) -> str:
     if not filename and file_name:
         filename = file_name
     if not filename:
@@ -164,6 +165,11 @@ def add_project_note(filename: str = "", content: str = "", name: str = "", proj
     folder_path.mkdir(parents=True, exist_ok=True)
 
     file_path = folder_path / filename
+    if file_path.exists() and not force:
+        return (
+            f"Note '{filename}' already exists in project '{name}'. "
+            f"Pass force=True to overwrite it."
+        )
     file_path.write_text(content, encoding="utf-8")
 
     store.touch_activity(project_obj["id"])
@@ -183,7 +189,7 @@ def add_project_note(filename: str = "", content: str = "", name: str = "", proj
     return f"Note saved: {folder_path / filename} ({len(content)} chars)"
 
 
-def add_project_task(name: str = "", title: str = "", type: str = "general", depends_on: list[str] | None = None, description: str = "", project: str = "") -> str:
+def add_project_task(name: str = "", title: str = "", type: str = "general", depends_on: list[str] | None = None, description: str = "", project: str = "", force: bool = False) -> str:
     if not name and project:
         name = project
     if not name:
@@ -197,7 +203,7 @@ def add_project_task(name: str = "", title: str = "", type: str = "general", dep
     if type not in valid_types:
         return f"Invalid type '{type}'. Must be one of {valid_types}."
 
-    result = store.add_task(project_obj["id"], title, type, depends_on or [], description)
+    result = store.add_task(project_obj["id"], title, type, depends_on or [], description, force=force)
     if "error" in result:
         return result["error"]
 
@@ -302,3 +308,63 @@ def list_project_tasks(name: str = "", status: str = "", project: str = "") -> s
     if active_task:
         lines.append(f"Next: {active_task['title']}")
     return "\n".join(lines)
+
+
+def _resolve_project(name: str = "", project: str = "") -> dict | None:
+    if not name and project:
+        name = project
+    if not name:
+        return None
+    return get_project_store().find_project_by_name(name)
+
+
+def add_project_data_point(name: str = "", label: str = "", value: str = "", unit: str | None = None,
+                           confidence: str | None = None, sources: list[str] | None = None,
+                           project: str = "") -> str:
+    if not label or not value:
+        return "Missing required parameters: label and value."
+    store = get_project_store()
+    project_obj = _resolve_project(name, project)
+    if not project_obj:
+        return "No project name provided, or project not found."
+    result = store.add_data_point(project_obj["id"], label, str(value), unit, confidence, sources)
+    if "error" in result:
+        return result["error"]
+    unit_str = f" {unit}" if unit else ""
+    return f"Data point added to project '{project_obj['name']}': '{label}' = {value}{unit_str} (confidence: {result.get('confidence', 'medium')})"
+
+
+def list_project_data_points(name: str = "", project: str = "") -> str:
+    store = get_project_store()
+    project_obj = _resolve_project(name, project)
+    if not project_obj:
+        return "No project name provided, or project not found."
+    dps = store.list_data_points(project_obj["id"])
+    if not dps:
+        return f"No data points collected for project '{project_obj['name']}' yet. Add some with add_project_data_point or batch_add_data_points."
+    lines = [f"Data points for '{project_obj['name']}' ({len(dps)}):"]
+    for dp in dps:
+        unit_str = f" {dp.get('unit', '')}" if dp.get('unit') else ""
+        src = f" [src: {', '.join(dp['sources'][:2])}]" if dp.get('sources') else ""
+        lines.append(f"  - {dp['label']}: {dp['value']}{unit_str} ({dp.get('confidence', 'medium')}){src}")
+    return "\n".join(lines)
+
+
+def generate_project_chart(name: str = "", chart_type: str = "auto", metric: str | None = None,
+                           project: str = "") -> str:
+    from backend.core.report_generator import generate_project_chart as _gen_project_chart
+    store = get_project_store()
+    project_obj = _resolve_project(name, project)
+    if not project_obj:
+        return "No project name provided, or project not found."
+    result = _gen_project_chart(project_obj["id"], chart_type, metric)
+    if "error" in result:
+        return f"Error: {result['error']}"
+    url = result.get("relative_url", "")
+    return json.dumps({
+        "message": f"**{result['chart_type'].title()} chart** generated for project '{project_obj['name']}' from {result['data_points']} data points.",
+        "artifact": {
+            "url": url,
+            "title": f"{project_obj['name']} — {result['chart_type'].title()} Chart",
+        },
+    })

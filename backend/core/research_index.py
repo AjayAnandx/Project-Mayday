@@ -66,8 +66,9 @@ class ResearchIndex:
                         except OSError:
                             continue
                         doc_id = f"note:{slug}:{f.name}"
-                        self._ngram.add(doc_id, text)
-                        self._ranker.add(doc_id, text)
+                        name_text = self._doc_text([f.name, f"note:{slug}:{f.name}"])
+                        self._ngram.add(doc_id, self._doc_text([name_text, text]))
+                        self._ranker.add(doc_id, self._doc_text([name_text, text]))
                         self._meta[doc_id] = {
                             "kind": "note", "slug": slug, "topic": full["topic"], "filename": f.name,
                         }
@@ -82,23 +83,26 @@ class ResearchIndex:
                         except OSError:
                             continue
                         doc_id = f"report:{slug}"
-                        self._ngram.add(doc_id, text)
-                        self._ranker.add(doc_id, text)
+                        name_text = self._doc_text([f.name, f"report:{slug}"])
+                        self._ngram.add(doc_id, self._doc_text([name_text, text]))
+                        self._ranker.add(doc_id, self._doc_text([name_text, text]))
                         self._meta[doc_id] = {
                             "kind": "report", "slug": slug, "topic": full["topic"], "filename": f.name,
                         }
                     for f in outputs_dir.iterdir():
                         if f.is_file() and f.name != "report.md":
                             doc_id = f"artifact:{slug}:{f.name}"
-                            self._ngram.add(doc_id, f.name)
-                            self._ranker.add(doc_id, f.name)
+                            name_text = self._doc_text([f.name, doc_id])
+                            self._ngram.add(doc_id, name_text)
+                            self._ranker.add(doc_id, name_text)
                             self._meta[doc_id] = {
                                 "kind": "artifact", "slug": slug, "topic": full["topic"], "filename": f.name,
                             }
                         elif f.is_dir():
                             doc_id = f"artifact:{slug}:{f.name}"
-                            self._ngram.add(doc_id, f.name)
-                            self._ranker.add(doc_id, f.name)
+                            name_text = self._doc_text([f.name, doc_id])
+                            self._ngram.add(doc_id, name_text)
+                            self._ranker.add(doc_id, name_text)
                             self._meta[doc_id] = {
                                 "kind": "artifact", "slug": slug, "topic": full["topic"], "filename": f.name,
                             }

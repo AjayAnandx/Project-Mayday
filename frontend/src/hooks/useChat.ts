@@ -9,6 +9,9 @@ export interface ChatMessage {
   voice_content?: string
   tool_name?: string
   image_url?: string
+  artifact_url?: string
+  artifact_title?: string
+  open_in_new_tab?: boolean
 }
 
 export interface PendingSkill {
@@ -76,12 +79,18 @@ export function useChat() {
               content: data.result || '',
               tool_name: data.name,
               image_url: data.image_url,
+              artifact_url: data.artifact_url,
+              artifact_title: data.artifact_title,
+              open_in_new_tab: data.open_in_new_tab,
             })
             setToolCallCount((c) => c + 1)
             if (data.artifact_url) {
               window.dispatchEvent(new CustomEvent('open-artifact', {
                 detail: { url: data.artifact_url, title: data.artifact_title || 'Artifact' },
               }))
+            }
+            if (data.open_in_new_tab && data.artifact_url) {
+              window.open(data.artifact_url, '_blank')
             }
             break
           case 'done':

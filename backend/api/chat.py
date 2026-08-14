@@ -317,6 +317,35 @@ When the user says "research &lt;topic&gt;", "investigate", "find out about", "l
 - Document findings as .md files in the project folder so results persist.
 - CRITICAL: Thorough research means multiple queries, multiple sources, following cross-references. A single search is never enough."""
 
+DATA_ANALYSIS_PROTOCOL = """
+### Data Analysis Pipeline — Trends, Comparisons & Structured Data
+When the user asks about growth, trends, comparisons ("X vs Y"), statistics, time series, or any request best answered with a CHART, follow this 4-step pipeline. Do NOT stop at a text answer — build the chart.
+
+**STEP 1 — SEARCH:** Call web_search_and_fetch(query, max_sources=10) with a query targeting the needed numbers. Pick sources that contain tabular/numeric data (job postings, stats, survey results).
+
+**STEP 2 — EXTRACT:** Call extract_data_from_sources(sources=<result of step 1>, schema=<columns>, context=<your prompt>).
+- Provide schema when you know the shape, e.g. {"columns": ["year", "role", "postings"], "types": {"year": "int", "postings": "int"}}
+- Include a 'time' column (year/quarter/month) and an entity column (e.g. role) when the data supports comparisons over time.
+
+**STEP 3 — STORE:** Call batch_add_data_points(topic="<descriptive topic>", data_points=<extracted rows>, store_type="research"). The research record is auto-created if missing. It returns a suggested chart type.
+
+**STEP 3.5 — DATASET FILE:** Call export_research_dataset(topic="<same topic>") to write the collected data to a CSV in the uploads folder. This creates a tangible, downloadable dataset file (visible in the Data Import panel at /uploads/<file_id>) — the "export the CSV" step. Optionally re-import it to literally "upload" it back: import_data_to_store(file_id=<returned file_id>, store_type="research", topic="<same topic>").
+
+**STEP 4 — CHART:** Call generate_chart(topic="<same topic>", chart_type="auto"). The chart is saved, shown in chat, and opens in a new tab automatically.
+
+**STEP 5 — REMEMBER & TEACH:** Persist the insight so it can be recalled later:
+- Call add_finding(topic="<same topic>", content="<plain-English summary of the trend, e.g. 'AI Engineer demand grew X% 2020-2026 while ML Engineer grew Y%...'>").
+- Call remember(entity="<topic> visualization", relation="has_chart", value="<chart URL from STEP 4>") so the visualization is linked in memory.
+Then briefly tell the user what the data shows (key trend, biggest delta, etc.).
+
+RULES:
+- Choose a descriptive topic (e.g. "ML vs AI Engineer Growth 2020-2026"), not a user ID or vagues names.
+- If extraction returns no rows, try again with different sources or a simplified schema. Never fabricate numbers.
+- For "X vs Y over years" requests, give extract_data_from_sources a schema with a time column (year) and an entity/series column (e.g. role) so the chart becomes a multi-series line chart.
+- For uploaded Excel/CSV files: use import_data(file_id) to preview, then import_data_to_store(file_id, store_type, topic/project_name) to store, then generate_chart(topic, "auto") to chart. file_id comes from the file upload shown in chat as an uploaded file — use list_imported_files() to see uploaded files with file_ids.
+- To re-display a previously created chart later, call list_research_outputs(topic="<same topic>") — it returns the chart URL and opens it in a new tab.
+- After the chart is generated, briefly tell the user what the data shows (key trend, biggest delta, etc.)."""
+
 SKILL_DESCRIPTIONS_TEMPLATE = """
 ### Available Skills
 When a user's request matches one of the skills below, call suggest_skill() to offer it:
@@ -372,6 +401,9 @@ CORE_TOOL_NAMES = {
     "generate_combined_report",
     "add_research_note", "list_research_notes",
     "search_research", "promote_research_to_project",
+    # Data analysis pipeline tools
+    "web_search_and_fetch", "extract_data_from_sources", "batch_add_data_points",
+    "import_data", "import_data_to_store", "list_imported_files",
     # Design tools
     *DESIGN_TOOL_NAMES,
     *DESIGN_MCP_TOOL_NAMES,
@@ -440,6 +472,15 @@ RESEARCH_TOOL_NAMES = {
     "generate_combined_report",
     "add_research_note", "list_research_notes",
     "search_research", "promote_research_to_project",
+    "list_research_outputs",
+}
+
+DATA_TOOL_NAMES = {
+    "web_search_and_fetch", "extract_data_from_sources", "batch_add_data_points",
+    "import_data", "import_data_to_store", "list_imported_files",
+    "create_research", "list_research", "update_research_status",
+    "add_data_point", "list_imported_files", "generate_chart",
+    "export_research_dataset", "list_research_outputs",
 }
 
 SCREENSHOT_TOOL_NAMES = {
@@ -498,6 +539,7 @@ GROUP_SETS = {
     "opencode": OPENCODE_TOOL_NAMES,
     "skill": set(),
     "research": RESEARCH_TOOL_NAMES,
+    "data": DATA_TOOL_NAMES,
     "design_mcp": DESIGN_MCP_TOOL_NAMES,
 }
 
@@ -615,7 +657,7 @@ async def _run_engine(
         confidence=1.0,
         requires_llm=True,
         tool_choice="auto",
-        active_sections=["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "WEATHER"],
+        active_sections=["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "DATA", "WEATHER"],
         active_groups=[],
     )
 
@@ -643,6 +685,7 @@ async def _run_engine(
         "PROJECT": PROJECT_INSTRUCTIONS,
         "BUILD": WEBSITE_BUILD_PROTOCOL,
         "RESEARCH": RESEARCH_MODE_INSTRUCTIONS,
+        "DATA": DATA_ANALYSIS_PROTOCOL,
     }
     system_parts = []
     for section_key in intent.active_sections:
@@ -1058,6 +1101,11 @@ async def _run_engine(
                         if isinstance(artifact, dict) and "url" in artifact:
                             tool_msg["artifact_url"] = artifact["url"]
                             tool_msg["artifact_title"] = artifact.get("title", "Artifact")
+                            # Auto-open charts in new tab
+                            artifact_url = artifact["url"]
+                            artifact_title = artifact.get("title", "").lower()
+                            if "chart" in artifact_url or "chart" in artifact_title:
+                                tool_msg["open_in_new_tab"] = True
                             result = _data.get("message", result.split("}")[0] if "}" in result else result)
                 except (json.JSONDecodeError, TypeError):
                     pass

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Query
 from backend.core.data_store import get_store
 from backend.core.operation_log import get_operation_log
 from backend.core.pdf_store import get_pdf_store
+from backend.core.project_index import get_project_index
 from backend.core.research_index import get_research_index
 from backend.memory.knowledge_graph import get_graph
 
@@ -84,6 +85,8 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
 
     research_results = get_research_index().search(q, limit)
 
+    project_results = get_project_index().search(q, limit)
+
     return {
         "todos": [
             {
@@ -124,6 +127,16 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
                 "snippet": r["snippet"],
             }
             for r in research_results
+        ],
+        "projects": [
+            {
+                "id": f"project:{r['folder']}:{r['rel_path']}",
+                "folder": r["folder"],
+                "filename": r["filename"],
+                "rel_path": r["rel_path"],
+                "snippet": r["snippet"],
+            }
+            for r in project_results
         ],
     }
 

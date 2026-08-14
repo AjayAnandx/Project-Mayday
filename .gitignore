@@ -28,3 +28,4 @@ sandbox-projects/
 config.local.yaml
 *.pem
 *.key
+uploads/

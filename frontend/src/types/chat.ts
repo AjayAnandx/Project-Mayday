@@ -23,5 +23,6 @@ export interface WsResponse {
   image_url?: string
   artifact_url?: string
   artifact_title?: string
+  open_in_new_tab?: boolean
   conversation?: Conversation
 }

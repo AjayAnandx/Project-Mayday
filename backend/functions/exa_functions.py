@@ -52,7 +52,7 @@ def web_search_exa(query: str = "", numResults: int = 10, type: str = "auto",
                    enableSummary: bool = False, enableHighlights: bool = False,
                    highlightsQuery: str = "", livecrawl: str = "fallback") -> str:
     if not query:
-        return "Missing required parameter: query."
+        return "Missing required parameter: query. Call web_search_exa with a non-empty 'query' string (e.g. {\"query\": \"your search terms\"})."
     if not _api_key():
         return "EXA_API_KEY not configured. Add it to config.yaml or .env."
     body = {

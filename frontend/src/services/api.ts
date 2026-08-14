@@ -4,6 +4,9 @@ import type { GraphData, GraphNode } from '../types/graph'
 import type { SearchResults } from '../types/search'
 import type { DashboardData, DashboardWeather, AiNewsResponse } from '../types/dashboard'
 import type { DocumentMeta } from '../types/document'
+import type { DataImportFile, DataImportParseResult, ChartOutput } from '../types/data-import'
+import type { ResearchProject, ResearchDataPoint } from '../types/research'
+import type { Project, ProjectDataPoint } from '../types/project'
 
 const BASE = '/api'
 
@@ -49,6 +52,95 @@ export const api = {
 
   deleteDocument: (id: string) =>
     request<{ deleted: boolean }>(`/documents/${id}`, { method: 'DELETE' }),
+  // Data Import
+  uploadDataFile: async (file: File): Promise<{ file_id: string; filename: string; size: number }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await fetch(`${BASE}/data/import`, {
+      method: 'POST',
+      body: formData,
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(err || `HTTP ${res.status}`)
+    }
+    return res.json()
+  },
+
+  parseDataFile: async (fileId: string, sheetName?: string, headerRow = 0): Promise<DataImportParseResult> => {
+    const formData = new FormData()
+    formData.append('file_id', fileId)
+    if (sheetName) formData.append('sheet_name', sheetName)
+    formData.append('header_row', String(headerRow))
+    const res = await fetch(`${BASE}/data/parse`, {
+      method: 'POST',
+      body: formData,
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(err || `HTTP ${res.status}`)
+    }
+    return res.json()
+  },
+
+  importDataToStore: async (fileId: string, storeType: 'research' | 'project', options?: { sheetName?: string; headerRow?: number; topic?: string; projectName?: string }): Promise<{ message: string; data_points: number; detected: any }> => {
+    const formData = new FormData()
+    formData.append('file_id', fileId)
+    formData.append('store_type', storeType)
+    if (options?.sheetName) formData.append('sheet_name', options.sheetName)
+    formData.append('header_row', String(options?.headerRow ?? 0))
+    if (options?.topic) formData.append('topic', options.topic)
+    if (options?.projectName) formData.append('project_name', options.projectName)
+    const res = await fetch(`${BASE}/data/import-to-store`, {
+      method: 'POST',
+      body: formData,
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(err || `HTTP ${res.status}`)
+    }
+    return res.json()
+  },
+
+  listDataFiles: () =>
+    request<{ files: DataImportFile[] }>('/data/files'),
+  // Research
+  listResearch: (status = '', q = '') =>
+    request<ResearchProject[]>(`/research?status=${encodeURIComponent(status)}&q=${encodeURIComponent(q)}`),
+
+  getResearch: (topic: string) =>
+    request<ResearchProject>(`/research/${encodeURIComponent(topic)}`),
+
+  createResearch: (data: { topic: string; type: string; depth?: number; questions?: string[] }) =>
+    request<ResearchProject>('/research', { method: 'POST', body: JSON.stringify(data) }),
+
+  addResearchDataPoint: (data: { topic: string; label: string; value: string; unit?: string; confidence?: string; sources?: string[] }) =>
+    request<ResearchDataPoint>('/research/data-points', { method: 'POST', body: JSON.stringify(data) }),
+
+  generateResearchChart: (data: { topic: string; chart_type?: string; metric?: string }) =>
+    request<{ chart_type: string; relative_url: string; data_points: number; url?: string; title?: string }>('/research/generate-chart', { method: 'POST', body: JSON.stringify(data) }),
+
+  listResearchOutputs: (topic: string) =>
+    request<ChartOutput[]>(`/research/${encodeURIComponent(topic)}/outputs`),
+
+  // Projects
+  listProjects: (status = '') =>
+    request<Project[]>(`/projects?status=${encodeURIComponent(status)}`),
+
+  getProject: (projectId: string) =>
+    request<Project>(`/projects/${projectId}`),
+
+  createProject: (data: { name: string }) =>
+    request<Project>('/projects', { method: 'POST', body: JSON.stringify(data) }),
+
+  addProjectDataPoint: (projectId: string, data: { label: string; value: string; unit?: string; confidence?: string; sources?: string[] }) =>
+    request<ProjectDataPoint>(`/projects/${projectId}/data-points`, { method: 'POST', body: JSON.stringify(data) }),
+
+  generateProjectChart: (projectId: string, data: { chart_type?: string; metric?: string }) =>
+    request<{ chart_type: string; relative_url: string; data_points: number; url?: string; title?: string }>(`/projects/${projectId}/generate-chart`, { method: 'POST', body: JSON.stringify(data) }),
+
+  listProjectOutputs: (projectId: string) =>
+    request<ChartOutput[]>(`/projects/${projectId}/outputs`),
   // Todos
   listTodos: (includeCompleted = true, q = '') =>
     request<Todo[]>(`/todos?include_completed=${includeCompleted}&q=${encodeURIComponent(q)}`),

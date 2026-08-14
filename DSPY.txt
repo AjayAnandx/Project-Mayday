@@ -1,0 +1,149 @@
+Full Plan: DSPy Report Synthesis (Module A) + RL Multi-Hop Research Agent (Module B)
+Both modules share one spine — a DSPy bridge layer, a deterministic metrics package, and a local-first LM policy — and both are flag-gated, additive, and revertible. Nothing in research_store.py, report_generator.py, function_registry.py, or the chat engine is modified; DSPy modules wrap them.
+0. Shared Infrastructure (prerequisite for both)
+0.1 New package backend/dspy/
+File	Purpose
+backend/dspy/bridge.py	try: import dspy → DspyBridge singleton; is_enabled() gate; kills itself on any import/init error; creates dspy.LM from config
+backend/dspy/metrics.py	All deterministic metric functions (shared by both modules + compile + eval)
+backend/dspy/compiler.py	Offline compile script (BootstrapFewShot → later GEPA) + PII gate + artifact save/load
+backend/dspy/evaluate.py	CLI eval harness: runs dev set through module vs. current baseline, prints A/B table
+backend/dspy/artifacts/	Compiled prompts/demos (gitignored; scanned by PII gate before serving)
+backend/dspy/__init__.py	Exports modules; no-op when disabled
+0.2 Config (config.yaml — additive section)
+dspy:
+  enabled: false            # master kill-switch
+  research_synthesis: false # Module A
+  research_agent: false     # Module B
+  model: ""                 # empty = reuse ollama.model/endpoint (local-first)
+  reflection_model: ""      # empty = local; set to cloud URI = opt-in delegation
+  max_hops: 12
+  max_iters_report_sections: 2   # ChainOfThought depth for synthesis
+  artifacts_dir: dspy_artifacts
+0.3 LM policy (privacy, from earlier analysis)
+- Task model: Ollama (local) — research data never leaves the machine except via the already-existing model path.
+- Reflection model: local by default; cloud only when reflection_model set AND traces de-identified (content fields stripped; only tool calls + structured store data remain).
+- All bootstrapped demos pass a PII gate (email/phone/name-from-graph regex scan) before artifacts are saved or served.
+0.4 Dev set builder
+- Source: completed research topics in the Mayday Research folder, their linked conversations, and operations/ log entries.
+- Trace shape per topic: research_questions → [hop actions + args + results] → data_points/entities/findings → report → scores.
+- Target: 30–80 gold topics (enough for BootstrapFewShot; GEPA scales with more).
+Module A — DSPy Report Synthesis + Summary Distillation
+Goal
+Replace template-dump reports with store-faithful synthesis: executive summary, answered research questions, and narrative sections — while the deterministic template remains the fallback and the integrity guard stays in force.
+A.1 Signatures (in backend/dspy/research_synthesis.py)
+class ExecutiveSummary(dspy.Signature):
+    """Synthesize an executive summary from structured research data."""
+    research_questions: list[str]   = dspy.InputField()
+    data_points: list[dict]         = dspy.InputField()  # {label,value,unit,confidence,sources}
+    entities: list[dict]            = dspy.InputField()
+    findings: list[dict]            = dspy.InputField()
+    executive_summary: str          = dspy.OutputField(desc="3-5 sentences; every number cited must come from the inputs")
+
+class AnswerResearchQuestions(dspy.Signature):
+    """Answer each research question using only the provided data; mark gaps."""
+    research_questions: list[str] = dspy.InputField()
+    data_points: list[dict]       = dspy.InputField()
+    findings: list[dict]          = dspy.InputField()
+    answers: list[dict]           = dspy.OutputField(desc="[{'question':..., 'answer':..., 'confidence':..., 'answered': bool}]")
+
+class SynthesisNarrative(dspy.Signature):
+    """Narrative synthesis per section (key entities / data points / findings)."""
+    topic: str                 = dspy.InputField()
+    section: str               = dspy.InputField(desc="Literal[...] of 'entities'|'data_points'|'findings'")
+    inputs: list[dict]         = dspy.InputField()
+    narrative: str             = dspy.OutputField(desc="2-4 paragraphs, grounded strictly in inputs")
+- ExecutiveSummary writes back into the store via existing update_summary(topic, summary) (research_store.py:572) — no schema change.
+- Report builder: new build_dspy_md(projects, title) in a thin adapter (kept out of report_generator.py — new file backend/dspy/report_builder.py), composing: summary → answered-questions → template tables (reused verbatim from _build_section_md) → synthesis narratives → existing appendix. generate_report / generate_combined_report in report_generator.py get an optional synthesis: bool param that routes to DSPy when enabled, else today's template (report_generator.py:137).
+A.2 Integrity guard (deterministic, always on even when DSPy is off)
+- Post-check on every synthesized artifact: every numeric token in summary/answers/narrative must appear in store data_points values; every entity name must exist in store entities; every cited source ∈ store sources. Failure → drop the section, fall back to template for that section only, log metric miss.
+A.3 Metrics (in metrics.py, all LM-free)
+- fabrication_score: numbers/entities/sources ∈ store (the guard above, as a 0–1 score).
+- coverage_score: fraction of research_questions with answered=true and ≥1 supporting data point.
+- summary_faithfulness: summary length bounds + required-entity coverage (entities in store appearing in summary).
+- semantic_quality (report-only, never used for demo selection): dspy.SemanticF1 against the previous template report — used in eval output, excluded from compile.
+A.4 Compile flow
+1. BootstrapFewShot with 4 bootstrapped demos (16 labeled default) from dev set gold summaries/answers.
+2. Later (Phase 5): GEPA with Prediction(score=combined_metrics, feedback=... ); reflection LM local by default.
+3. compiler.py runs dspy.compile(program, trainset=...), PII-gates the artifact, saves to dspy_artifacts/report_synthesis/.
+4. Runtime loads artifact; no LM calls at startup.
+A.5 Runtime flow (research_functions path)
+generate_report(topic, fmt="md", synthesis=None)
+  → synthesis = cfg.dspy.research_synthesis and bridge.is_enabled()
+  → if synthesis: build_dspy_md(...) → integrity guard → on any section fail: template fallback
+  → existing md/pdf/chart paths unchanged
+Module B — RL Multi-Hop Research Agent + Gap Detection
+Goal
+A goal-directed loop: plan → search → extract → store → verify gaps → done. Replaces the hand-written 3-step instruction block (chat.py:324–344) without touching the chat engine.
+B.1 Design choice (Mode A — self-contained tool)
+research_agent is a single LLM tool added to the registry. The chat engine's existing iterative loop calls it once; the agent runs its own bounded hop loop internally and streams progress back as tool_call bubbles. The 20-iteration chat loop, duplicate guard, tools=[] rule (chat.py:916) stay untouched. Mode B (per-hop integration into the chat loop) is explicitly rejected for v1.
+B.2 Module (backend/dspy/research_agent.py)
+class ResearchHop(dspy.Signature):
+    """Decide the next research action given current state. Actions are typed."""
+    topic: str                    = dspy.InputField()
+    research_type: str            = dspy.InputField()
+    research_questions: list[str] = dspy.InputField()
+    task_title: str               = dspy.InputField()          # current task from store
+    collected: list[dict]         = dspy.InputField(desc="data_points+entities+findings so far")
+    last_observation: str         = dspy.InputField(desc="result of the previous action or ''")
+    score: float                  = dspy.InputField(desc="current deterministic gap score 0..1")
+    feedback: str                 = dspy.InputField(desc="GEPA-style gap feedback from checker")
+    next_action: Literal["web_search_and_fetch","extract_data_from_sources","batch_add_data_points","add_finding","finish"]
+    args: dict                    = dspy.OutputField(desc="valid args for next_action; finish => {}")
+
+class GapChecker(dspy.Signature):
+    """Score research progress and produce actionable gap feedback (GEPA Prediction pattern)."""
+    research_questions: list[str] = dspy.InputField()
+    task_title: str               = dspy.InputField()
+    collected: list[dict]         = dspy.InputField()
+    score: float                  = dspy.OutputField(desc="0..1, deterministic metric verdict")
+    feedback: str                 = dspy.OutputField(desc="unanswered questions, low-confidence findings, missing sources")
+- Hops call the existing functions (web_research.py wrappers: web_search_and_fetch, extract_data_from_sources, batch_add_data_points) through dispatch_call — same arg-repair safety net, same operation-log recording, zero new execution paths.
+- Budget: max_hops=12; finish when score ≥ 0.9, next_action=finish, or budget exhausted (then finish regardless).
+- After finish: auto generate_report(synthesis=on) + optional promote if user asked.
+B.3 Deterministic reward (the RL signal — metrics.py)
+Per-hop reward, summable for rollout score:
+- +1 valid action (passes dispatch validation) — the Literal field makes invalid names impossible by construction
+- +1 per new data point with ≥1 source; +0.5 extra if confidence=high AND ≥2 sources
+- +1 per research question newly covered (keyword overlap between question terms and new findings/data-point labels)
+- −1 repeated identical hop (dedup — mirrors the chat engine's 3× duplicate guard)
+- 0 otherwise
+Rollout score = normalized sum → feeds GapChecker.score → next hop sees it.
+B.4 Runtime loop (inside research_agent tool)
+current_task = research_store.get_active_task(topic)   # uses existing depends_on chain
+state = collect(store fields) ; score, feedback = metrics.initial(topic)
+for hop in range(max_hops):
+    action, args = program(topic, type, questions, task, state, last_obs, score, feedback)
+    if action == "finish": break
+    result = dispatch_call(action, args)               # existing registry + repair
+    state = collect(store fields)                      # store mutated by batch_add_data_points etc.
+    score, feedback = GapChecker(...)                  # deterministic metrics + feedback
+    stream progress via tool_call bubble
+if score < 0.5: log weak-spot feedback to research note (gap_review.md)
+generate_report(synthesis=Module A)
+B.5 Compile flow
+1. BootstrapFewShot: demos = successful research topics' hop traces from dev set (de-identified).
+2. Later: GEPA with Prediction(score=rollout_score, feedback=GapChecker.feedback) — this is the RL loop at compile time (reflective evolution of the hop instructions); local reflection LM by default.
+3. dspy.History optional: past hops passed as an input field instead of growing message history, keeping prefill small.
+Evaluation & A/B gate (both modules)
+evaluate.py (CLI, offline):
+- Dev set (30–80 topics) run twice: baseline (current template report + hand-written 3-step prompt) vs DSPy.
+- Table: token count, fabrication_score, coverage_score, tool-call validity, rollout score, latency, SemanticF1 (report-only metric).
+- Flags flip only when DSPy ≥ baseline on all deterministic metrics (SemanticF1 may lag; it's informational).
+Test plan (follows test_research_store.py conventions — mocked store/config/op-log, zero repo pollution)
+- backend/test_dspy_metrics.py — each metric: known-good/known-bad fixtures, fabrication guard catches hallucinated numbers.
+- backend/test_dspy_bridge.py — import-failure fallback, disabled flags no-op, artifact load/save, PII gate rejects seeded PII.
+- backend/test_dspy_synthesis.py — integrity guard drops bad section → template fallback; summary written via update_summary; combined report path.
+- backend/test_dspy_agent.py — mocked dispatch_call: hop loop terminates on finish/budget, dedup penalty fires, gap checker feedback drives a second search hop, invalid action impossible by construction.
+- Regression: existing test_research_store.py + test_data_pipeline.py + test_dispatch_repair.py must pass untouched.
+Build order & effort
+Phase	Work
+R0	dspy/ package + bridge + config + spike: dspy.LM against Ollama endpoint
+R1	metrics.py + dev-set builder + evaluate.py harness (baseline only)
+R2	Module A synthesis + integrity guard + flag
+R3	Module B agent + research_agent tool + flags
+R4	BootstrapFewShot compile both modules; PII gate on artifacts
+R5	GEPA compile (offline, local reflection) + A/B flip
+What is deliberately NOT touched
+- research_store.py schema/API, report_generator.py template + chart logic, function_registry.py dispatch/repair, chat.py engine loop, config.yaml existing keys, hardcoded RESEARCH_TYPE_TASKS (task planner is a later optional phase), tool schemas.
+- DSPy never touches conversation/chat prompts — scoped to research report + research-agent boundaries only.
+Open question before execution: for Module B's research_agent, do you want it exposed as an LLM tool (Mode A — engine stays pristine, agent runs internally) or do you prefer it wired into the existing chat tool loop per-hop? I recommend Mode A.
