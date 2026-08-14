@@ -30,6 +30,12 @@ from backend.functions.document_functions import (
     upload_pdf, read_pdf, search_pdfs, list_pdfs, delete_pdf, rename_pdf,
     convert_md_to_pdf,
 )
+from backend.functions.data_import import (
+    import_data, import_data_to_store, list_imported_files,
+)
+from backend.functions.web_research import (
+    web_search_and_fetch, extract_data_from_sources, batch_add_data_points,
+)
 from backend.functions.scaffold_functions import (
     store_component, list_stored_components, get_stored_component, scaffold_ui_project,
 )
@@ -40,7 +46,9 @@ from backend.functions.research_functions import (
     generate_report, generate_chart, generate_combined_report,
     add_research_note, list_research_notes,
     promote_research_to_project, search_research,
+    list_research_outputs,
 )
+from backend.functions.data_export import export_research_dataset
 from backend.functions.visual_testing import (
     update_baseline,
 )
@@ -159,6 +167,10 @@ def unified_search(query: str) -> str:
         parts.append("🧠 Memories:\n" + "\n".join(f"  - [{n['type']}] {n['label']}" for n in result["graph_nodes"]))
     if result["operations"]:
         parts.append("📜 Operations:\n" + "\n".join(f"  - [{o['timestamp'][:10]}] {o['action']} {o['entity_type']} '{o['entity_name']}'" for o in result["operations"]))
+    if result.get("research"):
+        parts.append("🔬 Research:\n" + "\n".join(f"  - [{r['kind']}] {r['topic']} {r.get('filename', '')} — {r['snippet']}" for r in result["research"]))
+    if result.get("projects"):
+        parts.append("📁 Project files:\n" + "\n".join(f"  - {r['rel_path']} — {r['snippet']}" for r in result["projects"]))
     if not parts:
         return f"No results found for: {query}"
     return "\n\n".join(parts)
@@ -988,6 +1000,7 @@ LOCAL_TOOL_DEFINITIONS = [
                     "name": {"type": "string", "description": "Project name (optional — uses active project if omitted)"},
                     "filename": {"type": "string", "description": "Filename, e.g. research.md or architecture.md (optional — defaults to notes.md)"},
                     "content": {"type": "string", "description": "Markdown content of the note"},
+                    "force": {"type": "boolean", "description": "Overwrite existing file (default: false — blocks if file already exists)"},
                 },
                 "required": ["content"],
             },
@@ -1006,6 +1019,7 @@ LOCAL_TOOL_DEFINITIONS = [
                     "description": {"type": "string", "description": "Clear problem/goal definition for this task. Required for research tasks."},
                     "type": {"type": "string", "enum": ["research", "general", "build"], "description": "Task type (default: general)"},
                     "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Task titles this task depends on (optional)"},
+                    "force": {"type": "boolean", "description": "Allow duplicate task title (default: false — blocks if a task with the same title exists)"},
                 },
                 "required": ["name", "title"],
             },
@@ -1173,6 +1187,100 @@ LOCAL_TOOL_DEFINITIONS = [
                     "output_path": {"type": "string", "description": "Optional absolute output path for the PDF"},
                     "name": {"type": "string", "description": "Optional output filename (no extension) — PDF is written next to the md file"},
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_data",
+            "description": "Parse an uploaded Excel/CSV file and return structured data preview (columns, types, sample rows, detected column types). file_id is returned from upload endpoint.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string", "description": "File ID from upload"},
+                    "sheet_name": {"type": "string", "description": "Sheet name for Excel files (optional)"},
+                    "header_row": {"type": "integer", "description": "Header row index (default 0)"},
+                },
+                "required": ["file_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_data_to_store",
+            "description": "Import parsed Excel/CSV data into research or project as data_points. Requires file_id from upload and store_type ('research' or 'project'). For research: provide topic. For project: provide project_name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string", "description": "File ID from upload"},
+                    "sheet_name": {"type": "string", "description": "Sheet name for Excel files (optional)"},
+                    "header_row": {"type": "integer", "description": "Header row index (default 0)"},
+                    "store_type": {"type": "string", "enum": ["research", "project"], "description": "Target store: 'research' or 'project'"},
+                    "topic": {"type": "string", "description": "Research topic (required if store_type=research)"},
+                    "project_name": {"type": "string", "description": "Project name (required if store_type=project)"},
+                },
+                "required": ["file_id", "store_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_imported_files",
+            "description": "List all uploaded Excel/CSV files in the uploads directory",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search_and_fetch",
+            "description": "Search the web (Exa) and fetch page contents, returning an ordered source list with titles, URLs and text snippets. First step of the data analysis pipeline — use before extracting structured rows.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query for the data you need (e.g. 'ML Engineer vs Full Stack Engineer job postings 2015-2024')"},
+                    "max_sources": {"type": "integer", "description": "Max sources to fetch (default 10)"},
+                    "source_type": {"type": "string", "enum": ["web", "news", "academic"], "description": "Source category (default 'web')"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_data_from_sources",
+            "description": "Extract structured tabular rows (JSON) from fetched web sources using the LLM. Returns rows like [{'year': 2020, 'role': 'ML Engineer', 'postings': 12500}]. Second step of the data analysis pipeline.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sources": {"type": "array", "items": {"type": "object"}, "description": "The source list returned by web_search_and_fetch (list of {url, title, content})"},
+                    "schema": {"type": "object", "description": "Optional schema: {'columns': ['year', 'role', 'postings'], 'types': {'year': 'int', 'postings': 'int', 'salary': 'float'}}"},
+                    "context": {"type": "string", "description": "Context describing what the data represents (e.g. 'ML Engineer vs Full Stack Engineer growth 2015-2024')"},
+                },
+                "required": ["sources"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "batch_add_data_points",
+            "description": "Bulk-store extracted rows as data points in a research topic (auto-creates the research if missing) or project. Returns stored count and the suggested chart type. Third step of the data analysis pipeline — call generate_chart next.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic name or project name (e.g. 'Engineering Growth 2015-2024')"},
+                    "data_points": {"type": "array", "items": {"type": "object"}, "description": "Rows from extract_data_from_sources (list of dicts with label/value or raw column dicts)"},
+                    "store_type": {"type": "string", "enum": ["research", "project"], "description": "Target store (default 'research')"},
+                },
+                "required": ["topic", "data_points"],
             },
         },
     },
@@ -1684,6 +1792,7 @@ LOCAL_TOOL_DEFINITIONS = [
                     "topic": {"type": "string", "description": "Research topic"},
                     "filename": {"type": "string", "description": "Filename, e.g. findings.md or competitors.md (optional — defaults to notes.md)"},
                     "content": {"type": "string", "description": "Full Markdown note content"},
+                    "force": {"type": "boolean", "description": "Overwrite existing note (default: false — blocks if file already exists)"},
                 },
                 "required": ["topic", "content"],
             },
@@ -1732,6 +1841,35 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_research_dataset",
+            "description": "Export a research topic's collected data points to a CSV dataset file in the uploads directory. Use after batch_add_data_points so the user gets a downloadable CSV/Excel-style file of the raw data (visible in the Data Import panel and at /uploads/<file_id>). Reverses the 'series | time' label encoding into category/period/value/unit columns.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic whose data points should be exported"},
+                    "filename": {"type": "string", "description": "Optional output filename (e.g. ml_vs_ai_growth.csv). Defaults to a slug of the topic."},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_research_outputs",
+            "description": "List all charts ever generated for a research topic, with their URLs. Use when the user asks to re-open or re-display a previously created chart ('show me that chart again'). Returns the newest chart as an openable artifact.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic to list charts for"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
 ]
 FUNCTION_MAP = {
     "create_research": create_research,
@@ -1748,6 +1886,8 @@ FUNCTION_MAP = {
     "list_research_notes": list_research_notes,
     "search_research": search_research,
     "promote_research_to_project": promote_research_to_project,
+    "list_research_outputs": list_research_outputs,
+    "export_research_dataset": export_research_dataset,
     "create_project": create_project,
     "resume_project": resume_project,
     "list_projects": list_projects,
@@ -1804,6 +1944,12 @@ FUNCTION_MAP = {
     "delete_pdf": delete_pdf,
     "rename_pdf": rename_pdf,
     "convert_md_to_pdf": convert_md_to_pdf,
+    "import_data": import_data,
+    "import_data_to_store": import_data_to_store,
+    "list_imported_files": list_imported_files,
+    "web_search_and_fetch": web_search_and_fetch,
+    "extract_data_from_sources": extract_data_from_sources,
+    "batch_add_data_points": batch_add_data_points,
     "store_component": store_component,
     "list_stored_components": list_stored_components,
     "get_stored_component": get_stored_component,
@@ -1879,6 +2025,13 @@ _PARAM_ALIASES: dict[str, dict[str, str]] = {
     "generate_chart": {"project": "topic", "topic_name": "topic"},
     "search_research": {"q": "query"},
     "promote_research_to_project": {"project": "topic", "topic_name": "topic"},
+    "import_data": {"file": "file_id", "path": "file_id"},
+    "import_data_to_store": {"file": "file_id", "path": "file_id", "topic": "topic", "project": "project_name"},
+    "web_search_exa": {"q": "query", "search": "query", "search_query": "query", "question": "query", "topic": "query", "terms": "query"},
+    "web_search_advanced_exa": {"q": "query", "search": "query", "search_query": "query", "question": "query", "topic": "query", "terms": "query"},
+    "web_fetch_exa": {"url": "urls", "link": "urls", "links": "urls", "page": "urls", "pages": "urls"},
+    "web_search_and_fetch": {"q": "query", "search": "query", "search_query": "query", "question": "query", "topic": "query", "terms": "query", "limit": "max_sources", "count": "max_sources"},
+    "batch_add_data_points": {"topic_name": "topic", "store": "store_type", "name": "topic", "rows": "data_points", "extracted_data": "data_points"},
 }
 
 _TOOL_DEFAULTS: dict[str, dict[str, object]] = {
@@ -1944,10 +2097,13 @@ async def _invoke(fn, args: dict, mcp_manager=None) -> str:
 async def dispatch_call(name: str, arguments: dict, mcp_manager=None) -> str:
     if name in FUNCTION_MAP:
         fn = FUNCTION_MAP[name]
+        args, notes = _repair_arguments(name, fn, arguments or {})
         try:
-            return await _invoke(fn, arguments, mcp_manager)
+            result = await _invoke(fn, args, mcp_manager)
+            if notes and isinstance(result, str) and result.startswith("Missing required parameter"):
+                result += f" Repair notes: {'; '.join(notes)}."
+            return result
         except TypeError as e:
-            args, notes = _repair_arguments(name, fn, arguments)
             try:
                 return await _invoke(fn, args, mcp_manager)
             except Exception as e2:

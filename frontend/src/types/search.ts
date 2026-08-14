@@ -47,6 +47,14 @@ export interface SearchResearchResult {
   snippet: string
 }
 
+export interface SearchProjectResult {
+  id: string
+  folder: string
+  filename: string
+  rel_path: string
+  snippet: string
+}
+
 export interface SearchResults {
   todos: SearchTodoResult[]
   events: SearchEventResult[]
@@ -55,4 +63,5 @@ export interface SearchResults {
   operations: SearchOperationResult[]
   documents: SearchDocumentResult[]
   research: SearchResearchResult[]
+  projects: SearchProjectResult[]
 }

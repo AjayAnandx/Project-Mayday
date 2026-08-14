@@ -11,6 +11,8 @@ import { ToastContainer } from './components/ui/Toast'
 import { ReminderDialog } from './components/ui/ReminderDialog'
 import { VoiceMode } from './components/voice/VoiceMode'
 import { DocumentPanel } from './components/documents/DocumentPanel'
+import { DataImportPanel } from './components/data/DataImportPanel'
+import { AnalysisPanel } from './components/data/AnalysisPanel'
 import { ArtifactPanel } from './components/research/ArtifactPanel'
 import { useNotifications } from './hooks/useNotifications'
 import { useLocation } from './hooks/useLocation'
@@ -28,7 +30,7 @@ function AppContent() {
   useEffect(() => {
     const handleNavigate = (e: Event) => {
       const detail = (e as CustomEvent).detail
-      if (detail === 'dashboard' || detail === 'chat' || detail === 'todos' || detail === 'calendar' || detail === 'brain' || detail === 'voice' || detail === 'documents') {
+      if (detail === 'dashboard' || detail === 'chat' || detail === 'todos' || detail === 'calendar' || detail === 'brain' || detail === 'voice' || detail === 'documents' || detail === 'data') {
         setCurrentPage(detail)
       }
     }
@@ -74,6 +76,7 @@ function AppContent() {
         {currentPage === 'calendar' && <CalendarPanel />}
         {currentPage === 'brain' && <BrainPanel />}
         {currentPage === 'documents' && <DocumentPanel />}
+        {currentPage === 'data' && <AnalysisPanel />}
         {currentPage === 'voice' && <VoiceMode onExit={() => setCurrentPage('dashboard')} />}
         {artifactUrl && currentPage === 'chat' && (
           <div className="absolute inset-y-0 right-0 w-[520px] max-w-full z-20 border-l border-surface2 shadow-2xl">

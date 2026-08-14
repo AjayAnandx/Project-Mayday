@@ -8,6 +8,8 @@ from fpdf import FPDF
 
 from backend.core.research_store import get_research_store
 
+_CHART_SERIES_SEP = " | "
+
 logger = logging.getLogger(__name__)
 
 CHART_JS_CDN = "https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"
@@ -468,6 +470,68 @@ def _pdf_sources(pdf: FPDF, projects: list[dict]):
 
 # ── Chart generation ──────────────────────────────────────────────
 
+_YEAR_RE = re.compile(r"^\d{4}$")
+_DATE_RE = re.compile(r"^(Q[1-4]\s?\d{4}|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s/-]\d{4}|\d{4}[-/]\d{1,2}|\d{1,2}[-/]\d{4})$", re.I)
+
+
+def _split_series_label(label) -> tuple[str | None, str | None]:
+    """Split a label like 'ML Engineer | 2020' into (series, point)."""
+    if not isinstance(label, str):
+        label = str(label)
+    if _CHART_SERIES_SEP in label:
+        series, point = label.split(_CHART_SERIES_SEP, 1)
+        return series.strip(), point.strip()
+    return None, None
+
+
+def _is_time_label(label) -> bool:
+    if not isinstance(label, str):
+        label = str(label)
+    if _YEAR_RE.match(label):
+        return True
+    if _DATE_RE.match(label):
+        return True
+    return False
+
+
+def suggest_chart_type(data_points: list[dict], context: str = "") -> str:
+    """Heuristic auto-chart-type selection (line / bar / pie).
+
+    Rules:
+      - Time series + multi-series  -> line (growth comparison)
+      - Time series + single series -> line
+      - Context keywords (growth/trend/over time) -> prefer line
+      - Parts-of-a-whole (values sum to ~100 with '%' unit) -> pie
+      - Otherwise categorical -> bar
+    """
+    if not data_points:
+        return "bar"
+    ctx = (context or "").lower()
+    if any(k in ctx for k in ("growth", "trend", "over time", "timeline", "progress")):
+        return "line"
+
+    labels = [str(dp.get("label", "")).strip() or "" for dp in data_points if dp.get("label")]
+    if not labels:
+        return "bar"
+
+    time_count = sum(1 for lb in labels if _is_time_label(lb) or _split_series_label(lb)[1] and _is_time_label(_split_series_label(lb)[1]))
+    multi_series = any(_split_series_label(lb)[0] for lb in labels)
+
+    if time_count >= max(1, len(labels) * 0.5):
+        return "line"
+    if multi_series:
+        return "bar"
+
+    units = {str(dp.get("unit", "")) for dp in data_points if dp.get("unit")}
+    if units == {"%"} or units == {"percent", "percentage"}:
+        numeric = [_extract_numeric(dp.get("value", "0")) for dp in data_points]
+        numeric = [n for n in numeric if n is not None]
+        if numeric and abs(sum(numeric) - 100) < 2:
+            return "pie"
+
+    return "bar"
+
+
 def _data_points_to_chart_data(data_points: list[dict]) -> dict:
     labels = []
     values = []
@@ -475,13 +539,39 @@ def _data_points_to_chart_data(data_points: list[dict]) -> dict:
         raw = dp.get("value", "0")
         numeric = _extract_numeric(raw)
         if numeric is not None:
-            labels.append(dp.get("label", ""))
+            labels.append(str(dp.get("label", "")))
             values.append(numeric)
     return {"labels": labels, "values": values}
 
 
-def _extract_numeric(value: str) -> float | None:
-    cleaned = value.replace(",", "").replace("$", "").replace("€", "").replace("£", "").strip()
+def _split_into_series(chart_data: dict) -> dict | None:
+    """If labels carry 'series | point' markers, group into per-series datasets."""
+    groups: dict[str, dict] = {}
+    for label, value in zip(chart_data["labels"], chart_data["values"]):
+        series, point = _split_series_label(label)
+        if series is None or point is None:
+            return None
+        groups.setdefault(series, {"labels": [], "values": []})
+        groups[series]["labels"].append(point)
+        groups[series]["values"].append(value)
+    if not groups:
+        return None
+    return groups
+
+
+def _extract_numeric(value) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if value is None:
+        return None
+    try:
+        cleaned = str(value).replace(",", "").replace("$", "").replace("€", "").replace("£", "").strip()
+    except Exception:
+        return None
+    if not cleaned:
+        return None
     multipliers = {"B": 1e9, "M": 1e6, "K": 1e3, "%": 1}
     suffix = cleaned[-1].upper() if cleaned else ""
     if suffix in multipliers:
@@ -504,11 +594,81 @@ def _chart_colors(count: int) -> list[str]:
     return [palette[i % len(palette)] for i in range(count)]
 
 
-def generate_chart(topic: str, chart_type: str = "bar", metric: str | None = None) -> dict:
-    valid_types = ("bar", "pie", "line")
-    if chart_type not in valid_types:
-        return {"error": f"Invalid chart_type '{chart_type}'. Must be one of: {', '.join(valid_types)}"}
+def _build_chart_json(chart_type: str, chart_data: dict, title: str, metric: str | None = None) -> dict:
+    colors = _chart_colors(len(chart_data["labels"]))
 
+    series = _split_into_series(chart_data)
+    if series:
+        datasets = []
+        series_colors = _chart_colors(len(series))
+        x_points: list[str] = []
+        seen_points = set()
+        for sdata in series.values():
+            for lb in sdata["labels"]:
+                if lb not in seen_points:
+                    seen_points.add(lb)
+                    x_points.append(lb)
+        numeric_points = [_extract_numeric(p) for p in x_points]
+        if all(n is not None for n in numeric_points):
+            x_points = [p for _, p in sorted(zip(numeric_points, x_points))]  # type: ignore[arg-type]
+        for i, (name, sdata) in enumerate(series.items()):
+            by_point = dict(zip(sdata["labels"], sdata["values"]))
+            aligned = [by_point.get(p) for p in x_points]
+            datasets.append({
+                "label": name,
+                "data": aligned,
+                "backgroundColor": series_colors[i],
+                "borderColor": series_colors[i],
+                "borderWidth": 1,
+                "tension": 0.2,
+            })
+        chart_json = {
+            "type": chart_type,
+            "data": {
+                "labels": x_points,
+                "datasets": datasets,
+            },
+        }
+    else:
+        chart_json = {
+            "type": chart_type,
+            "data": {
+                "labels": chart_data["labels"],
+                "datasets": [{
+                    "label": metric or "Value",
+                    "data": chart_data["values"],
+                    "backgroundColor": colors,
+                    "borderColor": colors,
+                    "borderWidth": 1,
+                    "tension": 0.2,
+                }],
+            },
+        }
+
+    chart_json["options"] = {
+        "responsive": True,
+        "maintainAspectRatio": False,
+        "plugins": {
+            "title": {
+                "display": True,
+                "text": title,
+                "color": "#e5e5e5",
+                "font": {"size": 16},
+            },
+            "legend": {
+                "labels": {"color": "#a3a3a3"},
+            },
+        },
+        "scales": {} if chart_type == "pie" else {
+            "x": {"ticks": {"color": "#a3a3a3"}, "grid": {"color": "#303030"}},
+            "y": {"ticks": {"color": "#a3a3a3"}, "grid": {"color": "#303030"}},
+        },
+    }
+    return chart_json
+
+
+def generate_chart(topic: str, chart_type: str = "auto", metric: str | None = None,
+                   title_override: str | None = None) -> dict:
     store = get_research_store()
     project = store._get_by_topic(topic)
     if not project:
@@ -516,7 +676,12 @@ def generate_chart(topic: str, chart_type: str = "bar", metric: str | None = Non
 
     data_points = project.get("data_points", [])
     if not data_points:
-        return {"error": "No data points collected yet — collect data first with add_data_point"}
+        return {"error": "No data points collected yet — collect data first with add_data_point or batch_add_data_points"}
+
+    if chart_type == "auto" or chart_type not in ("bar", "pie", "line"):
+        chart_type = suggest_chart_type(data_points, metric or "")
+        if _split_into_series(_data_points_to_chart_data(data_points)):
+            chart_type = "line"
 
     chart_data = _data_points_to_chart_data(data_points)
     if not chart_data["values"]:
@@ -525,43 +690,11 @@ def generate_chart(topic: str, chart_type: str = "bar", metric: str | None = Non
     if chart_type == "pie" and len(chart_data["values"]) > 20:
         chart_type = "bar"
 
-    colors = _chart_colors(len(chart_data["labels"]))
-
-    chart_json = {
-        "type": chart_type,
-        "data": {
-            "labels": chart_data["labels"],
-            "datasets": [{
-                "label": metric or "Value",
-                "data": chart_data["values"],
-                "backgroundColor": colors,
-                "borderColor": colors,
-                "borderWidth": 1,
-            }],
-        },
-        "options": {
-            "responsive": True,
-            "maintainAspectRatio": False,
-            "plugins": {
-                "title": {
-                    "display": True,
-                    "text": f"{project['topic']} — {chart_type.title()} Chart",
-                    "color": "#e5e5e5",
-                    "font": {"size": 16},
-                },
-                "legend": {
-                    "labels": {"color": "#a3a3a3"},
-                },
-            },
-            "scales": {} if chart_type == "pie" else {
-                "x": {"ticks": {"color": "#a3a3a3"}, "grid": {"color": "#303030"}},
-                "y": {"ticks": {"color": "#a3a3a3"}, "grid": {"color": "#303030"}},
-            },
-        },
-    }
-
     outputs_dir = store.get_outputs_dir(project)
     outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    title = title_override or f"{project['topic']} — {chart_type.title()} Chart"
+    chart_json = _build_chart_json(chart_type, chart_data, title, metric)
 
     chart_json_bytes = json.dumps(chart_json, indent=2).encode("utf-8")
     if len(chart_json_bytes) > MAX_CHART_JSON_SIZE:
@@ -579,7 +712,7 @@ def generate_chart(topic: str, chart_type: str = "bar", metric: str | None = Non
 
     store.add_generated_output(project, str(json_path), "chart_json", chart_type)
 
-    relative_path = str(Path(".") / project["slug"] / "outputs" / chart_dir.name / "index.html").replace("\\", "/")
+    relative_path = str(Path(project["slug"]) / "outputs" / chart_dir.name / "index.html").replace("\\", "/")
 
     return {
         "chart_type": chart_type,
@@ -588,6 +721,63 @@ def generate_chart(topic: str, chart_type: str = "bar", metric: str | None = Non
         "html_path": str(html_path),
         "chart_dir": str(chart_dir),
         "relative_url": f"/research/{relative_path}",
+    }
+
+
+def generate_project_chart(project_id: str, chart_type: str = "auto", metric: str | None = None) -> dict:
+    """Generate a Chart.js chart from a project's data_points (outputs/ under project folder)."""
+    from backend.core.project_store import get_project_store
+    store = get_project_store()
+    project = store.get_project(project_id)
+    if not project:
+        return {"error": f"Project '{project_id}' not found"}
+    if project.get("status") == "scrapped":
+        return {"error": f"Project '{project['name']}' is scrapped — cannot chart its data"}
+
+    data_points = project.get("data_points", [])
+    if not data_points:
+        return {"error": "No data points collected yet for this project — collect data first with add_project_data_point or batch_add_data_points"}
+
+    if chart_type == "auto" or chart_type not in ("bar", "pie", "line"):
+        chart_type = suggest_chart_type(data_points, metric or "")
+        if _split_into_series(_data_points_to_chart_data(data_points)):
+            chart_type = "line"
+
+    chart_data = _data_points_to_chart_data(data_points)
+    if not chart_data["values"]:
+        return {"error": "No numeric data points available for charting"}
+
+    if chart_type == "pie" and len(chart_data["values"]) > 20:
+        chart_type = "bar"
+
+    outputs_dir = store.get_outputs_dir(project)
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    chart_json = _build_chart_json(chart_type, chart_data, f"{project['name']} — {chart_type.title()} Chart", metric)
+
+    chart_json_bytes = json.dumps(chart_json, indent=2).encode("utf-8")
+    if len(chart_json_bytes) > MAX_CHART_JSON_SIZE:
+        return {"error": f"Chart data too large ({len(chart_json_bytes)} bytes). Max 500KB."}
+
+    chart_dir = outputs_dir / f"chart_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    chart_dir.mkdir(parents=True, exist_ok=True)
+
+    json_path = chart_dir / "chart.json"
+    json_path.write_bytes(chart_json_bytes)
+
+    html_path = chart_dir / "index.html"
+    html_path.write_text(_build_chart_html(chart_type, chart_json), encoding="utf-8")
+
+    store.add_generated_output(project, str(json_path), "chart_json", chart_type)
+
+    relative_path = str(Path(project["folder"]) / "outputs" / chart_dir.name / "index.html").replace("\\", "/")
+    return {
+        "chart_type": chart_type,
+        "data_points": len(chart_data["labels"]),
+        "json_path": str(json_path),
+        "html_path": str(html_path),
+        "chart_dir": str(chart_dir),
+        "relative_url": f"/projects/{relative_path}",
     }
 
 

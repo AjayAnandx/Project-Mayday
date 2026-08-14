@@ -1,6 +1,7 @@
 import tempfile
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -38,9 +39,15 @@ class TestToSlug:
 class TestProjectRunner:
     @pytest.fixture(autouse=True)
     def setup_teardown(self):
+        import backend.core.project_runner as pr
         project_runner_instances.clear()
+        self._orig_proj_dir = pr.PROJECTS_DIR
+        self._tmp = Path(tempfile.mkdtemp())
+        pr.PROJECTS_DIR = self._tmp
         yield
+        pr.PROJECTS_DIR = self._orig_proj_dir
         project_runner_instances.clear()
+        shutil.rmtree(self._tmp, ignore_errors=True)
 
     def test_get_or_create(self):
         runner = ProjectRunner.get_or_create("test-project")
@@ -183,11 +190,22 @@ class TestSandboxCompat:
 
     @pytest.fixture(autouse=True)
     def setup_teardown(self):
+        import backend.core.project_runner as pr
+        import backend.core.project_store as psmod
         project_runner_instances.clear()
         _background_processes.clear()
+        self._orig_proj_dir = pr.PROJECTS_DIR
+        self._tmp = Path(tempfile.mkdtemp())
+        pr.PROJECTS_DIR = self._tmp
+        store = psmod.get_project_store()
+        self._orig_store_dir = store._projects_dir
+        store._projects_dir = self._tmp
         yield
+        pr.PROJECTS_DIR = self._orig_proj_dir
+        store._projects_dir = self._orig_store_dir
         project_runner_instances.clear()
         _background_processes.clear()
+        shutil.rmtree(self._tmp, ignore_errors=True)
 
     def test_sandbox_start(self):
         from backend.core.sandbox import sandbox_start

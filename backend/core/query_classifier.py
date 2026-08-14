@@ -25,10 +25,12 @@ class QueryClassifier:
               r"\bset\s+up\s+(a\s+)?project", r"\bmake\s+(a\s+)?(website|app|site)"]),
 
             ("research", True, "auto",
-             ["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH"],
-             ["basic", "project"],
+             ["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "DATA"],
+             ["basic", "research", "data", "project"],
              [r"\bresearch\b", r"\binvestigate\b", r"\bfind\s+out\s+about\b",
-              r"\blook\s+into\b", r"\bstudy\b", r"\banalyze\b", r"\bsurvey\b"]),
+              r"\blook\s+into\b", r"\bstudy\b", r"\banalyze\b", r"\bsurvey\b",
+              r"\bgrowth\b", r"\btrend\b", r"\bover\s+time\b", r"\bcompare\b",
+              r"\bversus\b", r"\bvs\.?\b", r"\bstatistics\b", r"\bchart\b"]),
 
             ("project", True, "auto",
              ["BASE", "PERSONALITY", "PROJECT"],
@@ -107,7 +109,7 @@ class QueryClassifier:
                 confidence=1.0,
                 requires_llm=True,
                 tool_choice="auto",
-                active_sections=["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "WEATHER"],
+active_sections=["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "DATA", "WEATHER"],
                 active_groups=self._all_groups(),
             )
 

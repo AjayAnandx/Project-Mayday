@@ -107,6 +107,21 @@ class ProjectStore:
             if active:
                 return {"error": f"Project '{name}' already exists (status: {active[0]['status']}). Use resume_project to access it."}
 
+            near = [
+                (p, _kw_overlap(name, p["name"])) for p in self._projects
+                if p["status"] in ("active", "paused") and p["name"].lower() != name.lower()
+            ]
+            near = [x for x in near if x[1] >= 0.6]
+            if near:
+                near.sort(key=lambda x: -x[1])
+                suggestions = ", ".join(f"'{p['name']}' ({p['status']})" for p, _s in near[:3])
+                return {
+                    "error": (
+                        f"A similar project already exists: {suggestions}. "
+                        "Use resume_project to access it, or choose a different name."
+                    )
+                }
+
             project_id = "proj_" + uuid.uuid4().hex[:12]
             folder_name = _slugify(name)
             folder_path = self._projects_dir / folder_name
@@ -121,6 +136,7 @@ class ProjectStore:
                 "folder": folder_name,
                 "conversation_ids": [],
                 "tasks": [],
+                "data_points": [],
             }
             self._projects.append(project)
             self._save()
@@ -246,7 +262,7 @@ class ProjectStore:
                     return True
         return False
 
-    def _add_task_inner(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None, description: str = "") -> dict | None:
+    def _add_task_inner(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None, description: str = "", force: bool = False) -> dict | None:
         idx = self._find_index(project_id)
         if idx is None:
             return {"error": "Project not found"}
@@ -257,6 +273,14 @@ class ProjectStore:
         title = title.strip()
         if not title:
             return {"error": "Task title cannot be empty"}
+
+        if not force and self._find_task_by_title(project, title):
+            return {
+                "error": (
+                    f"Task '{title}' already exists in project '{project['name']}'. "
+                    f"Pass force=True to add a duplicate."
+                )
+            }
 
         valid_types = ("research", "general", "build")
         if type not in valid_types:
@@ -291,9 +315,9 @@ class ProjectStore:
         )
         return task
 
-    def add_task(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None, description: str = "") -> dict | None:
+    def add_task(self, project_id: str, title: str, type: str = "general", depends_on: list[str] | None = None, description: str = "", force: bool = False) -> dict | None:
         with self._lock:
-            return self._add_task_inner(project_id, title, type, depends_on, description)
+            return self._add_task_inner(project_id, title, type, depends_on, description, force)
 
     def update_task_status(self, project_id: str, task_id: str, status: str, result: str = "") -> dict | None:
         VALID_TRANSITIONS = {
@@ -368,6 +392,97 @@ class ProjectStore:
                     if deps_met:
                         return dict(t)
             return None
+
+    def add_data_point(self, project_id: str, label: str, value: str, unit: str | None = None,
+                       confidence: str | None = None, sources: list[str] | None = None) -> dict:
+        with self._lock:
+            idx = self._find_index(project_id)
+            if idx is None:
+                return {"error": "Project not found"}
+            project = self._projects[idx]
+            if project.get("data_points") is None:
+                project["data_points"] = []
+            dp = {
+                "id": "pdp_" + uuid.uuid4().hex[:8],
+                "label": str(label) if label is not None else "",
+                "value": str(value) if value is not None else "",
+                "unit": str(unit) if unit else "",
+                "confidence": str(confidence) if confidence else "medium",
+                "sources": sources or [],
+                "created_at": _utcnow(),
+            }
+            project["data_points"].append(dp)
+            project["last_activity"] = _utcnow()
+            self._save()
+
+            get_operation_log().record(
+                "add_data_point", "project", project_id, project["name"],
+                details={"label": label, "value": value},
+            )
+            return dp
+
+    def list_data_points(self, project_id: str) -> list[dict]:
+        with self._lock:
+            idx = self._find_index(project_id)
+            if idx is None:
+                return []
+            return list(self._projects[idx].get("data_points", []))
+
+    def get_outputs_dir(self, project: dict) -> Path:
+        folder = project.get("folder", "unknown")
+        return self._projects_dir / folder / "outputs"
+
+    def list_outputs(self, project_id: str) -> list[dict]:
+        """List generated chart outputs (chart_*/ directories) newest first."""
+        from pathlib import Path
+        import json as _json
+        with self._lock:
+            project = self.get_project(project_id)
+            if not project:
+                return {"error": f"Project '{project_id}' not found"}
+            outputs = []
+            outputs_dir = self.get_outputs_dir(project)
+            if outputs_dir.is_dir():
+                for entry in sorted(outputs_dir.iterdir(), key=lambda p: p.name, reverse=True):
+                    if not entry.is_dir() or not entry.name.startswith("chart_"):
+                        continue
+                    json_path = entry / "chart.json"
+                    chart_type = ""
+                    data_points = 0
+                    if json_path.is_file():
+                        try:
+                            chart_json = _json.loads(json_path.read_text(encoding="utf-8"))
+                            chart_type = chart_json.get("type", "")
+                            labels = chart_json.get("data", {}).get("labels", []) if isinstance(chart_json.get("data"), dict) else []
+                            data_points = len(labels) if isinstance(labels, list) else 0
+                        except Exception:
+                            pass
+                    outputs.append({
+                        "dir": entry.name,
+                        "chart_type": chart_type or "unknown",
+                        "data_points": data_points,
+                        "html_path": str(entry / "index.html"),
+                        "relative_url": f"/projects/{project['folder']}/outputs/{entry.name}/index.html",
+                        "created_at": entry.name.replace("chart_", "").replace("_", ":"),
+                    })
+            return outputs
+
+    def add_generated_output(self, project: dict, file_path: str, fmt: str, chart_type: str | None = None) -> dict:
+        with self._lock:
+            out = {
+                "id": "out_" + uuid.uuid4().hex[:8],
+                "path": file_path,
+                "format": fmt,
+                "generated_at": _utcnow(),
+            }
+            if chart_type:
+                out["chart_type"] = chart_type
+            idx = self._find_index(project.get("id", ""))
+            if idx is not None:
+                self._projects[idx].setdefault("generated_outputs", []).append(out)
+                self._projects[idx]["last_activity"] = _utcnow()
+                self._save()
+            return out
 
     def link_conversation(self, project_id: str, conversation_id: str):
         with self._lock:

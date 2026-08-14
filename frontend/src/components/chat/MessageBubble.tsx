@@ -1,5 +1,6 @@
 import type { ChatMessage } from '../../hooks/useChat'
 import { MarkdownRenderer } from './MarkdownRenderer'
+import { ExternalLink } from 'lucide-react'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -14,6 +15,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   }
 
   if (isTool) {
+    const hasArtifact = message.artifact_url && message.artifact_title
     return (
       <div className="flex justify-center my-1.5 mx-2 sm:mx-0">
         <div className="bg-surface0/40 border border-surface1/50 rounded-lg px-2 sm:px-3 py-1.5 text-[11px] text-subtext0 min-w-0 w-full sm:w-auto">
@@ -30,6 +32,19 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 alt="Screenshot"
                 className="max-h-64 w-full object-contain bg-black/20"
               />
+            </div>
+          )}
+          {hasArtifact && (
+            <div className="mt-1.5 flex items-center gap-2 pt-1.5 border-t border-surface1/30">
+              <button
+                onClick={() => window.open(message.artifact_url!, '_blank')}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-green hover:text-text hover:bg-green/10 rounded transition-colors"
+                title="Open in New Tab"
+              >
+                <ExternalLink className="h-3 w-3" />
+                <span>Open in New Tab</span>
+              </button>
+              <span className="text-[10px] text-overlay0 truncate max-w-xs">{message.artifact_title}</span>
             </div>
           )}
         </div>

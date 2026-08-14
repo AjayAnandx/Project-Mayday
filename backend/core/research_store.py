@@ -21,6 +21,15 @@ def _slugify(topic: str) -> str:
     return s.strip("-")
 
 
+def _kw_overlap(query: str, stored: str) -> float:
+    qt = set(re.findall(r"[a-z0-9_]+", query.lower()))
+    st = set(re.findall(r"[a-z0-9_]+", stored.lower()))
+    if not qt or not st:
+        return 0.0
+    overlap = len(qt & st)
+    return overlap / max(len(qt), len(st))
+
+
 RESEARCH_TYPES = (
     "market", "technical", "financial", "sales", "business",
     "academic", "competitive", "product", "domain", "person_org",
@@ -232,6 +241,21 @@ class ResearchStore:
             if existing:
                 return {"error": f"Research '{topic}' already exists (status: {existing.get('status')}). Use resume_research to access it."}
 
+            near = [
+                (p, _kw_overlap(topic, p.get("topic", ""))) for p in self._projects
+                if p.get("topic", "").strip().lower() != topic.strip().lower()
+            ]
+            near = [x for x in near if x[1] >= 0.6]
+            if near:
+                near.sort(key=lambda x: -x[1])
+                suggestions = ", ".join(f"'{p['topic']}' ({p['status']})" for p, _s in near[:3])
+                return {
+                    "error": (
+                        f"A similar research topic already exists: {suggestions}. "
+                        "Use resume_research to access it, or choose a different topic."
+                    )
+                }
+
             project_id = "res_" + uuid.uuid4().hex[:12]
             slug = _slugify(topic)
 
@@ -365,10 +389,10 @@ class ResearchStore:
                 return {"error": f"Research '{topic}' not found"}
             dp = {
                 "id": "dp_" + uuid.uuid4().hex[:8],
-                "label": label,
-                "value": value,
-                "unit": unit or "",
-                "confidence": confidence or "medium",
+                "label": str(label) if label is not None else "",
+                "value": str(value) if value is not None else "",
+                "unit": str(unit) if unit else "",
+                "confidence": str(confidence) if confidence else "medium",
                 "sources": sources or [],
                 "created_at": _utcnow(),
             }
@@ -434,10 +458,44 @@ class ResearchStore:
     def get_outputs_dir(self, project: dict) -> Path:
         return self._outputs_dir / project["slug"] / "outputs"
 
+    def list_outputs(self, topic: str) -> list[dict]:
+        """List generated chart outputs (chart_*/ directories) newest first."""
+        with self._lock:
+            project = self._find_by_topic(topic)
+            if not project:
+                return {"error": f"Research '{topic}' not found"}
+            outputs = []
+            outputs_dir = self.get_outputs_dir(project)
+            if outputs_dir.is_dir():
+                for entry in sorted(outputs_dir.iterdir(), key=lambda p: p.name, reverse=True):
+                    if not entry.is_dir() or not entry.name.startswith("chart_"):
+                        continue
+                    json_path = entry / "chart.json"
+                    chart_type = ""
+                    data_points = 0
+                    if json_path.is_file():
+                        try:
+                            chart_json = json.loads(json_path.read_text(encoding="utf-8"))
+                            chart_type = chart_json.get("type", "")
+                            data_points = chart_json.get("data", {}).get("labels", []) if isinstance(chart_json.get("data"), dict) else 0
+                            if isinstance(data_points, list):
+                                data_points = len(data_points)
+                        except Exception:
+                            pass
+                    outputs.append({
+                        "dir": entry.name,
+                        "chart_type": chart_type or "unknown",
+                        "data_points": data_points,
+                        "html_path": str(entry / "index.html"),
+                        "relative_url": f"/research/{project['slug']}/outputs/{entry.name}/index.html",
+                        "created_at": entry.name.replace("chart_", "").replace("_", ":"),
+                    })
+            return outputs
+
     def get_notes_dir(self, project: dict) -> Path:
         return self._outputs_dir / project["slug"] / "notes"
 
-    def add_research_note(self, topic: str, filename: str, content: str) -> dict:
+    def add_research_note(self, topic: str, filename: str, content: str, force: bool = False) -> dict:
         with self._lock:
             project = self._find_by_topic(topic)
             if not project:
@@ -449,6 +507,13 @@ class ResearchStore:
             notes_dir = self.get_notes_dir(project)
             notes_dir.mkdir(parents=True, exist_ok=True)
             file_path = notes_dir / filename
+            if file_path.exists() and not force:
+                return {
+                    "error": (
+                        f"Note '{filename}' already exists for research '{topic}'. "
+                        f"Pass force=True to overwrite it."
+                    )
+                }
             file_path.write_text(content, encoding="utf-8")
             project["updated_at"] = _utcnow()
             self._save()

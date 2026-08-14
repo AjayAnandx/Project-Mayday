@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications, location, projects, dashboard, documents
+from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications, location, projects, dashboard, documents, data_import
 from backend.api.research import router as research_router
 from backend.voice import router as voice_router
 from backend.core.config import load_config as _load_config
@@ -64,6 +64,7 @@ app.include_router(location.router)
 app.include_router(projects.router)
 app.include_router(dashboard.router)
 app.include_router(documents.router)
+app.include_router(data_import.router)
 app.include_router(research_router)
 app.include_router(voice_router)
 
@@ -78,6 +79,16 @@ app.mount("/pdfs", StaticFiles(directory=PDFS_DIR), name="pdfs")
 RESEARCH_OUTPUTS_DIR = _load_config().get("data", {}).get("research_outputs_dir", "")
 if RESEARCH_OUTPUTS_DIR and os.path.isdir(RESEARCH_OUTPUTS_DIR):
     app.mount("/research", StaticFiles(directory=RESEARCH_OUTPUTS_DIR), name="research")
+
+PROJECTS_DIR = _load_config().get("data", {}).get("projects_dir", "")
+if PROJECTS_DIR and os.path.isdir(PROJECTS_DIR):
+    app.mount("/projects", StaticFiles(directory=PROJECTS_DIR), name="projects")
+
+UPLOADS_DIR = _load_config().get("data", {}).get("uploads_dir", "uploads")
+if not os.path.isabs(UPLOADS_DIR):
+    UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "..", UPLOADS_DIR)
+if os.path.isdir(UPLOADS_DIR):
+    app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 
 @app.get("/api/health")

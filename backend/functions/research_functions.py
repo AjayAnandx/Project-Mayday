@@ -8,13 +8,13 @@ from backend.core.report_generator import (
 )
 
 
-def add_research_note(topic: str, content: str, filename: str = "", file_name: str = "") -> str:
+def add_research_note(topic: str, content: str, filename: str = "", file_name: str = "", force: bool = False) -> str:
     if not filename and file_name:
         filename = file_name
     if not filename:
         filename = "notes.md"
     store = get_research_store()
-    result = store.add_research_note(topic, filename, content)
+    result = store.add_research_note(topic, filename, content, force=force)
     if "error" in result:
         return f"Error: {result['error']}"
     return (
@@ -180,6 +180,32 @@ def add_finding(topic: str, content: str, confidence: str | None = None,
     return f"Finding added (**{result['id']}**). Confidence: {result.get('confidence', 'medium')}"
 
 
+def list_research_outputs(topic: str) -> str:
+    store = get_research_store()
+    outputs = store.list_outputs(topic)
+    if isinstance(outputs, dict) and "error" in outputs:
+        return f"Error: {outputs['error']}"
+    if not outputs:
+        return f"No charts generated yet for '{topic}'. Call generate_chart(topic) first."
+
+    lines = [f"Charts for '{topic}' ({len(outputs)}):"]
+    for o in outputs:
+        lines.append(
+            f"  - {o['chart_type']} chart ({o['data_points']} points) — {o['relative_url']} "
+            f"[generated {o['created_at']}]"
+        )
+
+    newest = outputs[0]
+    return json.dumps({
+        "message": "\n".join(lines),
+        "artifact": {
+            "url": newest["relative_url"],
+            "title": f"{topic} — {newest['chart_type']} chart",
+        },
+        "charts": outputs,
+    })
+
+
 def generate_report(topic: str, format: str = "md") -> str:
     result = _generate_report(topic, format)
     if "error" in result:
@@ -211,7 +237,7 @@ def generate_combined_report(topics: list[str] | None = None, title: str = "Comb
     return "\n".join(lines)
 
 
-def generate_chart(topic: str, chart_type: str = "bar", metric: str | None = None) -> str:
+def generate_chart(topic: str, chart_type: str = "auto", metric: str | None = None) -> str:
     result = _generate_chart(topic, chart_type, metric)
     if "error" in result:
         return f"Error: {result['error']}"
