@@ -6,6 +6,15 @@ from backend.core.report_generator import (
     generate_chart as _generate_chart,
     generate_combined_report as _generate_combined_report,
 )
+from backend.dspy import get_bridge
+from backend.dspy.report_builder import build_dspy_report, build_dspy_combined_report
+
+
+def _resolve_synthesis(synthesis: bool | None) -> bool:
+    """Decide whether to use DSPy synthesis. None → read the config/bridge flag."""
+    if synthesis is None:
+        return get_bridge().module_enabled("research_synthesis")
+    return bool(synthesis)
 
 
 def add_research_note(topic: str, content: str, filename: str = "", file_name: str = "", force: bool = False) -> str:
@@ -206,8 +215,11 @@ def list_research_outputs(topic: str) -> str:
     })
 
 
-def generate_report(topic: str, format: str = "md") -> str:
-    result = _generate_report(topic, format)
+def generate_report(topic: str, format: str = "md", synthesis: bool | None = None) -> str:
+    if _resolve_synthesis(synthesis):
+        result = build_dspy_report(topic, format)
+    else:
+        result = _generate_report(topic, format)
     if "error" in result:
         return f"Error: {result['error']}"
     lines = [f"Report generated in **{result['format']}** format."]
@@ -219,11 +231,16 @@ def generate_report(topic: str, format: str = "md") -> str:
     if result.get("pdf_warning"):
         lines.append(f"Note: {result['pdf_warning']}")
     lines.append(f"Data points: {result.get('data_point_count', 0)}, Entities: {result.get('entity_count', 0)}, Findings: {result.get('finding_count', 0)}")
+    if result.get("synthesis"):
+        lines.append("Synthesis: DSPy store-faithful summary + answered questions included.")
     return "\n".join(lines)
 
 
-def generate_combined_report(topics: list[str] | None = None, title: str = "Combined Research Report", format: str = "md") -> str:
-    result = _generate_combined_report(topics, title, format)
+def generate_combined_report(topics: list[str] | None = None, title: str = "Combined Research Report", format: str = "md", synthesis: bool | None = None) -> str:
+    if _resolve_synthesis(synthesis):
+        result = build_dspy_combined_report(topics, title, format)
+    else:
+        result = _generate_combined_report(topics, title, format)
     if "error" in result:
         return f"Error: {result['error']}"
     lines = [f"**Combined research report** generated — {result['topic_count']} topics."]
@@ -235,6 +252,29 @@ def generate_combined_report(topics: list[str] | None = None, title: str = "Comb
         lines.append(f"PDF: `{result['pdf_path']}` ({result.get('pdf_size', 0)} bytes)")
     lines.append(f"Data points: {result.get('data_point_count', 0)}, Entities: {result.get('entity_count', 0)}, Findings: {result.get('finding_count', 0)}")
     return "\n".join(lines)
+
+
+async def research_agent(topic: str, max_hops: int | None = None, auto_report: bool = True, mcp_manager=None) -> str:
+    """Module B (Mode A): run a bounded multi-hop research loop over an existing topic.
+
+    Disabled-safe: if the DSPy ``research_agent`` flag is off, returns a clear message
+    instead of running. Otherwise dispatches existing research tools through dispatch_call.
+    """
+    from backend.dspy import research_agent as agent_mod
+    from backend.assistant.function_registry import dispatch_call as _dispatch
+
+    if not get_bridge().module_enabled("research_agent"):
+        return (
+            "DSPy research agent is disabled (set dspy.enabled=true and dspy.research_agent=true "
+            "in config.yaml to enable). Use the individual research tools instead."
+        )
+
+    async def _dispatch_wrapped(name: str, args: dict):
+        return await _dispatch(name, args, mcp_manager)
+
+    return await agent_mod.run_research_agent(
+        topic, max_hops=max_hops, auto_report=auto_report, dispatch=_dispatch_wrapped
+    )
 
 
 def generate_chart(topic: str, chart_type: str = "auto", metric: str | None = None) -> str:

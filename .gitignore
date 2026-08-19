@@ -29,3 +29,6 @@ config.local.yaml
 *.pem
 *.key
 uploads/
+# DSPy compiled artifacts (PII-gated, generated offline) — not committed
+dspy_artifacts/
+backend/dspy/artifacts/

@@ -484,7 +484,7 @@ class DataStore:
 
     # --- Conversations (per-day files) ---
 
-    def create_conversation(self, title: str = "New conversation") -> dict:
+    def create_conversation(self, title: str = "New conversation", important: bool = False) -> dict:
         with self._lock:
             conv = {
                 "id": uuid.uuid4().hex[:12],
@@ -492,23 +492,56 @@ class DataStore:
                 "created_at": _utcnow(),
                 "updated_at": _utcnow(),
                 "messages": [],
+                "important": bool(important),
             }
             date_str = _today_str()
             day = self._load_day(date_str)
             day["conversations"].append(conv)
             self._save_day(date_str, day)
+            try:
+                from backend.core.awareness_observer import hook_conversation_saved
+                hook_conversation_saved(conv)
+            except Exception:
+                # Observer is additive — never let it break persistence.
+                pass
             index = self._load_index()
             entry = {
                 "id": conv["id"],
                 "date": date_str,
                 "title": title,
                 "message_count": 0,
+                "important": bool(important),
             }
             index.append(entry)
             self._conv_idx[conv["id"]] = entry
             self._save_index(index)
             self._index_conversation(conv)
             return conv
+
+    def set_conversation_important(self, conversation_id: str, important: bool = True) -> bool:
+        with self._lock:
+            entry = self._conv_idx.get(conversation_id)
+            if not entry:
+                return False
+            important = bool(important)
+            entry["important"] = important
+            day = self._load_day(entry["date"])
+            changed = False
+            for conv in day["conversations"]:
+                if conv["id"] == conversation_id:
+                    conv["important"] = important
+                    changed = True
+                    break
+            if changed:
+                self._save_day(entry["date"], day)
+                self._save_index(list(self._conv_idx.values()))
+                from backend.memory.knowledge_graph import get_graph
+                try:
+                    get_graph().set_conversation_important_flag(conversation_id, important)
+                except Exception:
+                    pass
+                return True
+            return False
 
     def add_message(self, conversation_id: str, role: str, content: str, tool_call_id: str | None = None, tool_calls: list | None = None) -> dict | None:
         with self._lock:
@@ -536,6 +569,13 @@ class DataStore:
                     self._save_day(entry["date"], day)
                     self._save_index(list(self._conv_idx.values()))
                     self._index_conversation(conv)
+                    if role == "user":
+                        try:
+                            from backend.core.awareness_observer import hook_conversation_saved
+                            hook_conversation_saved(conv)
+                        except Exception:
+                            # Observer is additive — never let it break persistence.
+                            pass
                     return msg
             return None
 
@@ -577,6 +617,7 @@ class DataStore:
                             "created_at": conv["created_at"],
                             "updated_at": conv["updated_at"],
                             "message_count": len(conv["messages"]),
+                            "important": conv.get("important", False),
                         }
                         result.append(conv_slim)
                         break

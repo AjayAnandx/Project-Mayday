@@ -5427,7 +5427,22 @@ Frontend useChat.ts → window.open(url, '_blank') → New browser tab opens wit
 
 ---
 
-## Universal Data Analysis Pipeline (Excel + Web + Auto-Charts) — Plan for Aug 11
+## Universal Data Analysis Pipeline (Excel + Web + Auto-Charts) — Implementation Complete
+
+### Status - COMPLETED (Aug 14)
+
+### What Was Done
+- **Phase 0** — Excel/CSV upload & parsing: `backend/functions/data_import.py` (pandas/openpyxl), `backend/api/data_import.py` (4 REST endpoints), `uploads/` static mount, `DataImportPanel.tsx`
+- **Phase 1** — Web → Structured Data Pipeline: `backend/functions/web_research.py` + `backend/core/extraction_pipeline.py` (Search → Extract → Structure → Store)
+- **Phase 2** — Auto Chart Type Selection: `suggest_chart_type()` in `report_generator.py` + `chart_type="auto"` default
+- **Phase 3** — Project data_points: `add_project_data_point` / `list_project_data_points` / `generate_project_chart` tools + REST endpoints in `backend/api/projects.py`
+- **Phase 4** — Auto-open in new tab: WebSocket `artifact_url` field + `window.open` in `useChat.ts` + "Open in New Tab" button on tool bubbles (`MessageBubble.tsx`)
+- **Phase 5** — Unified Data Analysis UI: `AnalysisPanel.tsx` (Import / Web Research / Data Points / Charts tabs), `useDataAnalysis.ts`, "Data" nav item in Sidebar
+- **8 new LLM tools**: `import_data`, `import_data_to_store`, `list_imported_files`, `web_search_and_fetch`, `extract_data_from_sources`, `batch_add_data_points`, `export_research_dataset` (CSV → `uploads/`), `list_research_outputs`
+- **DATA_ANALYSIS_PROTOCOL** injected in `chat.py` — 4-step flow (SEARCH → EXTRACT → STORE → CHART) + STEP 3.5 dataset CSV export
+- **Bug fixes (Aug 14)**: `extract_data_from_sources` unhashable dict column schema; `generate_chart` float `.replace()` crash — schema/column normalization in `extraction_pipeline.py`, robust numeric extraction + string coercion in `report_generator.py`, store-boundary coercion in `research_store.py`/`project_store.py`
+- **Tests**: `test_data_pipeline.py` (13 regression tests), `test_data_export.py`, `test_dup_guard.py`, `test_project_index.py` — full suite 212 passing
+- **Worked example**: Nifty 50 Companies Hiring Growth 2016-2026 — 16 data points (TCS/Infosys/HCLTech headcounts 2017-2026), CSV + interactive chart produced
 
 ### Goal
 Enable Mayday to analyze ANY data request by:
@@ -5445,10 +5460,10 @@ Enable Mayday to analyze ANY data request by:
 | PDF upload/analysis | ✅ | `backend/functions/document_functions.py` |
 | Research data_points | ✅ | `backend/core/research_store.py` |
 | Chart generation (Chart.js) | ✅ | `backend/core/report_generator.py` |
-| Excel/CSV upload | ❌ | — |
-| Web → structured data pipeline | ❌ | — |
-| Auto chart type selection | ❌ Manual param | — |
-| Auto-open in new tab | ⚠️ Planned | Plan Phase 3 |
+| Excel/CSV upload | ✅ | `backend/functions/data_import.py` + `backend/api/data_import.py` |
+| Web → structured data pipeline | ✅ | `backend/functions/web_research.py` + `backend/core/extraction_pipeline.py` |
+| Auto chart type selection | ✅ | `suggest_chart_type()` in `backend/core/report_generator.py` |
+| Auto-open in new tab | ✅ | `useChat.ts` `artifact_url` + `window.open` |
 
 ---
 
@@ -5663,7 +5678,7 @@ def suggest_chart_type(data_points: list, context: str = "") -> str:
 
 ## DSPy System Prompt Optimization — Research Report (Aug 13)
 
-### Status — PLANNED (research complete, no code changes yet)
+### Status — PLANNED (research complete; detailed Module A + Module B implementation plan saved to `DSPY.txt`; no code changes yet)
 
 ### Goal
 Apply DSPy ("program, don't prompt") techniques to Mayday's system prompt + tool-calling architecture to: (1) reduce input tokens, (2) improve tool-call accuracy, (3) keep/improve latency, (4) make prompt enhancement systematic instead of hand-edited.
@@ -5749,3 +5764,167 @@ Net: **~2–4× less total input tokens across a typical multi-tool turn.**
 
 ### Bottom Line
 Treat the 7 prompt sections as optimizable signatures; get tool-call correctness from typed output fields + bootstrapped demos instead of prose; get token savings from compact tool metadata + trajectory compaction (50K-char tool results are the biggest leak); get prompt enhancement from a metric-driven offline compile loop using existing conversation/operation logs as the training set. Expected: **30–70% input-token reduction, double-digit tool-call accuracy gains, zero runtime latency regression**, and a prompt system that improves itself from usage data.
+
+---
+
+## Mayday ↔ Telegram Bridge + PDF Export — Implementation Plan (Aug 14)
+
+### Status — PLANNED (no code yet)
+
+### Goal
+1. Connect Mayday to Telegram so the user can chat with the full LLM engine (tools, memory, MCP, skills) from anywhere.
+2. Export any research/project dataset as **PDF** (full report or bare data table) and receive it in Telegram.
+3. Retrieve **existing files**: any PDF already in the Mayday project/research directories is sent as-is; Markdown files are converted to PDF and sent.
+4. Deliver charts as PNG screenshots (headless Chrome/Selenium) in the chat.
+
+### Decisions (Confirmed with user, Aug 14)
+| Decision | Choice |
+|----------|--------|
+| Bot library | `python-telegram-bot` v21+ (async, long polling — no webhook/TLS needed) |
+| Bot scope | Full LLM chat bridge + slash commands |
+| PDF content | Both: full research report PDF (exists) + new bare-table dataset PDF |
+| Chart delivery | Render chart HTML → PNG via headless Selenium → `sendPhoto` |
+| Existing files | `/file <keyword>` command + `locate_and_prepare_file` LLM tool; MD → PDF conversion |
+| Auth | `allowed_chat_ids` whitelist in config; token via `.env` |
+
+### Architecture
+
+```
+Telegram message ──► bot.py (Application, long polling, lifespan task)
+      │  chat_id whitelist check (config.telegram.allowed_chat_ids)
+      ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ Slash command? ──► commands.py                                     │
+│   /start /help /topics /status /pdf /csv /chart /file              │
+│ Free text ──► TelegramSession (per chat: ConversationManager +     │
+│              lazily built LLMClient, tools, ToolSelector,          │
+│              SkillManager, MCP)                                    │
+│              └─► _run_engine(TelegramSender, ...) — existing       │
+│                  pipeline, ZERO engine changes                     │
+└──────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+TelegramSender (sender.py) maps engine events → Bot API:
+  token       → buffered sendMessage (0.8s batching, Markdown, split >4096 chars)
+  tool_call   → sendMessage with tool result text
+  image_url   → resolve local path → sendPhoto
+  result path / artifact (pdf_path, csv path, .md) → sendDocument
+  done        → flush buffer
+```
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `backend/telegram/__init__.py` | package |
+| `backend/telegram/bot.py` | `Application` setup, message handler, auth, command routing, document uploads (CSV/XLSX → `save_uploaded_file` → import flow) |
+| `backend/telegram/session.py` | per-chat `TelegramSession`: `ConversationManager` + lazily-built engine components, reused across messages (no MCP re-discovery per message), LRU eviction |
+| `backend/telegram/sender.py` | `TelegramSender` engine-event adapter (batching, splitting, file detection) |
+| `backend/telegram/commands.py` | slash command handlers |
+| `backend/telegram/chart_png.py` | headless Selenium screenshot of chart HTML (`file://` → full-page PNG) |
+| `backend/core/md_pdf.py` | `markdown_to_pdf(md_text, title, out_path)` — minimal md→html (headings, paragraphs, lists, code blocks, bold/italic, links, tables) via fpdf2 `write_html` with dark/green theme; manual cell-table fallback (style of `_pdf_section`) if `write_html` table support unavailable |
+
+### Modified Files
+
+| File | Change |
+|------|--------|
+| `backend/api/chat.py` | `_send_json(ws, …)` → `_send_json(sender, …)`; `_run_engine` first param = sender object; add `WebSocketSender` adapter — all ~15 engine call sites untouched; web chat behavior identical |
+| `backend/main.py` | lifespan: start/stop Telegram poller task next to scheduler |
+| `config.yaml` | `telegram:` section (below) |
+| `backend/functions/data_export.py` | **+ `export_dataset_pdf(topic, store_type="research")`** — bare dataframe table PDF (FPDF; columns # / Label / Value / Unit / Confidence / Source, same style as `_pdf_section`); supports project datasets via `store_type="project"` |
+| `backend/functions/document_functions.py` | **+ `locate_and_prepare_file(name)`** LLM tool — recursive fuzzy filename search across `pdfs/`, `projects_dir`, `research_outputs_dir`, `uploads/`; returns `{path, kind, name}` (kind = pdf/md/csv/other) |
+| `requirements.txt` | `python-telegram-bot>=21.0`, `fpdf2>=2.8` (currently missing but already used!), `pillow` (PNG processing if needed) |
+| `docs/deployment.md` | poller runs inside backend process → covered by NSSM auto-restart |
+
+### Command Surface
+
+| Command | Behavior |
+|---------|----------|
+| `/start` `/help` | greeting + command list |
+| `/topics` | list research topics + project names (fuzzy-filtered by optional query) |
+| `/status` | backend health, model, active projects |
+| `/pdf <topic>` | fuzzy topic lookup → `generate_report(topic, fmt="pdf")` (exists) → sendDocument `report.pdf` |
+| `/pdf <topic> --table` | `export_dataset_pdf(topic)` → bare-table PDF → sendDocument |
+| `/csv <topic>` | `export_research_dataset(topic)` (exists) → sendDocument CSV |
+| `/chart <topic>` | `generate_chart` → chart HTML → PNG screenshot → sendPhoto |
+| `/file <keyword>` | recursive search → unique `.pdf` → send as-is; unique `.md` → convert → send; unique `.csv` → send as-is; multiple hits → numbered candidate list (user replies with number); no hit → closest fuzzy matches |
+| free text | full engine: "export the nifty 50 df as pdf", "send me the tcs analysis pdf", "convert my mayday notes to pdf" → LLM calls `generate_report` / `export_dataset_pdf` / `locate_and_prepare_file` → sender auto-detects `path`/`pdf_path`/artifact → sends file |
+| CSV/XLSX upload | bot downloads via `getFile` → `uploads/` → existing `import_data` flow |
+
+### Existing-File Search Locations
+
+| Location | Content |
+|----------|---------|
+| `pdfs/` (+ `pdfs/index.json`) | uploaded documents (DocumentPanel / chat) |
+| `C:\Users\hp\Projects\madays projects\{slug}\` | project folders — `pdfs/`, `*.md`, `report.md` |
+| `C:\Users\hp\Projects\Mayday Research\topics\{slug}\` | `notes/*.md`, `outputs/report.md`, `outputs/report.pdf`, chart dirs |
+| `uploads/` | exported CSVs |
+
+Search: case-insensitive substring on filename + slug-matched tokens; candidate ranking by best token overlap; skip `node_modules/.git/dist/venv` dirs (reuse `project_index` skip-list).
+
+### MD → PDF Conversion (`backend/core/md_pdf.py`)
+- Minimal md→html subset: `#`/`##`/`###`, paragraphs, `-`/`1.` lists, ``` code blocks (monospace, shaded), `**bold**`, `*italic*`, `` `code` ``, `[links](url)` (printed as text), tables (pipe syntax).
+- Rendered via fpdf2 `write_html()` with existing dark/green theme (bg `#0d0d0d`, text `#e5e5e5`, accent `#22c55e`) matching `_generate_pdf`.
+- Fallback: if `write_html` table support is missing in installed fpdf2, render tables with manual cells (reuse `_pdf_section` table loop style).
+- `set_auto_page_break` for long files; UTF-8 safe via built-in Helvetica (latin-1); non-latin chars stripped with warning.
+- Output: next to source (`<file>.pdf` in same dir) or in `uploads/`; returned path sent via `sendDocument`.
+
+### Config (`config.yaml`)
+
+```yaml
+telegram:
+  enabled: false            # set true to start poller
+  token: ""                 # set via TELEGRAM_BOT_TOKEN env var or .env
+  allowed_chat_ids: []      # numeric chat ids; empty = no one (fail closed)
+  search_dirs: []           # optional; defaults to pdfs/ + projects_dir + research_outputs_dir + uploads/
+  chart_png_dir: uploads    # temp PNG output
+```
+
+### Security
+- Token only in `.env` / env var (config loader already supports this pattern).
+- `allowed_chat_ids` whitelist — unknown chat gets "not authorized", never reaches the engine.
+- No destructive commands (no delete/promote/stop/close) — read + export only.
+- Telegram messages use the configured LLM model (`gemma4:31b-cloud` = cloud-proxied; same privacy as web chat today — flag in docs).
+- Bot never exposes raw command execution (no shell); file delivery only via existing allowlisted tools.
+
+### Edge Cases
+- Ambiguous file names → numbered candidates, pick by reply.
+- >50MB Telegram file limit → error with size shown (PDFs/MDs normally KBs).
+- File neither pdf/md/csv → listed with hint, not sent.
+- MD conversion of huge files → page breaks; 4096-char Telegram message split for long tool results.
+- MCP lazy tools in Telegram sessions → same static-tool fallback logic as `chat_websocket` (lines 1232-1242).
+- Backend restart while poller running → NSSM auto-restart; poller resumes via `getUpdates` offset (python-telegram-bot handles).
+- Chart PNG render: headless Chrome via Selenium (already verified working on this machine); `--headless=new`, wait for Chart.js draw (sleep/poll canvas), full-page screenshot.
+- Conversations: per-chat in-memory `ConversationManager` (last 20 msgs); optional persistence to per-day files with `source: "telegram"` (Phase 5).
+
+### Phases + Rollout Order
+1. **Phase 1 — Bot core**: deps, config, `bot.py` skeleton (auth + `/start` echo) → manual test with real BotFather token.
+2. **Phase 2 — Chat bridge**: `chat.py` sender refactor + `WebSocketSender` + `TelegramSender` + `session.py` → manual test (free text + tool calls + memory).
+3. **Phase 3 — Export delivery**: `export_dataset_pdf` + `/pdf` `/csv` + LLM-driven export (sender file detection) → test.
+4. **Phase 4 — File retrieval + charts**: `md_pdf.py` + `locate_and_prepare_file` + `/file` + `chart_png.py` + `/chart` → test.
+5. **Phase 5 — Polish**: CSV/XLSX upload via Telegram, conversation persistence (`source: "telegram"`), deployment docs, NSSM restart verification.
+
+### Testing
+- New unit tests (plain pytest, matching existing style):
+  - `backend/test_telegram.py` — sender token batching/splitting (4096-char boundary), chat_id auth filter, command arg parsing, `/file` candidate ranking.
+  - `backend/test_md_pdf.py` — md→pdf conversion output valid (pypdf parse, >0 bytes), headings/lists/code/tables present, auto page break on long input.
+  - `backend/test_locate_file.py` — fuzzy search across the 4 locations, ambiguity detection, skip-dir behavior, no-match fallback.
+  - `backend/test_data_export.py` — extend: `export_dataset_pdf` output valid FPDF for research + project store_type.
+- Manual: private chat → `/start`, free-text export request, `/pdf`, `/pdf --table`, `/csv`, `/chart`, `/file <existing pdf>`, `/file <md>`, upload CSV → export.
+- Full existing suite must stay green (212 tests).
+
+### Estimate
+
+| Phase | Effort |
+|-------|--------|
+| 1: Bot core | 2-3 hrs |
+| 2: Chat bridge (sender refactor) | 3-4 hrs |
+| 3: PDF/CSV export delivery | 2-3 hrs |
+| 4: File retrieval + md→pdf + chart PNG | 3-4 hrs |
+| 5: Polish (uploads, persistence, docs) | 2-3 hrs |
+| **Total** | **12-17 hrs** |
+
+### Prerequisites (user action)
+1. Create bot via @BotFather → get token.
+2. Get your chat id (send message to bot, read update, or @userinfobot) → add to `allowed_chat_ids`.
+3. Put token in `.env` as `TELEGRAM_BOT_TOKEN` (or `config.yaml` env section).

@@ -19,6 +19,8 @@ def create_event(title: str, start_time: str, end_time: str,
     event = store.create_event(title, start_time, end_time, description, all_day, recurrence)
     get_operation_log().record("create", "event", event["id"], event["title"],
                                 details={"recurrence": recurrence})
+    from backend.core.awareness_observer import hook_event_created
+    hook_event_created(event)
     return f"Created event: {event['title']} (id: {event['id']})"
 
 

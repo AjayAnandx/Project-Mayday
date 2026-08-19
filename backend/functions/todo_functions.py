@@ -19,6 +19,8 @@ def create_todo(title: str, description: str = "", due_date: str = None,
     todo = store.create_todo(title, description, due_date, priority, tags, recurrence)
     get_operation_log().record("create", "todo", todo["id"], todo["title"],
                                 details={"priority": priority, "recurrence": recurrence})
+    from backend.core.awareness_observer import hook_todo_created
+    hook_todo_created(todo)
     return f"Created todo: {todo['title']} (id: {todo['id']})"
 
 
