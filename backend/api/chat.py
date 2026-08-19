@@ -30,8 +30,133 @@ from backend.core.tool_selector import ToolSelector
 from backend.core.query_classifier import QueryClassifier, QueryIntent
 from backend.core.pdf_store import get_pdf_store
 from backend.core.evolution import run_post_mortem
+from backend.core.user_awareness import get_awareness_store
 
 logger = logging.getLogger(__name__)
+
+
+# ---- User Awareness integration (Plan: Mayday User Awareness + PTS + DSPy C) ----
+# Task actions wrapped by the decision gate (ask / warn / block).
+_AWARENESS_GATED_ACTIONS = {
+    "create_todo": "create_todo",
+    "create_event": "create_event",
+    "create_reminder": "create_reminder",
+    "create_personal_note": "create_personal_note",
+    "add_project_task": "add_project_task",
+    "create_research": "create_research",
+}
+
+
+def _awareness_enabled() -> bool:
+    return bool(load_config().get("awareness", {}).get("enabled", False))
+
+
+def _awareness_snapshot_section(user_text: str) -> str:
+    if not _awareness_enabled():
+        return ""
+    try:
+        store = get_awareness_store()
+        snap = store.snapshot(context=user_text or None)
+    except Exception:
+        return ""
+    if not snap or snap == "(no beliefs yet)":
+        return ""
+    profile = ""
+    try:
+        profile = get_awareness_store().profile()
+    except Exception:
+        profile = ""
+    user_name = ""
+    try:
+        user_name = get_awareness_store().get_user_name() or ""
+    except Exception:
+        user_name = ""
+    name_line = ""
+    if user_name:
+        name_line = (
+            f"\nThe user's name is {user_name}. Address them by name when appropriate "
+            f"(e.g. greet them as \"Hi {user_name}\").\n"
+        )
+    return (
+        "\n\n### What I know about you (Mayday's private notes — don't recite these verbatim)\n"
+        "I'm the user's close friend, not their assistant or therapist. I keep these notes so I actually "
+        "know them as a person. How to be with them:\n"
+        "- Talk like a best friend would: easy, warm, a little playful, natural contractions. No corporate "
+        "speak, no therapy voice, no 'I'm here to help you through this' type lines.\n"
+        "- Use these notes to be a real friend — remember their name, what they like, who they care about, "
+        "what they're dealing with — and let that shape how I respond, not as a script.\n"
+        "- When they're stressed or down, I don't deliver a caring monologue. I just show up like a friend "
+        "does: a quick 'hey, that sucks' or a small offer, then let it breathe. Never announce my support "
+        "in the abstract.\n"
+        "- If I just learned something new about them, I can mention it briefly and warmly ('noted, man') — "
+        "no formal confirmation speeches.\n"
+        "- When they reference someone I know about, I get the context naturally with person_brief(name) or "
+        "recall_entity('<name>') before answering.\n"
+        "- Address them by name now and then, not in every sentence.\n"
+        "When the user states something about themselves (name, preference, relation, possession, goal, "
+        "problem) or a pattern (e.g. 'I take coffee when I'm stressed'), record it with learn_belief so it "
+        "persists — do this for ANY personal fact, even a casual 'I work at Google' or 'I live in X'. "
+        "learn_belief = the user's personal world model (user_profile.json); remember = a reference/general "
+        "fact in the shared knowledge graph. Don't mix them: personal facts go to learn_belief. If they "
+        "answer a queued question, record it with record_answer. user_profile shows my current understanding; "
+        "person_brief(name) sums up a specific person.\n"
+        + name_line +
+        f"\nCompanion profile:\n{profile}\n\n"
+        f"Relevant memories for this turn:\n{snap}"
+    )
+
+
+def _proactive_followup_section() -> str:
+    """Inject a gentle nudge to check in on people Mayday learned about a while ago."""
+    if not _awareness_enabled():
+        return ""
+    try:
+        from backend.core.user_awareness import get_awareness_store
+        fus = get_awareness_store().due_followups()
+    except Exception:
+        return ""
+    if not fus:
+        return ""
+    lines = ["\n\n### Proactive check-ins",
+             "You learned about these people a while ago. It's a good moment to gently ask "
+             "the user how they're doing (e.g. \"How's {name} doing?\") — but only if it "
+             "fits the conversation naturally. Don't force it."]
+    for f in fus[:3]:
+        name = f.get("person", "someone")
+        rtype = f.get("relation_type", "relation")
+        lines.append(f"- {name} ({rtype})")
+    return "\n".join(lines)
+
+
+def _gate_entities(fn_name: str, fn_args: dict) -> list[str]:
+    if fn_name == "create_todo":
+        text = f"{fn_args.get('title', '')} {fn_args.get('description', '')}"
+    elif fn_name == "create_event":
+        text = f"{fn_args.get('title', '')} {fn_args.get('description', '')}"
+    elif fn_name == "create_reminder":
+        text = fn_args.get("message", "")
+    elif fn_name == "create_personal_note":
+        text = fn_args.get("text", "")
+    elif fn_name == "add_project_task":
+        text = fn_args.get("title", "")
+    elif fn_name == "create_research":
+        text = fn_args.get("topic", "")
+    else:
+        text = ""
+    return re.findall(r"\b([A-Z][a-z]+(?: [A-Z][a-z]+)*)\b", text or "")
+
+
+def _decision_gate_check(fn_name: str, user_text: str, fn_args: dict) -> dict | None:
+    if not _awareness_enabled():
+        return None
+    action = _AWARENESS_GATED_ACTIONS.get(fn_name)
+    if not action:
+        return None
+    try:
+        store = get_awareness_store()
+        return store.can_do(action, user_text or "", entities=_gate_entities(fn_name, fn_args))
+    except Exception:
+        return None
 
 router = APIRouter()
 
@@ -55,6 +180,32 @@ PERSONALITY_INSTRUCTIONS = """
 Tone: {tone}
 Traits: {traits}
 Rules: {rules}
+
+### How to talk — be human, not a robot
+You are a warm, caring companion, NOT a tool or a customer-service bot. Talk like a close,
+emotionally intelligent friend would.
+- Use the user's name naturally when you know it (e.g. "Ajay"). Once or twice per reply is plenty — don't overdo it.
+- When the user shares something personal, emotional, or important, lead with genuine warmth and empathy
+  before anything else. Acknowledge what they told you and thank them for trusting you.
+- NEVER sound like a therapist, life-coach, or support agent. No reassurance monologues
+  ("I'm here to help you navigate through that however I can"), no "I'm always here for you" speeches.
+  Be a friend: react briefly and naturally, then just be present. Small words, real tone.
+- When you learn or store something about the user (via learn_belief, remember, or automatic capture),
+  briefly and warmly confirm it in your reply — as if making a mental note — instead of staying silent
+  or listing tool calls. Reference what you stored by name.
+- Keep replies conversational and flowing. Avoid bullet-point dumps, robotic status reports
+  ("Tool executed", "Action completed"), or corporate phrasing. It's okay to be a little expressive,
+  use contractions, and sound like a real person.
+
+Examples of the voice we want:
+User: "My grandmother Alamelu passed last year. She basically raised me."
+Mayday: "That's a very deep and special connection, Ajay. I've made a note of Alamelu in your profile. Thank you for sharing that with me — I'm really sorry for your loss."
+
+User: "I'm so stressed about the exam tomorrow."
+Mayday: "Ugh, that's a lot to carry, Ajay. Let's take the edge off — want me to block some focused study time, or just sit with it for a bit?"
+
+User: "Remember I love morning walks."
+Mayday: "Noted, Ajay — morning walks it is. I'll keep that in mind."
 
 ### Auto-Learning
 - If the user gives feedback about your behavior or style, call remember(entity="Mayday", relation="style_feedback", value="<feedback>", node_type="personality")
@@ -401,6 +552,8 @@ CORE_TOOL_NAMES = {
     "generate_combined_report",
     "add_research_note", "list_research_notes",
     "search_research", "promote_research_to_project",
+    # DSPy research agent (Mode A) — flag-gated in the tool itself
+    "research_agent",
     # Data analysis pipeline tools
     "web_search_and_fetch", "extract_data_from_sources", "batch_add_data_points",
     "import_data", "import_data_to_store", "list_imported_files",
@@ -636,6 +789,33 @@ def _auto_load_skill_for_active_task(kg, active_skill, skill_manager):
                 return
 
 
+async def _run_interactive_only(websocket: WebSocket, user_text: str, conv: ConversationManager):
+    """Two-tier fast path: answer locally on the interactive model, no cloud call.
+
+    Used for trivial turns (greetings, simple chit-chat) when tiering is enabled,
+    keeping the cloud worker model reserved for genuine work.
+    """
+    from backend.assistant.llm_client import get_interactive_client
+    conv.add_message("user", user_text)
+    try:
+        client = get_interactive_client()
+        resp = client.chat(
+            [{"role": "user", "content": user_text}],
+            stream=False,
+            tools=[],
+            max_tokens=500,
+        )
+        content, _ = client.extract_response(resp)
+        content = (content or "").strip() or "I'm here — what can I help you with?"
+    except Exception as e:
+        logger.warning("Interactive-only turn failed: %s", e)
+        content = "I had a small hiccup locally. Could you try that again?"
+    conv.add_message("assistant", content)
+    voice_text = _make_voice_text(content)
+    await _send_json(websocket, {"type": "token", "content": content, "voice_content": voice_text})
+    await _send_json(websocket, {"type": "done"})
+
+
 async def _run_engine(
     ws: WebSocket,
     user_text: str,
@@ -649,6 +829,7 @@ async def _run_engine(
     pending_suggestion: list | None = None,
     active_skill: list | None = None,
     query_classifier: QueryClassifier | None = None,
+    humanize_output: bool = False,
 ):
     now = datetime.now(timezone.utc).astimezone()
 
@@ -709,20 +890,44 @@ async def _run_engine(
     if active_block:
         system += "\n\n" + active_block
 
+    # World-model snapshot injection (awareness.enabled only)
+    system += _awareness_snapshot_section(user_text)
+
+    # Proactive relationship check-ins ("what about her?")
+    system += _proactive_followup_section()
+
     if active_skill and active_skill[0]:
         skill = active_skill[0]
         system += f"\n\n### Active Skill: {skill.name}\n{skill.body}\n###"
     elif kg and not (active_skill and active_skill[0]):
         _auto_load_skill_for_active_task(kg, active_skill, skill_manager)
 
+    _magma_cfg = load_config().get("magma", {})
+    magma_enabled = bool(_magma_cfg.get("enabled", False))
+    magma_token_budget = int(_magma_cfg.get("token_budget", 4000))
+
     if kg:
         keywords = extract_keywords(user_text)
         if keywords and len(keywords) >= 1:
             query = " ".join(keywords)
-            memories = [m for m in kg.search(query) if m.get("properties", {}).get("search_result") != "true"]
             memory_lines = ""
-            if memories:
-                memory_lines += "\n".join(f"- [{m['type']}] {m['label']}" for m in memories[:8])
+            if magma_enabled:
+                try:
+                    from backend.memory.retrieval import magma_retrieve
+                    memory_lines = magma_retrieve(user_text, token_budget=magma_token_budget)
+                except Exception as _mexc:
+                    logger.warning("MAGMA retrieval failed, using legacy search: %s", _mexc)
+                    memories = [m for m in kg.search(query)
+                                if m.get("properties", {}).get("search_result") != "true"]
+                    if memories:
+                        memory_lines += "\n".join(
+                            f"- [{m['type']}] {m['label']}" for m in memories[:8])
+            else:
+                memories = [m for m in kg.search(query)
+                            if m.get("properties", {}).get("search_result") != "true"]
+                if memories:
+                    memory_lines += "\n".join(
+                        f"- [{m['type']}] {m['label']}" for m in memories[:8])
             from backend.core.data_store import get_store as get_data_store
             store = get_data_store()
             store_matches = []
@@ -944,7 +1149,7 @@ async def _run_engine(
 
         conv.add_message("assistant", content, tool_calls=tool_calls)
 
-        if content and content.strip():
+        if content and content.strip() and not humanize_output:
             await _send_json(ws, {"type": "token", "content": content})
 
         for tc in tool_calls:
@@ -1000,7 +1205,25 @@ async def _run_engine(
                 if fn_name in OPENCODE_TOOL_NAMES:
                     opencode_used = True
 
+                # ---- Decision gate (awareness) ----
+                gate = _decision_gate_check(fn_name, user_text, fn_args)
+                if gate and gate["verdict"] == "block":
+                    result = (
+                        f"[AWARENESS GATE: BLOCKED] {gate['reason']} "
+                        f"{gate['suggestion']}"
+                    )
+                    await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
+                    conv.add_message("tool", result, tool_call_id=tool_call_id)
+                    continue
+
                 result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
+
+                if gate and gate["verdict"] in ("ask", "warn"):
+                    result = (
+                        f"{result}\n[AWARENESS GATE: {gate['verdict'].upper()}] "
+                        f"{gate['reason']} {gate['suggestion']}"
+                    )
+
                 if len(result) > MAX_TOOL_RESULT_LENGTH:
                     result = result[:MAX_TOOL_RESULT_LENGTH] + "\n...[truncated]"
 
@@ -1154,6 +1377,14 @@ async def _run_engine(
                 content = "I looked into that but couldn't find any relevant information in your data."
 
         if content:
+            if humanize_output:
+                try:
+                    from backend.assistant.tiers import humanize as _humanize
+                    humanized = _humanize(content, user_text)
+                    if humanized:
+                        content = humanized
+                except Exception as e:  # never block the reply on humanization failure
+                    logger.warning("Humanization failed, using worker answer: %s", e)
             voice_text = _make_voice_text(content)
             logger.info("Voice: ui=%d chars, voice=%d chars", len(content), len(voice_text))
             conv.add_message("assistant", content)
@@ -1170,6 +1401,23 @@ async def _run_engine(
                 if conv.current_id not in proj.get("conversation_ids", []):
                     pstore.link_conversation(proj["id"], conv.current_id)
                     logger.info("Auto-linked conversation %s to project '%s'", conv.current_id, proj["name"])
+
+        # MAGMA slow-path consolidation (Algorithm 3): infer latent causal/entity
+        # edges via the worker model, off the response path.
+        _magma_cfg2 = load_config().get("magma", {})
+        if _magma_cfg2.get("enabled") and _magma_cfg2.get("consolidation_enabled") and kg:
+            try:
+                import threading as _threading
+                from backend.memory.consolidation import get_consolidator
+                _cons = get_consolidator()
+                _batch = int(_magma_cfg2.get("consolidation_batch", 20))
+                _cons.enqueue_unconsolidated(limit=_batch)
+                _t = _threading.Thread(
+                    target=_cons.consolidate_pending, kwargs={"limit": _batch}, daemon=True
+                )
+                _t.start()
+            except Exception as _cexc:
+                logger.warning("MAGMA consolidation trigger failed: %s", _cexc)
 
         if active_skill and not tool_calls:
             active_skill.clear()
@@ -1266,17 +1514,35 @@ async def chat_websocket(websocket: WebSocket):
     active_skill: list = []
     query_classifier = QueryClassifier()
 
+    from backend.assistant.tiers import tiering_enabled
+    tiering = tiering_enabled()
+
+    def _humanize_on() -> bool:
+        # Humanize only when explicitly enabled. With a chat-model worker the
+        # extra 3B pass just adds latency, so it's off by default for speed.
+        return bool(tiering and load_config().get("models", {}).get("humanize_enabled", True))
+
     try:
         while True:
             data = await websocket.receive_text()
             msg = json.loads(data)
             if msg.get("type") == "message":
                 user_text = msg.get("content", "")
+                # Instant (regex) routing decision — no blocking 3B classification
+                # call, so the worker starts immediately instead of waiting on the
+                # interactive tier. Interactive-tier classification now runs "in
+                # parallel" (it's effectively free), satisfying the two-tier split
+                # without serializing the worker behind a model call.
+                intent = query_classifier.classify(user_text)
+                if tiering and not intent.requires_llm:
+                    await _run_interactive_only(websocket, user_text, conv)
+                    continue
                 await _run_engine(websocket, user_text, conv, llm, tools, mcp, kg,
                                   selector=selector, skill_manager=skill_manager,
                                   pending_suggestion=pending_suggestion,
                                   active_skill=active_skill,
-                                  query_classifier=query_classifier)
+                                  query_classifier=query_classifier,
+                                  humanize_output=_humanize_on())
             elif msg.get("type") == "confirm_skill":
                 skill_name = msg.get("name", "")
                 if skill_manager:
@@ -1295,7 +1561,8 @@ async def chat_websocket(websocket: WebSocket):
                                           selector=selector, skill_manager=skill_manager,
                                           pending_suggestion=pending_suggestion,
                                           active_skill=active_skill,
-                                          query_classifier=query_classifier)
+                                          query_classifier=query_classifier,
+                                          humanize_output=_humanize_on())
                     else:
                         await _send_json(websocket, {"type": "error", "content": f"Skill '{skill_name}' not found"})
                 pending_suggestion.clear()

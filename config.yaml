@@ -3,7 +3,42 @@ ollama:
   model: gemma4:31b-cloud
   endpoint: http://localhost:11434/v1/chat/completions
   timeout: 600  # Read timeout in seconds (large research/build prompts need longer)
+  keep_alive: -1  # Pin models in VRAM (-1 = forever, 0 = unload, 300 = 5 min). Avoids reload stalls.
 
+# Two-tier model architecture:
+#   interactive = local small model (llama3.2:3b) that talks to the user and humanizes answers
+#   worker      = capable model (gemma4:31b-cloud) that does the heavy tool/reasoning work
+# Falls back to the `ollama` block above when a tier is omitted.
+models:
+  interactive:
+    model: llama3.2:3b
+    endpoint: http://localhost:11434/v1/chat/completions
+    api_key: ""
+  worker:
+    model: gemma4:31b-cloud
+    endpoint: http://localhost:11434/v1/chat/completions
+    api_key: ""
+  tiering_enabled: false  # SINGLE-LLM mode: one cloud model handles everything (no slow local interactive tier)
+  humanize_enabled: false  # skip the redundant humanize pass (was a slow CPU-bound local call)
+
+# MAGMA multi-graph memory substrate (R2+). Additive; retrieval stays on the
+# flat graph until R3 wires it into the engine. Local embedder is a stand-in
+# for an Ollama embedding model (swap _LocalEmbedder._embed later).
+magma:
+  enabled: true
+  vector_dim: 1024
+  semantic_threshold: 0.55
+  beam_width: 20
+  token_budget: 4000
+  # Slow-path consolidation (R4): worker model infers latent causal/entity edges
+  # for un-consolidated nodes, asynchronously, off the response path.
+  consolidation_enabled: true
+  consolidation_batch: 20
+
+# DSPy (R5): compiles the interactive tier's HumanSynthesizer + IntentRouter on
+# the local 0.5b model. Master kill-switch off by default; when enabled, the
+# dspy path replaces the hand-written few-shot prompts in tiers.py and falls
+# back to them on any error. Artifacts in backend/dspy/artifacts (PII-gated).
 data:
   storage_path: data.json
   projects_dir: C:\Users\hp\Projects\madays projects
@@ -17,15 +52,22 @@ server:
 personality:
   name: "Mayday"
   user_name: ""
-  default_tone: "warm and professional"
+  default_tone: "warm, empathetic, and human — like a caring close friend"
   traits:
+    - "empathetic and emotionally intelligent"
+    - "speaks naturally, like a real person (contractions, warmth)"
     - "concise but thorough"
     - "proactive with suggestions"
     - "adapts tone based on user feedback"
   rules:
-    - "Address user by name when known"
-    - "Explain tool actions briefly"
-    - "Suggest follow-ups proactively"
+    - "Address the user by name when known"
+    - "Acknowledge personal or emotional shares with genuine warmth"
+    - "Confirm what you've learned or stored in a natural, human way"
+    - "Avoid robotic or corporate phrasing"
+    - "Explain tool actions briefly and in plain language"
+    - "Be a genuine friend, not a therapist, life-coach, or support agent"
+    - "Skip reassurance monologues; show care through small, natural words and actions"
+    - "Keep replies short and real — don't deliver caring speeches or announce your support abstractly"
 
 voice:
   enabled: true
@@ -85,3 +127,40 @@ mcp:
       command: npx
       args: ["@executeautomation/playwright-mcp-server"]
       lazy: true
+
+# DSPy research modules (Modules A + B) — flag-gated, additive, default-off.
+# Nothing uses DSPy unless enabled:true AND the relevant module flag is true.
+dspy:
+  enabled: true                 # master kill-switch
+  interactive_tier: true        # use compiled HumanSynthesizer + IntentRouter on 3B
+  research_synthesis: false     # Module A — report synthesis
+  research_agent: false         # Module B — RL multi-hop research agent
+  model: ""                     # empty = reuse ollama.model (local-first)
+  reflection_model: ""          # empty = local; set to cloud URI = opt-in delegation
+  max_hops: 12                  # Module B hop budget
+  max_iters_report_sections: 2  # Module A ChainOfThought depth for synthesis
+  artifacts_dir: dspy_artifacts  # compiled prompts/demos (gitignored; PII-gated)
+  # Module C — User Awareness + Personal Task Store (UA-1..UA-6, PTS-1)
+  ua1_extractor: false
+  ua2_confidence: false
+  ua3_ask_policy: false
+  ua4_reflector: false
+  ua5_gate: false               # GatePolicy — the starred, pilot module
+  ua6_snapshot: false
+  pts1_interpreter: false
+
+# User Awareness engine — passive + active onboarding world model.
+# Default-off until Phase 4; all phases additive and flag-gated.
+awareness:
+  enabled: true
+  max_daily_questions: 3
+  decay_lambda: 0.02            # confidence *= e^(-lambda * days_idle)
+  profile_path: user_profile.json
+  consented_tiers: ["T0"]      # T1 (relationships/health/finance) requires opt-in
+  proactive_followups: true    # auto check in on learned loved ones ("what about her?")
+  followup_cadence_days: 7      # days between gentle follow-ups about a person
+  brief_enabled: true          # build aggregated per-person briefs
+
+# Personal notes (standalone personal notes store, distinct from project/research notes).
+personal_notes:
+  storage_path: notes.json

@@ -17,6 +17,10 @@ class MessageCreate(BaseModel):
     content: str
 
 
+class ImportantUpdate(BaseModel):
+    important: bool = True
+
+
 @router.get("")
 def list_conversations(date: str = ""):
     store = get_store()
@@ -39,6 +43,15 @@ def get_conversation(conversation_id: str):
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conv
+
+
+@router.patch("/{conversation_id}/important")
+def set_important(conversation_id: str, body: ImportantUpdate):
+    store = get_store()
+    if not store.get_conversation(conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    ok = store.set_conversation_important(conversation_id, body.important)
+    return {"id": conversation_id, "important": body.important, "updated": ok}
 
 
 @router.delete("/{conversation_id}")

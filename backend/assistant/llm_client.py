@@ -80,12 +80,16 @@ def _parse_tool_call_text(text: str) -> tuple[str | None, list[dict] | None]:
 
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, model: str | None = None, endpoint: str | None = None, api_key: str | None = None):
         cfg = load_config().get("ollama", {})
-        self.api_key = cfg.get("api_key", "")
-        self.model = cfg.get("model", "gemma4:31b-cloud")
-        self.endpoint = cfg.get("endpoint", "http://localhost:11434/v1/chat/completions")
+        self.api_key = api_key if api_key is not None else cfg.get("api_key", "")
+        self.model = model if model is not None else cfg.get("model", "gemma4:31b-cloud")
+        self.endpoint = endpoint if endpoint is not None else cfg.get("endpoint", "http://localhost:11434/v1/chat/completions")
         read_timeout = float(cfg.get("timeout", 600))
+        # keep_alive: pin the model in VRAM so it is never unloaded/reloaded
+        # between calls (a major latency source when two tiers alternate).
+        # -1 = stay loaded forever, 0 = unload immediately, 300 = 5 minutes.
+        self.keep_alive = cfg.get("keep_alive", -1)
         self._http = httpx.Client(timeout=httpx.Timeout(
             connect=15.0,
             read=read_timeout,
@@ -100,7 +104,7 @@ class LLMClient:
         return headers
 
     def chat(self, messages: list[dict], stream: bool = False, tools: list[dict] | None = None,
-             tool_choice: str | None = None):
+              tool_choice: str | None = None, max_tokens: int | None = None):
         body = {
             "model": self.model,
             "messages": messages,
@@ -109,6 +113,10 @@ class LLMClient:
         }
         if tool_choice:
             body["tool_choice"] = tool_choice
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+        if self.keep_alive is not None:
+            body["keep_alive"] = self.keep_alive
         if stream:
             return self._http.stream("POST", self.endpoint, json=body, headers=self._build_headers())
         return self._http.post(self.endpoint, json=body, headers=self._build_headers())
@@ -155,6 +163,8 @@ class LLMClient:
             "tools": tools if tools is not None else get_tool_definitions(),
             "stream": True,
         }
+        if self.keep_alive is not None:
+            body["keep_alive"] = self.keep_alive
         if tool_choice:
             body["tool_choice"] = tool_choice
         with self._http.stream("POST", self.endpoint, json=body, headers=self._build_headers()) as response:
@@ -168,3 +178,34 @@ class LLMClient:
                 yield content, tool_calls, done
                 if done:
                     break
+
+
+_INTERACTIVE_CLIENT: "LLMClient | None" = None
+_WORKER_CLIENT: "LLMClient | None" = None
+
+
+def _client_for(role: str) -> "LLMClient":
+    cfg = load_config().get("models", {}).get(role, {})
+    return LLMClient(
+        model=cfg.get("model") or None,
+        endpoint=cfg.get("endpoint") or None,
+        api_key=cfg.get("api_key") or None,
+    )
+
+
+def get_interactive_client() -> "LLMClient":
+    """Local small model that talks to the user and humanizes worker answers."""
+    global _INTERACTIVE_CLIENT
+    if _INTERACTIVE_CLIENT is None:
+        _INTERACTIVE_CLIENT = _client_for("interactive")
+    return _INTERACTIVE_CLIENT
+
+
+def get_worker_client() -> "LLMClient":
+    """Capable model that performs the heavy tool/reasoning work."""
+    global _WORKER_CLIENT
+    if _WORKER_CLIENT is None:
+        _WORKER_CLIENT = _client_for("worker")
+    return _WORKER_CLIENT
+
+

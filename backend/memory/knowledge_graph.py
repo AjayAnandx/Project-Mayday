@@ -294,6 +294,8 @@ class KnowledgeGraph:
                 props = n.get("properties", {})
                 if props.get("search_result") == "true":
                     junk_ids.add(nid)
+                if n.get("type") == "belief" or str(n.get("label", "")).startswith("belief:"):
+                    junk_ids.add(nid)
                 if not include_scraped and props.get("status") == "scraped":
                     junk_ids.add(nid)
             nodes = [n for n in self._nodes.values() if n["id"] not in junk_ids]
@@ -502,6 +504,17 @@ class KnowledgeGraph:
             nid = self._prop_idx.get(key)
             if nid:
                 self.remove_node(nid)
+
+    def set_conversation_important_flag(self, conv_id: str, important: bool):
+        with self._lock:
+            key = ("conversation", "conv_id", conv_id)
+            nid = self._prop_idx.get(key)
+            if not nid or nid not in self._nodes:
+                return
+            self._unindex_node(self._nodes[nid])
+            self._nodes[nid]["properties"]["important"] = important
+            self._index_node(self._nodes[nid])
+            self._save()
 
     def sync_document(self, doc: dict, _text: str | None = None, _previous_names: list[str] | None = None):
         with self._lock:

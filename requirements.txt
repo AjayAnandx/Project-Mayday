@@ -16,3 +16,7 @@ markdown>=3.6
 # silero-vad>=4.0.0
 # TTS>=0.22.0
 # torch>=2.1.0
+
+# DSPy research modules (Plan 1: Modules A + B) — flag-gated, optional
+# Pin major version: 3.x API used (dspy.LM / BootstrapFewShot / Predict.save/load)
+dspy-ai>=3.0.0

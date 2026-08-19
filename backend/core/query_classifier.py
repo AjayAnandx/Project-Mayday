@@ -91,8 +91,8 @@ class QueryClassifier:
               r"\bcan\s+you\s+(help|tell|explain|show)\b"]),
 
             ("greeting", False, "none",
-             ["BASE"],
-             [],
+              ["BASE", "PERSONALITY"],
+              [],
              [r"^(hi|hello|hey|yo|sup|howdy|good\s+(morning|afternoon|evening))[\s!.]*$",
               r"^(thanks|thank\s+you|ty|thx)[\s!.]*$",
               r"^(bye|goodbye|cya|see\s+ya)[\s!.]*$",

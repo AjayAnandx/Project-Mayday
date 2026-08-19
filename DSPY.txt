@@ -147,3 +147,165 @@ What is deliberately NOT touched
 - research_store.py schema/API, report_generator.py template + chart logic, function_registry.py dispatch/repair, chat.py engine loop, config.yaml existing keys, hardcoded RESEARCH_TYPE_TASKS (task planner is a later optional phase), tool schemas.
 - DSPy never touches conversation/chat prompts — scoped to research report + research-agent boundaries only.
 Open question before execution: for Module B's research_agent, do you want it exposed as an LLM tool (Mode A — engine stays pristine, agent runs internally) or do you prefer it wired into the existing chat tool loop per-hop? I recommend Mode A.
+
+
+
+
+Full Plan: Mayday User Awareness + Personal Task Store + DSPy Module C
+0. Vision
+Mayday starts knowing nothing about the user. Over time it builds a living world model — favorites, belongings, friends, problems, goals — through passive observation + a few daily questions. It manages all personal tasks (todos, calendar, reminders, notes) through one unified layer, and every task action passes through an awareness decision gate: Mayday only assumes, creates, reminds, and suggests according to what it actually understands — asking when uncertain, warning on contradictions, blocking when trust is insufficient. DSPy compiles each learned behavior (extraction, scoring, asking, reflecting, gating, snapshot selection) from Mayday's own usage history, so the system improves from usage data instead of hand-edited prompts.
+1. Locked decisions
+Decision	Choice
+Learning mode	Passive + active onboarding (2-3 targeted questions/day)
+Gate strictness	Ask / warn / block
+Awareness storage	Dual store: user_profile.json + synced belief nodes in memory_graph.json
+DSPy posture	Flag-gated default-off, local-first LM policy, deterministic metrics only, typed signatures
+Privacy	All local; T1 (sensitive) never leaves machine, T2 de-identified only; consent tiers T0-T2 per belief
+2. Architecture
+OBSERVATIONS                        BELIEFS                             ACTIONS
+────────────────                    ─────────────────                   ──────────────────
+conversations/  ─┐                                        todos, events, notes,
+operations/     ─┤ → Observer → Comprehension → Awareness  reminders, projects,
+todos/events    ─┘   (DSPy UA-1)  (DSPy UA-2)    Store      research
+daily activity  ────────────────────────────┐   user_profile.json + graph   │
+                                            │          │   │               ▼
+                            Reflection (DSPy UA-4)      ▼   ▼        DECISION GATE
+                            Forgetting (decay)   World Snapshot ──►  (DSPy UA-5)
+                            Validation (DSPy UA-3)  (DSPy UA-6)     allow|ask|warn|block
+                                                                          │
+                                                       PTS facade ────────┘
+                                                       todos+events+notes+reminders
+                                                       (DSPy PTS-1 task interpreter)
+        OFFLINE: bootstrap → evaluate → compile (overnight job, local LM)
+        user accept/reject + confirm/correct become next training labels
+3. Part A — User Awareness Engine
+A1. Awareness Store — backend/core/user_awareness.py
+Ontology slots (each slot = set of beliefs):
+identity     name, role, work/study, routine, timezone/location
+relations    people: type (family/friend/colleague), closeness, contact freq, linked events
+favorites    foods, music, movies, sports, places, brands (per domain)
+belongings   pets, vehicles, devices, assets (+ care needs)
+goals        short-term (exams, deadlines) + long-term (career, health)
+problems     stress, health issues, financial constraints, worries
+context      phase of life, schedule pattern (class days, commute)
+state        transient mood/availability (fast decay)
+Belief record: {id, slot, value, confidence, provenance, consent_tier, last_verified, observed_count, created_at, source_refs[]}
+Dual-store sync: write user_profile.json (gate queries, O(1) slot lookups) → mirror as graph nodes belief:{slot}:{value} linked to user:Mayday-user, person nodes for relations (reuse add_edge_if_missing, tombstones, label normalization). Brain tab visualizes the user's world.
+REST: GET/PUT /api/awareness, GET /api/awareness/snapshot, POST /api/awareness/import (batch from old conversations).
+A2. Learning loop
+1. Observer — hooks: conversation save, todo/event CRUD, op-log record, reminder fire. Raw text → candidate beliefs.
+2. Comprehension + confidence — classify into slot; score by provenance: explicit = 0.9, repeated 3× = 0.75, single inference = 0.55, stereotype = 0.3. (Heuristic baseline; DSPy UA-2 replaces it once compiled.)
+3. Validation — low-confidence belief + action depends on it → ask_user tool, max 2-3/day (onboarding queue); explicit answer → 0.95.
+4. Reflection (weekly, Scheduler job) — consolidate duplicates, resolve contradictions (newer wins + provenance record), derive higher-order traits, monthly "world snapshot" summary.
+5. Forgetting — confidence *= e^(-λt) on unused beliefs; < 0.3 → "unverified"; contradictions supersede; "don't mention X" → tombstone (reuse tombstone system).
+6. Privacy — consent tier per belief; T1 = health/finances/relationships (never leaves machine); T0 = harmless facts.
+A3. Decision gate — can_do(action, text, entities, context)
+→ unknown entity in text (no belief)      → ask      + targeted question
+→ contradicts known belief                → warn     + explanation
+→ known, high confidence, safe            → allow    + enrich (link entities, attach reminder ideas)
+→ sensitive slot + tier < required        → block    + reason (never overridden by DSPy)
+Wraps: create_todo, create_event, create_reminder, create_personal_note, add_project_task (task text), create_research. Verdict returned to LLM tool layer + surfaced in frontend (yellow banner / modal, reuse ReminderDialog/Toast patterns).
+World Snapshot injection — each engine turn injects compressed top-N beliefs (by confidence × recency × relevance) instead of raw memories; keeps context small.
+4. Part B — Personal Task Store (PTS)
+- New personal notes store — notes.json (standalone personal notes don't exist today; only project/research notes) + 3 tools: create_personal_note, list_personal_notes, search_personal_notes + REST endpoints.
+- Unified facade — {id, kind: todo|event|note|reminder, text, time, entities[], source}; one query answers "what's on my plate" across all four stores.
+- Entity linking — task entities auto-linked to beliefs (dad → person node, dog → belonging): enables contextual reminders ("call dad on his birthday" works because gate knows the birthday) and gate enrichment.
+- Proactivity (Projection) — from snapshot + tasks, Mayday surfaces suggestions (renewal reminders, "exam in 3 days — study plan?"), each suggestion logged → becomes DSPy training signal.
+5. Part C — DSPy Module C (the compiled brain)
+C0. Shared infra (reuse from plan.md:5680 DSPy plan)
+backend/dspy/: bridge.py (Ollama OpenAI-compatible bridge, local-first), metrics.py (deterministic metrics only), compiler.py (BootstrapFewShot → MIPROv2 → GEPA ladder), evaluate.py (A/B vs heuristic baseline), artifacts/ (compiled programs + eval reports). Config: dspy: section, modules.enabled: [], all default-off.
+C1. Module table — 7 insertion points
+ID	Replaces	Signature	Optimizer	Metric (deterministic)
+UA-1	prose memory instructions	BeliefExtractor(text, slot_hint?) → beliefs[Belief]	BootstrapFewShot	exact slot/value match vs validated store; malformed-field rate
+UA-2	hardcoded 0.9/0.75/0.55/0.3	ConfidenceAssessor(belief, evidence) → score	BootstrapFewShotWithRandomSearch	correlation with later user confirm/correct
+UA-3	hand-written "ask 2-3/day" rule	AskPolicy(context, beliefs, action) → {ask, question}	BootstrapFewShot	info gained per interruption (confirm/correct rate); question-rejection rate
+UA-4	hand-written consolidation	Reflector(month_beliefs) → {consolidated, contradictions, derived_traits}	MIPROv2	duplicate/contradiction count after; trait acceptance (no user override in next 7d)
+UA-5 ⭐	hand-coded verdict heuristics	GatePolicy(action, text, entities, beliefs) → {verdict, reason, suggestion}	MIPROv2 → GEPA	user override rate per verdict class; false-block rate; allow-safety (no block of genuine constraint)
+UA-6	naive top-N snapshot	SnapshotSelector(context, beliefs) → top_k	BootstrapFewShotWithRandomSearch	next-turn usefulness (offline LM judge on dev set only)
+PTS-1	prompt-prose parsing	TaskInterpreter(text) → {kind, time, entities[]}	BootstrapFewShot	parse exact-match vs stored todo/event; entity-link hit rate
+C2. Self-improving loop
+user accepts/overrides a gate verdict, confirms/corrects a belief
+        └──► labeled example appended to dev/train set
+        └──► overnight compile job (local LM, T1-safe)
+        └──► eval vs heuristic baseline; ship artifact only if metric improves
+C3. What stays deterministic (never DSPy)
+- user_profile.json + graph storage, decay math, tombstone rules
+- Hard blocks (consent-tier violations) — DSPy feeds the gate, never overrides safety
+- Observation hooks, scheduler, persistence
+C4. Privacy posture
+- Compile + eval run against local Ollama model only (beliefs are T1/T2); cloud model (gemma4:31b-cloud) inference allowed for T0 beliefs only
+- Compile jobs: no conversation text leaves conversations/; eval reports store metrics only
+6. Research papers (reading order, mapped)
+Paper	Maps to
+Generative Agents (Park 2023)	reflection + retrieval design (UA-4, UA-6)
+MemGPT (Packer 2023)	belief store vs context split
+MemoryBank (Zhang 2023)	forgetting curve
+Survey: Memory in LLM Agents (2024)	taxonomy, gap check
+Mem0 (2025)	production ADD/UPDATE/DELETE ops
+Endsley SA (1995)	perception/comprehension/projection framing
+Rich (1979) stereotypes	cold-start 0.3 beliefs
+Kobsa UMS survey	belief maintenance, assumptions vs facts
+Thrun & Mitchell (1995) lifelong learning	learn-without-forgetting tension
+NELL (Mitchell 2018)	perpetual extraction + confidence
+ToM in LLMs (Kosinski 2023 + Ullman critique)	relations/problems understanding
+7. Config additions (config.yaml)
+awareness:
+  enabled: false
+  max_daily_questions: 3
+  decay_lambda: 0.02
+  reflection_day: "mon"
+dspy:
+  enabled: false
+  task_model: ""              # empty → ollama.model
+  reflection_model: ""        # local model recommended
+  modules: []                 # e.g. ["ua5_gate", "ua1_extractor"]
+personal_notes:
+  storage_path: notes.json
+8. Files
+New: backend/core/user_awareness.py (store+gate), backend/core/personal_notes.py, backend/core/awareness_observer.py, backend/dspy/module_c/*.py (7 modules), backend/api/awareness.py, backend/api/notes.py, tests (test_user_awareness.py, test_decision_gate.py, test_personal_notes.py, test_dspy_ua_modules.py), frontend AwarenessPanel.tsx (optional: belief browser in Brain tab).
+Modified: chat.py (snapshot injection, gate wrap in engine, ask_user tool, DSPy module dispatch), function_registry.py (+8 tools: ask_user, list_beliefs, update_belief, create/list/search_personal_note, run_reflection, awareness_summary), data_store.py/api/todos.py/events.py (gate hook), main.py (reflection job), knowledge_graph.py (belief node type), scheduler.py (daily onboarding queue + weekly reflection), config.py, requirements.txt (dspy-ai), plan.md.
+9. Phases & rollout
+Phase	Content	DSPy
+0	Awareness store + ontology + REST + graph sync + belief CRUD tests	—
+1	Observer hooks + comprehension (heuristic confidence) + ask_user/list_beliefs/update_belief + snapshot injection	—
+2	Reflection job + forgetting + tombstones	—
+3	PTS: notes store + 3 tools + facade + entity linking	—
+4	Decision gate wrap on todo/event/note/reminder/task tools + ask/warn/block frontend UX	UA-5 gate pilot (train on op-log, A/B vs heuristics, flag-gated)
+5	Onboarding interview mode + consent tiers + docs	—
+6	DSPy Module C expansion: UA-1/2/3/4/6 + PTS-1 compiled, overnight compile job	all modules, local LM
+7	Self-improving loop hardening + eval dashboards	continuous
+
+10. Testing (continued)
+- Gate regression table — curated scenario matrix (30+ cases): unknown entity, contradiction, sensitive slot, low confidence, follow-up edit → expected verdict; gate must never silently flip on recompile
+- DSPy eval — held-out months (e.g., train Jan-Jun, eval Jul): metric table per module vs heuristic baseline; artifact ships only if strictly better; dspy.Evaluate reports with sample failure cases
+- Onboarding QA — question quality: no duplicate questions, ≤3/day, correct slot after answer (confidence 0.95), question bank exhaustion → fall back to passive
+- PTS integration — unified query returns merged todo/event/note/reminder; entity links resolve through gate enrichment; reminder with linked entity fires with contextual text
+- Privacy tests — T1 beliefs excluded from any cloud-model path; snapshot injection strips T1 when task model is cloud; compile logs contain no conversation text
+- Manual — Brain tab belief visualization, frontend ask/warn/block UI, weekly reflection output, "call dad on his birthday" end-to-end, DSPy flag on/off parity
+11. Risks & mitigations
+Risk	Mitigation
+Wrong beliefs persist / confidence inflates	Decay + contradiction supersede + explicit confirm path; DSPy UA-2 learned scorer over hardcoded values
+Gate blocks too much (annoyance)	Ask/warn default; block reserved for consent violations; override rate is the compile metric
+Gate too permissive (wrong assumptions)	Unknown-entity → ask; every allow is logged; weekly review of allow-with-low-confidence
+DSPy compile cost / flaky metrics	Deterministic labels only (user confirm/correct/override); small typed modules; local LM; artifacts gated by eval
+Context bloat from snapshot	UA-6 selects top-k (token budget constant); injection section capped (e.g. 1.5k chars)
+Privacy leak via cloud model	T1 never in cloud path; task model check at injection; consent tiers enforced in observer
+Over-interviewing user	Max 3/day, question bank dedup, streak guard, "later" snooze
+Existing 212-test suite regression	Gate wraps tools behind flag awareness.enabled; default-off until Phase 4; all phases additive
+12. Estimate
+Phase
+0: Store + ontology + REST + graph sync
+1: Observer + comprehension + memory tools + snapshot
+2: Reflection + forgetting
+3: PTS (notes + facade + linking)
+4: Decision gate + UX + UA-5 pilot
+5: Onboarding + consent + docs
+6: DSPy Module C full compile (UA-1/2/3/4/6, PTS-1)
+7: Self-improving loop hardening
+Total
+13. Open items before implementation
+1. DSPy version pin — dspy-ai 2.5.x vs 3.x (API differs; verify Ollama OpenAI-compatible bridge works with the pinned version on this machine first — Spike: 1-2 hrs, Phase 0)
+2. Question bank — initial 40-60 onboarding questions curated across slots (Phase 5 deliverable; heuristics ship with 15 basics in Phase 1)
+3. Snapshot cap — exact char budget for World Snapshot (default proposal: 1.5k chars, UA-6 tunes it)
+4. Frontend surface — AwarenessPanel inside Brain tab (belief browser + confidence slider + "correct this" affordance) vs minimal chat-only correction (recommend chat-only for Phase 4, panel in Phase 7)
+5. Where to write this plan — plan.md as "Mayday User Awareness + Personal Task Store + DSPy Module C — Implementation Plan" (single section, cross-referenced from the DSPy section at plan.md:5680 and the Telegram plan)

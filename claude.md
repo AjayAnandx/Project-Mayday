@@ -39,7 +39,7 @@ See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (
 - Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
 - **Dashboard** is the default landing page (stats summary, upcoming events, recent activity, weather widget, AI news feed)
 - Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
-- 60+ built-in function tools: 8 project/task + 5 todo/event CRUD + 2 event query + 5 memory + 2 conversation + 3 screenshot + 3 notifications/reminder + 3 misc (set_status, suggest_skill, capture_page_screenshot) + 11 system/file + query_operations + unified_search + get_weather + 11 sandbox + 5 scaffold/component + 3 visual testing + 8 browser/playwright
+- 60+ built-in function tools: 8 project/task + 5 todo/event CRUD + 2 event query + 5 memory + 2 conversation + 3 screenshot + 3 notifications/reminder + 3 misc (set_status, suggest_skill, capture_page_screenshot) + 11 system/file + query_operations + unified_search + get_weather + 11 sandbox + 5 scaffold/component + 3 visual testing + 8 browser/playwright + 8 data analysis pipeline (import_data, import_data_to_store, list_imported_files, web_search_and_fetch, extract_data_from_sources, batch_add_data_points, export_research_dataset, list_research_outputs)
 - MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`), Selenium browser (`mcp-server-selenium`), opencode wrapper (`mcp_server_opencode` — bash, write, read, edit, glob, grep, stop), UI design (`@ui-layouts/mcp`, `@magicuidesign/mcp`), Playwright browser (`@executeautomation/playwright-mcp-server`)
 - Tool selection: Inverted group index (TF-IDF weighted, BM25 saturation, group-penalty) — replaces 4 hand-written keyword regexes; **92.2% precision, 90.8% recall**, <<0.01ms per query
 - `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
@@ -79,6 +79,7 @@ mayday/
 │   │   ├── conversations.py          # Conversation routes
 │   │   ├── search.py                 # Unified search across all stores
 │   │   ├── dashboard.py              # Dashboard aggregation, weather, AI news
+│   │   ├── data_import.py            # Excel/CSV upload, parse, import-to-store routes
 │   │   └── chat.py                   # WebSocket endpoint (streaming)
 │   ├── core/
 │   │   ├── data_store.py             # JSON persistence (thread-safe)
@@ -93,6 +94,8 @@ mayday/
 │   │   ├── evolution.py              # Post-build iteration analysis (ops log + graph)
 │   │   ├── query_classifier.py       # Regex intent classifier for query routing
 │   │   ├── local_playwright.py       # Direct Playwright wrapper (navigate, screenshot, interact)
+│   │   ├── extraction_pipeline.py    # Web search → extract → structure → store pipeline
+│   │   └── project_index.py          # Folder-level search index over project files
 │   ├── memory/
 │   │   ├── __init__.py
 │   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
@@ -115,7 +118,10 @@ mayday/
 │   │   ├── browser_functions.py      # Selenium/Playwright browser tools for LLM
 │   │   ├── scaffold_functions.py     # UI scaffold + component store tools
 │   │   ├── visual_testing.py         # Visual diff + element check tools
-│   │   └── research_functions.py     # Research CRUD + notes + search + promote LLM tools
+│   │   ├── research_functions.py     # Research CRUD + notes + search + promote LLM tools
+│   │   ├── data_import.py            # Excel/CSV parse → structured data → data_points LLM tools
+│   │   ├── data_export.py            # export_research_dataset → CSV in uploads/
+│   │   └── web_research.py           # web_search_and_fetch / extract_data_from_sources tools
 │   ├── core/
 │   │   ├── research_store.py         # ResearchStore (config-path JSON store, topic notes/promote/graph sync)
 │   │   ├── research_index.py         # Folder-level NgramIndex/SearchRanker over topics + notes + artifacts
@@ -173,6 +179,9 @@ mayday/
 │   │   ├── RecentActivity.tsx   # Last 10 operation log entries
 │   │   ├── WeatherWidget.tsx    # Chennai weather from wttr.in
 │   │   └── AINewsWidget.tsx     # Exa API AI news feed
+│   ├── data/
+│       │   ├── AnalysisPanel.tsx    # Data workspace (Import / Web Research / Data Points / Charts)
+│       │   └── DataImportPanel.tsx  # Excel/CSV drag-drop upload + preview
 │   ├── search/
 │       │   └── SearchOverlay.tsx    # Ctrl+K search modal with categorized results
 │       ├── hooks/
@@ -184,6 +193,7 @@ mayday/
 │   │   ├── useSearch.ts         # Debounced unified search hook
 │   │   ├── useVoice.ts          # Browser SpeechRecognition + SpeechSynthesis hook
 │   │   ├── useBackendVoice.ts   # Voice mode hook (SpeechRecognition STT + Deepgram/SpeechSynthesis TTS)
+│   │   ├── useDataAnalysis.ts   # Data import / web research / data points / charts hook
 │       │   └── use-auto-resize-textarea.ts
 │       ├── services/
 │       │   ├── api.ts               # Typed REST client
@@ -195,8 +205,10 @@ mayday/
 │           ├── event.ts
 │           ├── conversation.ts
 │           ├── chat.ts
-│           └── search.ts
-│           └── dashboard.ts
+│           ├── search.ts
+│           ├── dashboard.ts
+│           ├── data-import.ts
+│           └── project.ts
 │
 ├── electron/                         # Electron main process
 │   ├── main.ts                      # BrowserWindow + spawn uvicorn
@@ -209,11 +221,12 @@ mayday/
 ├── screenshots/                     # Screenshot images + index.json
 ├── operations/                      # Per-month operation log files
 │   └── YYYY-MM.json                 # All operations from that month
+├── uploads/                         # Imported Excel/CSV files + exported datasets (gitignored)
 ├── docker/
 │   └── Dockerfile                   # Playwright sandbox container for project builds
 ├── docs/
 │   └── adr.md                       # Architecture Decision Record (15 decisions)
-├── plan.md                          # MCP integration plan
+├── plan.md                          # Implementation plans (MCP, tool latency, data pipeline, DSPy)
 ├── opencode.json                    # opencode permission config
 ├── main.py                          # Original PyQt6 entry (kept as reference)
 ├── ui/                              # Original PyQt6 widgets (kept as reference)
@@ -225,9 +238,9 @@ mayday/
 └── CLAUDE.md                        # This file
 ```
 
-## API Endpoints (32 total)
+## API Endpoints (37 total)
 
-### REST (32 total)
+### REST (37 total)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Health check |
@@ -270,6 +283,11 @@ mayday/
 | `POST` | `/api/research/:topic/notes` | Add note to research record |
 | `GET` | `/api/research/:topic/notes` | List notes |
 | `POST` | `/api/research/promote` | Promote research → project (moves topic/file to project dir, archives record) |
+| `POST` | `/api/data/import` | Upload Excel/CSV file → `file_id` |
+| `POST` | `/api/data/parse` | Parse uploaded file → columns/rows/dtypes preview |
+| `POST` | `/api/data/import-to-store` | Import parsed data → research or project data_points |
+| `GET` | `/api/data/files` | List uploaded files |
+| `GET` | `/uploads/{file_id}` | Serve imported/exported dataset files |
 
 ### WebSocket
 | Path | Description |
@@ -429,6 +447,11 @@ yellow:  '#eab308'
 - [x] **Dev Monitor (Jul 18)**: `backend/core/dev_monitor.py` periodically HTTP-pings dev server URLs and auto-restarts them (via ProjectRunner) up to 3 times on failure, tracking restart count and last command.
 - [x] **Local Playwright (Jul 18)**: `backend/core/local_playwright.py` provides a direct Playwright wrapper (sync API) for browser automation — navigate, screenshot, click, fill, get_text, get_html, evaluate. Exposed as LLM tools via `backend/assistant/playwright_runner.py` and `backend/assistant/playwright_tools.py`. See `backend/core/local_playwright.py`.
 - [x] **Playwright MCP (Jul 18)**: Added `@executeautomation/playwright-mcp-server` to `config.yaml` (lazy) for optional Playwright-based browser testing alongside Selenium.
+- [x] **Universal Data Analysis Pipeline (Aug 14)**: 8 new LLM tools (`import_data`, `import_data_to_store`, `list_imported_files`, `web_search_and_fetch`, `extract_data_from_sources`, `batch_add_data_points`, `export_research_dataset`, `list_research_outputs`) + `DATA_ANALYSIS_PROTOCOL` 4-step flow in `chat.py` (SEARCH → EXTRACT → STORE → CHART + STEP 3.5 CSV export to `uploads/`). Excel/CSV upload via pandas/openpyxl (`uploads/` static mount at `/uploads/{file_id}`). `suggest_chart_type()` auto-selects line/bar/pie. WebSocket `artifact_url` + auto-open-in-new-tab for charts. New "Data" nav tab: `AnalysisPanel` (Import / Web Research / Data Points / Charts) + `DataImportPanel` + `useDataAnalysis` hook. See `plan.md:5431`.
+- [x] **Project data_points + search index (Aug 14)**: Project schema gained `data_points` + 3 tools (`add_project_data_point`, `list_project_data_points`, `generate_project_chart`) + REST endpoints in `backend/api/projects.py`. New `backend/core/project_index.py` — folder-level NgramIndex/SearchRanker over all project files (filename + text content, lazy refresh ≤15s, skips node_modules/.git/build dirs) with `test_project_index.py`.
+- [x] **Data pipeline hardening (Aug 14)**: Fixed `extract_data_from_sources` unhashable dict column schema + `generate_chart` float `.replace()` crash. `_normalize_columns`/`_column_type_hint`/`_fmt_scalar` in `extraction_pipeline.py`; robust `_extract_numeric` + str-coercion in `report_generator.py`; `add_data_point` value coercion at store boundary (`research_store.py`/`project_store.py`). 13 regression tests in `test_data_pipeline.py`; full suite 212 passing.
+- [x] **Duplicate guard tests (Aug 14)**: `test_dup_guard.py` — 3× identical tool-call loop detection in the iterative chat loop.
+- [x] **DSPy research (Aug 13-14, PLANNED — no code)**: Risk analysis + surgical insertion strategy (6 insertion points, T1/T2 privacy tiers, flag-gated default-off, local-first LM policy) + full Module A (Report Synthesis) / Module B (RL Multi-Hop Research Agent) implementation plan. See `plan.md:5680` + `DSPY.txt`.
 
 ## How to Run
 
@@ -499,7 +522,7 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `frontend/src/services/api.ts`: Typed REST client
 - `backend/api/chat.py`: WebSocket endpoint with LLM streaming + tool dispatch
 - `backend/assistant/llm_client.py`: Ollama HTTP client
-- `backend/assistant/function_registry.py`: 43 tool definitions + dispatch (9 todo/event + 5 memory + 3 screenshot + 4 conversation/operations + 3 reminders + `suggest_skill` + `capture_page_screenshot` + 11 system/file + 8 project/task). `dispatch_call` auto-repairs sloppy LLM args: `_PARAM_ALIASES`, `_TOOL_DEFAULTS`, unknown-kwarg stripping, actionable errors listing expected params
+- `backend/assistant/function_registry.py`: 50+ tool definitions + dispatch (9 todo/event + 5 memory + 3 screenshot + 4 conversation/operations + 3 reminders + `suggest_skill` + `capture_page_screenshot` + 11 system/file + 8 project/task + 8 data analysis pipeline). `dispatch_call` auto-repairs sloppy LLM args: `_PARAM_ALIASES`, `_TOOL_DEFAULTS`, unknown-kwarg stripping, actionable errors listing expected params
 - `backend/assistant/exa_tools.py`: Static tool definitions for 3 Exa search/fetch tools
 - `config.yaml`: Shared config (Ollama, voice, server)
 - `plan.md`: MCP integration architecture and implementation plan
@@ -562,3 +585,16 @@ Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
 - `backend/api/research.py`: REST endpoints for research records + notes + promote
 - `backend/test_research_store.py`: 10 tests — mocked store/config/op-log, zero repo pollution
 - `backend/test_dispatch_repair.py`: 13 tests — tool-call argument repair (aliases, defaults, unknown-kwarg stripping, actionable errors) via `dispatch_call`
+- `backend/functions/data_import.py`: Excel/CSV parse → structured data → `data_points` LLM tools (import_data, import_data_to_store, list_imported_files, save_uploaded_file)
+- `backend/functions/data_export.py`: `export_research_dataset` → CSV in `uploads/` (+ list_research_outputs)
+- `backend/functions/web_research.py`: `web_search_and_fetch` / `extract_data_from_sources` LLM tools (Exa search + LLM extraction)
+- `backend/core/extraction_pipeline.py`: Web search → extract → structure → store pipeline (schema/column normalization, column type hints)
+- `backend/core/project_index.py`: Folder-level NgramIndex/SearchRanker over all project files (lazy refresh ≤15s, skips heavy dirs)
+- `backend/api/data_import.py`: REST endpoints for Excel/CSV upload, parse, import-to-store, file listing
+- `backend/test_data_pipeline.py`: 13 regression tests — schema normalization, chart numeric robustness, batch value coercion
+- `backend/test_data_export.py` / `backend/test_dup_guard.py` / `backend/test_project_index.py`: dataset export, 3× identical tool-call loop guard, project folder search
+- `frontend/src/components/data/AnalysisPanel.tsx`: Data workspace (Import / Web Research / Data Points / Charts tabs)
+- `frontend/src/components/data/DataImportPanel.tsx`: Excel/CSV drag-drop upload + preview + import-to-store
+- `frontend/src/hooks/useDataAnalysis.ts`: Data analysis state management hook
+- `frontend/src/types/data-import.ts` / `frontend/src/types/project.ts`: Data import + project data_point types
+- `DSPY.txt`: Detailed DSPy Module A (Report Synthesis) / Module B (RL Multi-Hop Research Agent) implementation plan — PLANNED, no code yet
