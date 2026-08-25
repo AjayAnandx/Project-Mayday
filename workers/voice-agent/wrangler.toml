@@ -1,0 +1,39 @@
+# Your Cloudflare account (from `wrangler whoami` / dashboard sidebar)
+account_id = "ae0ad8deb228f3f0800868644131c0ed"
+# Deploy to the default *.workers.dev subdomain — no custom zone required.
+workers_dev = true
+name = "mayday-voice-agent"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+# Keep the Worker on the Workers AI + Durable Objects runtime
+compatibility_flags = ["nodejs_compat"]
+
+# Workers AI binding — powers STT (WorkersAIFluxSTT) and TTS (WorkersAITTS).
+# No Deepgram account/key required; Deepgram models run under this binding.
+[ai]
+binding = "AI"
+
+# The voice agent is a Durable Object so conversations persist across reconnects.
+[[durable_objects.bindings]]
+name = "MyAgent"
+class_name = "MyAgent"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MyAgent"]
+
+# Stable public backend via Tailscale Funnel (proxies to localhost:8772).
+[vars]
+MAYDAY_TURN_URL = "https://ajay.tail237e96.ts.net/api/voice/turn"
+MAYDAY_SYNC_URL  = "https://ajay.tail237e96.ts.net/api/voice/sync"
+
+# The shared secret is stored as a SECRET (never committed to the repo):
+#   wrangler secret put MAYDAY_TOKEN
+# It must match `voice.cloudflare_token` in Mayday's config.yaml.
+
+
+
+
+
+
+

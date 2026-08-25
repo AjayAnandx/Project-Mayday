@@ -1,7 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, Mic, Radio, AlertCircle } from 'lucide-react'
-import { useChatContext } from '../../context/ChatContext'
-import { useBackendVoice } from '../../hooks/useBackendVoice'
+import { useVoiceAgent } from '../../hooks/useVoiceAgent'
 import { VoiceIndicator } from './VoiceIndicator'
 import { VoiceTranscript } from './VoiceTranscript'
 import { MessageBubble } from '../chat/MessageBubble'
@@ -10,199 +9,182 @@ interface VoiceModeProps {
   onExit: () => void
 }
 
-const speechSupported = (): boolean =>
-  !!(navigator.mediaDevices?.getUserMedia)
-
-function getEngineLabel(): string {
-  return 'Deepgram'
-}
+const speechSupported = (): boolean => !!navigator.mediaDevices?.getUserMedia
 
 export function VoiceMode({ onExit }: VoiceModeProps) {
-  const { messages, streaming, sendMessage, connected } = useChatContext()
-  const voice = useBackendVoice({ sendMessage })
+  const voice = useVoiceAgent()
   const bottomRef = useRef<HTMLDivElement>(null)
-  const prevAssistantId = useRef('')
-  const prevAssistantLen = useRef(0)
-  const prevStreaming = useRef(false)
-  const feedTokensRef = useRef(voice.feedTokens)
-  const flushTtsRef = useRef(voice.flushTts)
-  feedTokensRef.current = voice.feedTokens
-  flushTtsRef.current = voice.flushTts
-  const startVoiceRef = useRef(voice.start)
-  const stopVoiceRef = useRef(voice.stop)
-  startVoiceRef.current = voice.start
-  stopVoiceRef.current = voice.stop
+  const startRef = useRef(voice.start)
+  const stopRef = useRef(voice.stop)
+  startRef.current = voice.start
+  stopRef.current = voice.stop
 
-  // Pipe streaming assistant tokens to TTS progressively
+  const [userInteracted, setUserInteracted] = useState(false)
+  const wantListening = useRef(false)
+  const beginListening = () => {
+    wantListening.current = true
+    startRef.current()
+  }
+
+  const recent = voice.transcript.slice(-4)
+
+  // Browsers (Chrome esp.) block AudioContext / mic capture unless a user
+  // gesture has occurred. Capture the first interaction anywhere so we can
+  // start the call from within a gesture context.
   useEffect(() => {
-    const last = messages[messages.length - 1]
-
-    if (last?.role === 'user') {
-      prevAssistantId.current = ''
-      prevAssistantLen.current = 0
-    } else if (last?.role === 'assistant') {
-      if (last.id !== prevAssistantId.current) {
-        prevAssistantId.current = last.id
-        prevAssistantLen.current = 0
-        // If the message has a dedicated voice summary, use it directly
-        if (last.voice_content) {
-          feedTokensRef.current(last.voice_content)
-          prevAssistantLen.current = -1
-        }
-      }
-      // Fall back to content-diff if no voice_content
-      if (!last.voice_content && prevAssistantLen.current >= 0) {
-        const prevLen = prevAssistantLen.current
-        const currLen = last.content.length
-        if (currLen > prevLen) {
-          feedTokensRef.current(last.content.slice(prevLen))
-          prevAssistantLen.current = currLen
-        }
-      }
+    const onGesture = () => {
+      setUserInteracted(true)
+      wantListening.current = true
     }
-
-    if (prevStreaming.current && !streaming) {
-      flushTtsRef.current()
+    window.addEventListener('pointerdown', onGesture)
+    window.addEventListener('keydown', onGesture)
+    return () => {
+      window.removeEventListener('pointerdown', onGesture)
+      window.removeEventListener('keydown', onGesture)
     }
-    prevStreaming.current = streaming
-  }, [messages, streaming])
+  }, [])
 
-  // Auto-scroll to latest message
+  // Auto-start the call once connected AND the user has interacted. Re-runs on
+  // reconnect (voice.connected flips) so the call is re-established.
+  useEffect(() => {
+    if (speechSupported() && voice.connected && userInteracted && wantListening.current) {
+      startRef.current()
+    }
+  }, [voice.connected, userInteracted])
+
+  // Only stop the call on real unmount.
+  useEffect(() => {
+    return () => {
+      stopRef.current()
+      wantListening.current = false
+    }
+  }, [])
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
-  // Start voice on mount — hook handles mic access internally
-  useEffect(() => {
-    if (connected && voice.state === 'idle') {
-      startVoiceRef.current()
-    }
-    return () => stopVoiceRef.current()
-  }, [connected])
-
-  const recentMessages = messages.slice(-4)
-  const engine = getEngineLabel()
+  }, [voice.transcript])
 
   if (!speechSupported()) {
     return (
-      <div className="flex flex-col h-full bg-crust items-center justify-center gap-4 px-6">
-        <p className="text-overlay0 text-sm text-center">
-          Voice mode requires Chrome, Edge, or Firefox.<br />
-          Your browser doesn't support microphone access.
-        </p>
-        <button onClick={onExit} className="text-green text-sm underline">Go back</button>
-      </div>
-    )
-  }
-
-  if (!voice.isSupported) {
-    return (
-      <div className="flex flex-col h-full bg-crust items-center justify-center gap-4 px-6">
-        <AlertCircle className="w-8 h-8 text-overlay0" />
-        <p className="text-overlay0 text-sm text-center">
-          Voice mode requires microphone + audio context support.<br />
-          Please use Chrome, Edge, or a modern browser.
-        </p>
-        <button onClick={onExit} className="text-green text-sm underline">Go back</button>
-      </div>
-    )
-  }
-
-  if (!connected) {
-    return (
-      <div className="flex flex-col h-full bg-crust items-center justify-center gap-4 px-6">
-        <div className="w-3 h-3 rounded-full bg-yellow animate-pulse" />
-        <p className="text-overlay0 text-sm">Connecting to Mayday...</p>
-      </div>
-    )
-  }
-
-  if (voice.micPermission === 'unknown') {
-    return (
-      <div className="flex flex-col h-full bg-crust items-center justify-center gap-4 px-6">
-        <div className="w-3 h-3 rounded-full bg-green animate-pulse" />
-        <p className="text-overlay0 text-sm">Requesting microphone access...</p>
+      <div className="flex flex-col h-full bg-crust">
+        <Header onExit={onExit} />
+        <div className="flex-1 flex items-center justify-center px-6">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <AlertCircle className="w-10 h-10 text-red" />
+            <p className="text-overlay1 text-sm max-w-md">
+              Voice mode requires a browser with microphone access (Chrome, Edge, or Safari).
+            </p>
+          </div>
+        </div>
       </div>
     )
   }
 
   if (voice.micPermission === 'denied') {
     return (
-      <div className="flex flex-col h-full bg-crust items-center justify-center gap-4 px-6">
-        <p className="text-overlay0 text-sm text-center">
-          Microphone access is required for voice mode.<br />
-          Allow microphone access in your browser settings.
-        </p>
-        <button onClick={onExit} className="text-green text-sm underline">Go back</button>
+      <div className="flex flex-col h-full bg-crust">
+        <Header onExit={onExit} />
+        <div className="flex-1 flex items-center justify-center px-6">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <AlertCircle className="w-10 h-10 text-red" />
+            <p className="text-overlay1 text-sm max-w-md">
+              Microphone permission was denied. Allow mic access in your browser settings, then reopen Voice Mode.
+            </p>
+          </div>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="flex flex-col h-full bg-crust relative">
-      <div className="absolute top-0 left-0 right-0 z-10 p-3 sm:p-4 flex items-center justify-between">
-        <button
-          onClick={onExit}
-          className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm text-overlay0 hover:text-text hover:bg-white/5 transition-colors"
-        >
-          <ArrowLeft className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
-          <span className="hidden sm:inline">Exit Voice</span>
-        </button>
-        {engine && (
-          <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1 rounded-full bg-white/5 text-[9px] sm:text-[10px] text-overlay1 uppercase tracking-wider">
-            <Radio className="h-2.5 sm:h-3 w-2.5 sm:w-3" />
-            {engine}
-          </div>
-        )}
-      </div>
+      <Header onExit={onExit} muted={voice.isMuted} onToggleMute={voice.toggleMute} />
 
-      <div className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 pb-16">
-        {voice.state === 'idle' && voice.micPermission === 'granted' ? (
+      <div className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 pb-16 overflow-y-auto">
+        {voice.state === 'idle' ? (
           <div className="flex flex-col items-center gap-4">
-            <p className="text-overlay0 text-sm">Microphone ready</p>
-            <button
-              onClick={() => voice.start()}
-              className="flex items-center gap-2 px-6 py-2 rounded-full bg-green/10 text-green text-sm border border-green/20 hover:bg-green/20 transition-colors"
-            >
-              <Mic className="h-4 w-4" />
-              Start Listening
-            </button>
+            {!voice.connected ? (
+              <p className="text-overlay0 text-sm">Connecting to voice service…</p>
+            ) : (
+              <>
+                <p className="text-overlay0 text-sm">
+                  {voice.error ? voice.error : 'Microphone ready — tap to talk'}
+                </p>
+                <button
+                  onClick={beginListening}
+                  className="flex items-center gap-2 rounded-full bg-green/15 border border-green/40 px-6 py-3 text-green hover:bg-green/25 transition-all"
+                >
+                  <Mic className="w-5 h-5" />
+                  Start Listening
+                </button>
+              </>
+            )}
           </div>
         ) : (
           <>
             <VoiceIndicator state={voice.state} />
-            <div className="mt-6 min-h-[2rem] flex items-center justify-center">
+            <div className="mt-6 min-h-[2.5rem] flex items-center justify-center">
               <VoiceTranscript text={voice.interimText} />
               {voice.state === 'listening' && !voice.interimText && (
-                <p className="text-overlay0 text-xs animate-pulse">Speak now...</p>
+                <p className="text-overlay0 text-xs animate-pulse">Speak now…</p>
               )}
             </div>
           </>
         )}
 
-        {recentMessages.length > 0 && (
-          <div className="mt-6 sm:mt-8 w-full max-w-lg mx-auto space-y-1 opacity-60 px-2 sm:px-0">
-            <div className="border-t border-white/5 pt-2 sm:pt-3 mb-1 sm:mb-2">
-              <span className="text-[9px] sm:text-[10px] uppercase tracking-widest text-overlay0">Recent</span>
-            </div>
-            {recentMessages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
+        {recent.length > 0 && (
+          <div className="mt-8 w-full max-w-lg mx-auto flex flex-col gap-3">
+            {recent.map((m, i) => (
+              <MessageBubble
+                key={`${m.timestamp ?? i}-${i}`}
+                message={{ id: String(i), role: m.role, content: m.text }}
+              />
             ))}
-            {streaming && (
-              <div className="flex justify-start my-1">
-                <div className="bg-surface0/50 rounded-lg px-4 py-2.5">
-                  <div className="flex gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <span className="w-1.5 h-1.5 rounded-full bg-green animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <span className="w-1.5 h-1.5 rounded-full bg-green animate-bounce" style={{ animationDelay: '300ms' }} />
-                  </div>
-                </div>
-              </div>
-            )}
             <div ref={bottomRef} />
           </div>
         )}
+
+        {voice.error && voice.state !== 'idle' && (
+          <p className="mt-6 text-xs text-red/80 text-center max-w-md">{voice.error}</p>
+        )}
       </div>
+    </div>
+  )
+}
+
+interface HeaderProps {
+  onExit: () => void
+  muted?: boolean
+  onToggleMute?: () => void
+}
+
+function Header({ onExit, muted, onToggleMute }: HeaderProps) {
+  return (
+    <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-surface2">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onExit}
+          className="p-2 rounded-full bg-surface1 hover:bg-surface2 transition-colors"
+        >
+          <ArrowLeft className="w-5 h-5 text-subtext1" />
+        </button>
+        <div className="flex flex-col">
+          <span className="text-sm font-semibold text-text">Voice Mode</span>
+          <span className="flex items-center gap-1 text-xs text-overlay1">
+            <Radio className="w-3 h-3 text-green" />
+            Engine: Cloudflare
+          </span>
+        </div>
+      </div>
+      {onToggleMute && (
+        <button
+          onClick={onToggleMute}
+          className="p-2 rounded-full bg-surface1 hover:bg-surface2 transition-colors"
+          title={muted ? 'Unmute' : 'Mute'}
+        >
+          <Mic className={`w-5 h-5 ${muted ? 'text-overlay0' : 'text-green'}`} />
+        </button>
+      )}
     </div>
   )
 }

@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications, location, projects, dashboard, documents, data_import
 from backend.api import awareness, notes
+from backend.api.voice_turn import router as voice_turn_router
 from backend.api.research import router as research_router
 from backend.voice import router as voice_router
 from backend.core.config import load_config as _load_config
@@ -68,6 +69,7 @@ app.include_router(documents.router)
 app.include_router(data_import.router)
 app.include_router(research_router)
 app.include_router(voice_router)
+app.include_router(voice_turn_router)
 app.include_router(awareness.router)
 app.include_router(notes.router)
 

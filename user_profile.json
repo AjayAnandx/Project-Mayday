@@ -331,6 +331,19 @@
         "conv:y"
       ],
       "relation_type": "friend"
+    },
+    {
+      "id": "blf_ae1d4b4eff52",
+      "slot": "relations",
+      "value": "Ajay",
+      "confidence": 0.9,
+      "provenance": "explicit",
+      "consent_tier": "T1",
+      "last_verified": "2026-08-19T12:07:26.741587+00:00",
+      "created_at": "2026-08-19T12:07:26.741598+00:00",
+      "observed_count": 1,
+      "source_refs": [],
+      "relation_type": ""
     }
   ],
   "questions": [],
@@ -402,6 +415,15 @@
       "relation_type": "friend",
       "created_at": "2026-08-18",
       "next_ask_date": "2026-08-25",
+      "cadence_days": 7,
+      "last_asked": ""
+    },
+    {
+      "id": "fu_3fbfd794",
+      "person": "Ajay",
+      "relation_type": "relation",
+      "created_at": "2026-08-19",
+      "next_ask_date": "2026-08-26",
       "cadence_days": 7,
       "last_asked": ""
     }

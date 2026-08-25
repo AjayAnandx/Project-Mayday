@@ -76,6 +76,9 @@ voice:
   tts_voice: aura-asteria-en
   tts_speed: 1.0
   sample_rate: 16000
+  # Shared secret the Cloudflare Worker must pass as ?token= when calling
+  # /api/voice/turn and /api/voice/sync. Leave empty to disable auth (dev).
+  cloudflare_token: "bd08ee3b4bae10e1f212a10dc76a1766f850ceac5a51d1a05d513f732727e256"
 
 location:
   default_location: ""

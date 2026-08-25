@@ -4,6 +4,7 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
+from collections.abc import Callable
 
 import httpx
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -738,16 +739,40 @@ def _make_voice_text(text: str) -> str:
     sentences = [s for s in sentences if s.strip()]
     if not sentences:
         if len(stripped) > 200:
-            return stripped[:200].rsplit(' ', 1)[0] + '. Check the chat for more details.'
+            return stripped[:200].rsplit(' ', 1)[0] + '.'
         return stripped[:300] if stripped else ""
     short = ' '.join(sentences[:2])
     if len(sentences) == 1 and len(short) > 200:
-        short = short[:200].rsplit(' ', 1)[0] + '. Check the chat for more details.'
+        short = short[:200].rsplit(' ', 1)[0] + '.'
     elif len(sentences) > 2:
-        short = short.rstrip('.!?:;') + '. Check the chat for more details.'
+        short = short.rstrip('.!?:;') + '.'
     if len(short) > 300:
-        short = short[:300].rsplit(' ', 1)[0] + '. Check the chat for more details.'
+        short = short[:300].rsplit(' ', 1)[0] + '.'
     return short
+
+
+def _strip_markdown(text: str) -> str:
+    """Lightweight markdown stripping for streaming TTS (no sentence truncation).
+
+    Used to feed incremental assistant text to a voice sink so the cloud TTS
+    can sentence-chunk and synthesize as tokens arrive.
+    """
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+    text = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', text)
+    text = re.sub(r'\[([^\]]*)\]\([^)]+\)', r'\1', text)
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.M)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    text = re.sub(r'__([^_]+)__', r'\1', text)
+    text = re.sub(r'~~([^~]+)~~', r'\1', text)
+    text = re.sub(r'^>\s+', '', text, flags=re.M)
+    text = re.sub(r'^[*-]\s+', '', text, flags=re.M)
+    text = re.sub(r'^\d+\.\s+', '', text, flags=re.M)
+    text = re.sub(r'^[-*_]{3,}\s*$', '', text, flags=re.M)
+    text = re.sub(r'<[^>]*>', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 
 def _build_active_project_block():
@@ -789,7 +814,12 @@ def _auto_load_skill_for_active_task(kg, active_skill, skill_manager):
                 return
 
 
-async def _run_interactive_only(websocket: WebSocket, user_text: str, conv: ConversationManager):
+async def _run_interactive_only(
+    websocket: WebSocket,
+    user_text: str,
+    conv: ConversationManager,
+    sink: Callable[[str], None] | None = None,
+):
     """Two-tier fast path: answer locally on the interactive model, no cloud call.
 
     Used for trivial turns (greetings, simple chit-chat) when tiering is enabled,
@@ -813,7 +843,85 @@ async def _run_interactive_only(websocket: WebSocket, user_text: str, conv: Conv
     conv.add_message("assistant", content)
     voice_text = _make_voice_text(content)
     await _send_json(websocket, {"type": "token", "content": content, "voice_content": voice_text})
+    if sink:
+        await sink(voice_text)
     await _send_json(websocket, {"type": "done"})
+
+
+async def _build_engine_context() -> dict:
+    """Build the full set of engine dependencies (LLM, MCP, tools, selector,
+    skills, classifier) used by both the chat WebSocket and the voice turn
+    endpoint. Keeps the two paths in sync without duplicating setup."""
+    config = load_config()
+    conv = ConversationManager()
+    conv.new_conversation()
+    llm = LLMClient()
+    kg = get_graph()
+
+    mcp_servers = config.get("mcp", {}).get("servers", {})
+    mcp = MCPManager()
+    if mcp_servers:
+        for name, cfg in mcp_servers.items():
+            try:
+                kwargs = dict(command=cfg["command"], args=cfg.get("args", []), env=cfg.get("env"))
+                if cfg.get("lazy"):
+                    kwargs["lazy"] = True
+                await mcp.add_server_stdio(name, **kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Failed to connect MCP server '%s': %s", name, e)
+    if mcp_servers:
+        for name, cfg in mcp_servers.items():
+            if cfg.get("lazy"):
+                if name == "fetch":
+                    mcp.add_static_tools(name, FETCH_TOOL_DEFINITIONS)
+                elif name == "opencode":
+                    mcp.add_static_tools(name, OPENCODE_TOOL_DEFINITIONS)
+                elif name == "ui-layouts":
+                    mcp.add_static_tools(name, UI_LAYOUTS_TOOL_DEFINITIONS)
+                elif name == "magic-ui":
+                    mcp.add_static_tools(name, MAGIC_UI_TOOL_DEFINITIONS)
+    mcp_tools = []
+    if mcp._sessions:
+        try:
+            mcp_tools = await mcp.discover_tools()
+        except Exception as e:
+            logger.error("MCP tool discovery error: %s", e)
+    tools = get_tool_definitions(mcp_tools)
+
+    selector = ToolSelector()
+    selector.build_index(tools, GROUP_SETS)
+
+    skill_manager = None
+    skills_cfg = config.get("skills", {})
+    if skills_cfg.get("enabled", True):
+        try:
+            skill_manager = get_skill_manager(skills_cfg.get("directory", ""))
+        except Exception as e:
+            logger.error("Failed to load skills: %s", e)
+
+    pending_suggestion: list = []
+    active_skill: list = []
+    query_classifier = QueryClassifier()
+
+    def _humanize_on() -> bool:
+        from backend.assistant.tiers import tiering_enabled as _te
+        return bool(_te() and config.get("models", {}).get("humanize_enabled", True))
+
+    return {
+        "conv": conv,
+        "llm": llm,
+        "kg": kg,
+        "mcp": mcp,
+        "tools": tools,
+        "selector": selector,
+        "skill_manager": skill_manager,
+        "pending_suggestion": pending_suggestion,
+        "active_skill": active_skill,
+        "query_classifier": query_classifier,
+        "humanize_output": _humanize_on(),
+    }
 
 
 async def _run_engine(
@@ -830,6 +938,7 @@ async def _run_engine(
     active_skill: list | None = None,
     query_classifier: QueryClassifier | None = None,
     humanize_output: bool = False,
+    sink: Callable[[str], None] | None = None,
 ):
     now = datetime.now(timezone.utc).astimezone()
 
@@ -847,6 +956,8 @@ async def _run_engine(
         conv.add_message("assistant", greeting)
         voice_text = _make_voice_text(greeting)
         await _send_json(ws, {"type": "token", "content": greeting, "voice_content": voice_text})
+        if sink:
+            await sink(voice_text)
         await _send_json(ws, {"type": "done"})
         return
 
@@ -1151,6 +1262,8 @@ async def _run_engine(
 
         if content and content.strip() and not humanize_output:
             await _send_json(ws, {"type": "token", "content": content})
+            if sink:
+                await sink(_strip_markdown(content))
 
         for tc in tool_calls:
             try:
@@ -1389,6 +1502,8 @@ async def _run_engine(
             logger.info("Voice: ui=%d chars, voice=%d chars", len(content), len(voice_text))
             conv.add_message("assistant", content)
             await _send_json(ws, {"type": "token", "content": content, "voice_content": voice_text})
+            if sink:
+                await sink(voice_text)
 
         if kg and conv.current_id:
             conv_data = get_store().get_conversation(conv.current_id)
