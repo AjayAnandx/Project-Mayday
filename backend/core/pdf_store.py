@@ -1,6 +1,5 @@
 import json
 import hashlib
-import os
 import threading
 import uuid
 import logging

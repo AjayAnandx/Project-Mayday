@@ -1,6 +1,5 @@
 import importlib.util
 import logging
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -132,9 +131,6 @@ class SkillManager:
         if skill is None:
             return "", [], {}
         return skill.body, list(skill.tool_defs), dict(skill.func_map)
-
-    def reload_skills(self):
-        self._load_skills()
 
     def list_skills(self) -> list[str]:
         return sorted(self._skills.keys())

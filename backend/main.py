@@ -1,7 +1,6 @@
 import logging
 import os
 import asyncio
-import re
 
 from contextlib import asynccontextmanager
 
@@ -11,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
 from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications, location, projects, dashboard, documents, data_import
-from backend.api import awareness, notes
+from backend.api import awareness
 from backend.api.research import router as research_router
 from backend.voice import router as voice_router
 from backend.core.config import load_config as _load_config
@@ -69,7 +68,6 @@ app.include_router(data_import.router)
 app.include_router(research_router)
 app.include_router(voice_router)
 app.include_router(awareness.router)
-app.include_router(notes.router)
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)

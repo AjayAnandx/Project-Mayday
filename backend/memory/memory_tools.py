@@ -3,102 +3,6 @@ from backend.memory.knowledge_graph import get_graph
 
 _PREFIXES = ("project:", "research:", "tag:", "date:", "concept:")
 
-# Bridges generic `remember` calls about the user into the AwarenessStore
-# (user_profile.json) so the per-turn world-model snapshot and `recall` can
-# surface them. Heuristics only — non-user facts stay graph-only.
-_USER_SLOT_RELATIONS = {
-    "name": "identity", "is": "identity", "called": "identity", "am": "identity",
-    "nickname": "identity",
-    "like": "favorites", "likes": "favorites", "prefer": "favorites",
-    "prefers": "favorites", "favorite": "favorites", "favourite": "favorites",
-    "enjoy": "favorites", "enjoys": "favorites",
-    "have": "belongings", "has": "belongings", "own": "belongings",
-    "owns": "belongings", "pet": "belongings", "belong": "belongings",
-    "want": "goals", "wants": "goals", "goal": "goals", "goals": "goals",
-    "working toward": "goals", "working towards": "goals", "aspire": "goals",
-    "problem": "problems", "struggle": "problems", "struggles": "problems",
-    "stress": "problems", "stressed": "problems", "worry": "problems",
-    "worries": "problems", "issue": "problems", "challenge": "problems",
-}
-_USER_ENTITY_HINTS = {"user", "me", "i", "my", "myself", "mayday-user", "users"}
-_RELATION_PERSON = {
-    "friend", "friends", "brother", "sister", "mom", "mother", "dad", "father",
-    "wife", "husband", "partner", "spouse", "son", "daughter", "colleague",
-    "boss", "cousin", "uncle", "aunt", "grandmother", "grandfather",
-    "girlfriend", "boyfriend",
-}
-# Transient states/emotions/conditions — these are NOT identities even when
-# stated with "am"/"is" (e.g. "I am stressed"). They belong in `problems`/
-# `state`, consistent with awareness_observer.py rule 67.
-_STATE_WORDS = {
-    "stressed", "anxious", "sick", "tired", "overwhelmed", "depressed",
-    "sad", "happy", "angry", "calm", "sleepy", "hungry", "ill", "unwell",
-    "exhausted", "lonely", "excited", "scared", "afraid", "nervous",
-}
-
-
-def _looks_like_name(value: str) -> bool:
-    v = value.strip()
-    if not v or len(v) > 40 or any(c.isdigit() for c in v):
-        return False
-    words = v.split()
-    if not (1 <= len(words) <= 3):
-        return False
-    return all(w[:1].isupper() or not w[:1].isalpha() for w in words)
-
-
-def _classify_user_fact(entity: str, relation: str, value: str):
-    e = entity.strip().lower()
-    r = relation.strip().lower()
-    v = value.strip()
-    if r in _RELATION_PERSON or e in _RELATION_PERSON:
-        return "relations", v
-    slot = _USER_SLOT_RELATIONS.get(r)
-    # A state/emotion word stated with "am"/"is"/"are" is not an identity.
-    if slot == "identity" and v.lower() in _STATE_WORDS:
-        return "problems", v
-    if slot:
-        return slot, v
-    if e in _USER_ENTITY_HINTS:
-        if v.lower() in _STATE_WORDS:
-            return "problems", v
-        if _looks_like_name(v):
-            return "identity", v
-        return "context", v
-    return None, None
-
-
-def _maybe_learn_user_fact(entity: str, relation: str, value: str) -> None:
-    """Mirror an obvious user fact from `remember` into the AwarenessStore.
-
-    Never raises — a failure here must not break the graph write path.
-    Duplicate prevention: if the same fact already lives in the awareness
-    store OR is already represented as a `belief:*` node in the Brain, we skip
-    creating a second copy (avoids concept-node + belief-node duplication).
-    """
-    try:
-        from backend.core.config import load_config
-        if not load_config().get("awareness", {}).get("enabled", False):
-            return
-        from backend.core.user_awareness import get_awareness_store
-        slot, val = _classify_user_fact(entity, relation, value)
-        if not slot or not val:
-            return
-        store = get_awareness_store()
-        # Already in the profile?
-        if store.find_belief(slot, val):
-            return
-        # Already represented as a belief node in the Brain?
-        if get_graph().get_node_by_label(f"belief:{slot}:{val}"):
-            return
-        res = store.add_belief(slot, val, provenance="explicit", confidence=0.9)
-        if isinstance(res, dict) and "error" in res:
-            return
-        if slot == "identity" and _looks_like_name(val):
-            store.set_user_name(val)
-    except Exception:
-        return
-
 
 def _find_exact_node(kg, name: str) -> dict | None:
     stripped = name.strip()
@@ -138,7 +42,6 @@ def remember(entity: str, relation: str, value: str, context: str = "", node_typ
     if edge_id:
         get_operation_log().record("create", "memory", source_id, entity,
                                     details={"relation": relation, "target": value})
-        _maybe_learn_user_fact(entity, relation, value)
         return f"Remembered: {entity} --[{relation}]--> {value}"
     return f"Already remembered: {entity} --[{relation}]--> {value}"
 
@@ -156,14 +59,6 @@ def recall(query: str = "") -> str:
             for k, v in props.items():
                 if v:
                     lines.append(f"  {k}: {v}")
-    # Also surface user facts stored in the AwarenessStore (user_profile.json),
-    # so they are recallable regardless of whether `remember` or `learn_belief` wrote them.
-    try:
-        from backend.core.user_awareness import get_awareness_store
-        for b in get_awareness_store().search_beliefs(query):
-            lines.append(f"- belief[{b['slot']}]: {b['value']} (conf {b['confidence']:.2f})")
-    except Exception:
-        pass
     if not lines:
         return f"No memories found for: {query}"
     return "\n".join(lines)

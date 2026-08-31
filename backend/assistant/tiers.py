@@ -11,7 +11,7 @@ it only does classification + natural-language generation.
 """
 import re
 
-from backend.assistant.llm_client import get_interactive_client, get_worker_client
+from backend.assistant.llm_client import get_interactive_client
 from backend.core.config import load_config
 
 try:
@@ -122,7 +122,4 @@ def humanize(worker_answer: str, user_question: str = "", style: str = "warm and
     return out or worker_answer
 
 
-def worker_complete(query: str, sys_prompt: str = "") -> str:
-    """Run a substantive generation on the worker tier (capable model)."""
-    worker = get_worker_client()
-    return _complete(worker, query, sys_prompt=sys_prompt, temperature=0.3, max_tokens=1500)
+

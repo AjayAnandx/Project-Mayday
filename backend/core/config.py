@@ -9,6 +9,7 @@ ENV_OVERRIDES = {
         "servers": {
             "github": {"env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "GITHUB_PERSONAL_ACCESS_TOKEN"}},
             "exa": {"env": {"EXA_API_KEY": "EXA_API_KEY"}},
+            "firecrawl": {"env": {"FIRECRAWL_API_KEY": "FIRECRAWL_API_KEY"}},
         }
     },
     "ollama": {"endpoint": "OLLAMA_ENDPOINT"},

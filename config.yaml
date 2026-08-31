@@ -127,6 +127,12 @@ mcp:
       command: npx
       args: ["@executeautomation/playwright-mcp-server"]
       lazy: true
+    firecrawl:
+      command: npx
+      args: ["-y", "firecrawl-mcp"]
+      env:
+        FIRECRAWL_API_KEY: ""  # Set via FIRECRAWL_API_KEY env var or .env
+      lazy: true
 
 # DSPy research modules (Modules A + B) — flag-gated, additive, default-off.
 # Nothing uses DSPy unless enabled:true AND the relevant module flag is true.
@@ -149,18 +155,26 @@ dspy:
   ua6_snapshot: false
   pts1_interpreter: false
 
-# User Awareness engine — passive + active onboarding world model.
-# Default-off until Phase 4; all phases additive and flag-gated.
+# User Awareness engine — onboarding questions + proactive follow-ups only.
+# Personal facts now live in the shared knowledge graph (single source of truth)
+# via remember(); the separate belief store / user_profile.json was removed.
 awareness:
   enabled: true
   max_daily_questions: 3
-  decay_lambda: 0.02            # confidence *= e^(-lambda * days_idle)
-  profile_path: user_profile.json
-  consented_tiers: ["T0"]      # T1 (relationships/health/finance) requires opt-in
   proactive_followups: true    # auto check in on learned loved ones ("what about her?")
   followup_cadence_days: 7      # days between gentle follow-ups about a person
   brief_enabled: true          # build aggregated per-person briefs
+  soft_signal_threshold: 2      # mentions required before persisting soft/implicit facts
 
-# Personal notes (standalone personal notes store, distinct from project/research notes).
-personal_notes:
-  storage_path: notes.json
+# PHF-Mini: compact hierarchical user model (Practice -> Habitus -> Field) from
+# 2606.md. Reuses QueryClassifier intents + graph node-types as the practice
+# codebook; HabitusBuilder aggregates practice signals with sqrt-recency. No
+# model training. Disabled = context section omitted and practice logging skipped.
+phf:
+  enabled: true
+  practice_log: practices.jsonl
+  habitus_path: habitus.json
+  recency_halflife_weeks: 4    # sqrt-decay half-life for practice signals
+  top_traits: 8                # how many habitus dimensions to surface in context
+
+

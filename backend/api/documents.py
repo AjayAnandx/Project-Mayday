@@ -1,9 +1,4 @@
-import os
-import shutil
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
-from pydantic import BaseModel
 
 from backend.core.pdf_store import get_pdf_store
 from backend.core.operation_log import get_operation_log

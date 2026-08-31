@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import os
 import threading
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -80,10 +79,6 @@ class Scheduler:
             self._reminders[reminder_id] = reminder
             self._save_reminders()
         return reminder_id, adjusted, datetime_utc_str
-
-    def get_reminder(self, reminder_id: str) -> dict | None:
-        with self._lock:
-            return self._reminders.get(reminder_id)
 
     def list_reminders(self) -> list[dict]:
         with self._lock:

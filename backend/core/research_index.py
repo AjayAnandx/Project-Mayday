@@ -12,7 +12,6 @@ Rebuilt on first access and refreshed lazily (max 30s staleness) so boot is
 cheap and newly written notes/reports become searchable without a restart.
 """
 import threading
-from pathlib import Path
 
 from backend.core.research_store import get_research_store
 from backend.core.search_index import NgramIndex, SearchRanker

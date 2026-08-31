@@ -65,21 +65,3 @@ export interface ResearchProject {
   updated_at: string
 }
 
-export interface ResearchSummary {
-  id: string
-  topic: string
-  type: ResearchType
-  status: ResearchStatus
-  depth: number
-  data_point_count: number
-  entity_count: number
-  finding_count: number
-  task_count: number
-  created_at: string
-  updated_at: string
-}
-
-export interface ChartArtifact {
-  url: string
-  title: string
-}

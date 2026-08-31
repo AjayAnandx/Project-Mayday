@@ -1,13 +1,9 @@
 import json
 import logging
-import re
-from datetime import datetime, timezone
 
 from backend.core import local_playwright
 
 logger = logging.getLogger(__name__)
-
-_SCREENSHOTS_HOST_DIR = None
 
 
 def playwright_navigate(project_name: str = "", url: str = "", timeout: int = 30000) -> str:

@@ -1,5 +1,4 @@
 import json
-import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -92,33 +91,6 @@ class ComponentStore:
             if tag:
                 results = [c for c in results if tag in c.get("tags", [])]
             return [{"name": c["name"], "description": c.get("description", ""), "framework": c.get("framework", "react"), "tags": c.get("tags", []), "version": c.get("version", 1), "updated_at": c.get("updated_at", "")} for c in results]
-
-    def delete_component(self, name: str) -> bool:
-        with self._lock:
-            before = len(self._components)
-            self._components = [c for c in self._components if c["name"] != name]
-            if len(self._components) < before:
-                self._save()
-                return True
-            return False
-
-    def scaffold_project(self, name: str, components: list[str]) -> str:
-        matched = []
-        missing = []
-        for comp_name in components:
-            comp = self.get_component(comp_name)
-            if comp:
-                matched.append(comp)
-            else:
-                missing.append(comp_name)
-        lines = [f"Scaffolded project '{name}' with {len(matched)} components."]
-        if missing:
-            lines.append(f"Missing components: {', '.join(missing)}")
-        for comp in matched:
-            lines.append(f"\n--- {comp['name']} ---")
-            lines.append(comp["code"])
-        return "\n".join(lines)
-
 
 _instance: ComponentStore | None = None
 _lock = threading.Lock()

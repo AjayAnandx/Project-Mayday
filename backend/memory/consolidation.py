@@ -66,16 +66,6 @@ def _clean_entity_label(label: str) -> str | None:
     return s
 
 
-def _looks_like_name(value: str) -> bool:
-    v = value.strip()
-    if not v or len(v) > 40 or any(c.isdigit() for c in v):
-        return False
-    words = v.split()
-    if not (1 <= len(words) <= 3):
-        return False
-    return all(w[:1].isupper() or not w[:1].isalpha() for w in words)
-
-
 class ConsolidationWorker:
     def __init__(self) -> None:
         self._queue: deque[str] = deque()
@@ -201,18 +191,6 @@ class ConsolidationWorker:
                 ntype = kind if kind in ("person", "object", "place", "concept") else "entity"
                 eid = kg.add_node(ntype, ent_label, {"consolidated": True})
                 created += 1
-                # Mirror discovered person entities into the awareness world
-                # model so the two stores share data — but ONLY genuinely
-                # person-like names AND only when awareness is enabled.
-                if ntype == "person" and _looks_like_name(ent_label):
-                    try:
-                        from backend.core.config import load_config
-                        if load_config().get("awareness", {}).get("enabled", False):
-                            from backend.core.user_awareness import get_awareness_store
-                            get_awareness_store().add_belief(
-                                "relations", ent_label, provenance="inference", confidence=0.7)
-                    except Exception:
-                        pass
             if eid and ev:
                 mg.add_typed_edge_if_missing(ev, eid, "entity", "references")
                 created += 1
@@ -278,5 +256,4 @@ def get_consolidator() -> ConsolidationWorker:
     return _worker
 
 
-def consolidate_node(node_id: str) -> None:
-    get_consolidator().enqueue(node_id)
+

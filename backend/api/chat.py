@@ -19,7 +19,7 @@ from backend.assistant.function_registry import (
     DESIGN_MCP_TOOL_NAMES,
 )
 from backend.assistant.mcp_manager import MCPManager
-from backend.assistant.playwright_tools import PLAYWRIGHT_TOOL_DEFINITIONS, PLAYWRIGHT_TOOL_NAMES
+from backend.assistant.playwright_tools import PLAYWRIGHT_TOOL_NAMES
 from backend.assistant.fetch_tools import FETCH_TOOL_DEFINITIONS
 from backend.assistant.mcp_server_opencode import STATIC_TOOL_DEFINITIONS as OPENCODE_TOOL_DEFINITIONS
 from backend.assistant.skill_manager import get_skill_manager, SkillManager
@@ -28,44 +28,29 @@ from backend.memory.knowledge_graph import get_graph, extract_keywords, Knowledg
 from backend.api.screenshots import get_screenshot_store
 from backend.core.tool_selector import ToolSelector
 from backend.core.query_classifier import QueryClassifier, QueryIntent
-from backend.core.pdf_store import get_pdf_store
 from backend.core.evolution import run_post_mortem
 from backend.core.user_awareness import get_awareness_store
 
 logger = logging.getLogger(__name__)
 
 
-# ---- User Awareness integration (Plan: Mayday User Awareness + PTS + DSPy C) ----
-# Task actions wrapped by the decision gate (ask / warn / block).
-_AWARENESS_GATED_ACTIONS = {
-    "create_todo": "create_todo",
-    "create_event": "create_event",
-    "create_reminder": "create_reminder",
-    "create_personal_note": "create_personal_note",
-    "add_project_task": "add_project_task",
-    "create_research": "create_research",
-}
-
+# ---- User Awareness integration (PHF-Mini habitus + onboarding follow-ups) ----
 
 def _awareness_enabled() -> bool:
     return bool(load_config().get("awareness", {}).get("enabled", False))
 
 
-def _awareness_snapshot_section(user_text: str) -> str:
-    if not _awareness_enabled():
+def _phf_context_section(user_text: str) -> str:
+    """Inject the compact PHF habitus disposition (Practice->Habitus hierarchy).
+
+    Replaces the old verbose awareness snapshot: a short, denoised summary of the
+    user's stable behavioral dispositions, not a noisy dump of every belief (which
+    the PHF paper shows *hurts* personalization).
+    """
+    from backend.core.phf import disposition_summary
+    summary = disposition_summary()
+    if not summary:
         return ""
-    try:
-        store = get_awareness_store()
-        snap = store.snapshot(context=user_text or None)
-    except Exception:
-        return ""
-    if not snap or snap == "(no beliefs yet)":
-        return ""
-    profile = ""
-    try:
-        profile = get_awareness_store().profile()
-    except Exception:
-        profile = ""
     user_name = ""
     try:
         user_name = get_awareness_store().get_user_name() or ""
@@ -78,31 +63,18 @@ def _awareness_snapshot_section(user_text: str) -> str:
             f"(e.g. greet them as \"Hi {user_name}\").\n"
         )
     return (
-        "\n\n### What I know about you (Mayday's private notes — don't recite these verbatim)\n"
-        "I'm the user's close friend, not their assistant or therapist. I keep these notes so I actually "
-        "know them as a person. How to be with them:\n"
-        "- Talk like a best friend would: easy, warm, a little playful, natural contractions. No corporate "
-        "speak, no therapy voice, no 'I'm here to help you through this' type lines.\n"
-        "- Use these notes to be a real friend — remember their name, what they like, who they care about, "
-        "what they're dealing with — and let that shape how I respond, not as a script.\n"
-        "- When they're stressed or down, I don't deliver a caring monologue. I just show up like a friend "
-        "does: a quick 'hey, that sucks' or a small offer, then let it breathe. Never announce my support "
-        "in the abstract.\n"
-        "- If I just learned something new about them, I can mention it briefly and warmly ('noted, man') — "
-        "no formal confirmation speeches.\n"
-        "- When they reference someone I know about, I get the context naturally with person_brief(name) or "
-        "recall_entity('<name>') before answering.\n"
-        "- Address them by name now and then, not in every sentence.\n"
-        "When the user states something about themselves (name, preference, relation, possession, goal, "
-        "problem) or a pattern (e.g. 'I take coffee when I'm stressed'), record it with learn_belief so it "
-        "persists — do this for ANY personal fact, even a casual 'I work at Google' or 'I live in X'. "
-        "learn_belief = the user's personal world model (user_profile.json); remember = a reference/general "
-        "fact in the shared knowledge graph. Don't mix them: personal facts go to learn_belief. If they "
-        "answer a queued question, record it with record_answer. user_profile shows my current understanding; "
-        "person_brief(name) sums up a specific person.\n"
+        "\n\n### How I know the user (compact habitus — don't recite verbatim)\n"
+        "I'm the user's close friend, not their assistant. I keep a lightweight sense of who they are "
+        "so I can be warm and personal without a script. Use it to shape tone, not to lecture.\n"
+        "- Talk like a best friend: easy, warm, a little playful, natural contractions. No corporate speak.\n"
+        "- When they're stressed or down, show up like a friend: a quick 'hey, that sucks' or a small offer, "
+        "then let it breathe. Never announce support in the abstract.\n"
+        "- If I just learned something new, mention it briefly and warmly ('noted, man').\n"
+        "- When the user references someone, their context is automatically recalled and injected — you usually don't need to call person_brief(name) or recall_entity('<name>') yourself, but you still can.\n"
+        "- Personal facts (name, preference, relation, goal, problem) are stored with remember(); "
+        "if they answer a queued question, use record_answer().\n"
         + name_line +
-        f"\nCompanion profile:\n{profile}\n\n"
-        f"Relevant memories for this turn:\n{snap}"
+        f"\n{summary}"
     )
 
 
@@ -128,35 +100,73 @@ def _proactive_followup_section() -> str:
     return "\n".join(lines)
 
 
-def _gate_entities(fn_name: str, fn_args: dict) -> list[str]:
-    if fn_name == "create_todo":
-        text = f"{fn_args.get('title', '')} {fn_args.get('description', '')}"
-    elif fn_name == "create_event":
-        text = f"{fn_args.get('title', '')} {fn_args.get('description', '')}"
-    elif fn_name == "create_reminder":
-        text = fn_args.get("message", "")
-    elif fn_name == "create_personal_note":
-        text = fn_args.get("text", "")
-    elif fn_name == "add_project_task":
-        text = fn_args.get("title", "")
-    elif fn_name == "create_research":
-        text = fn_args.get("topic", "")
-    else:
-        text = ""
-    return re.findall(r"\b([A-Z][a-z]+(?: [A-Z][a-z]+)*)\b", text or "")
+async def _background_remember(llm, text: str, conv_id: str):
+    """Fire-and-forget: LLM extractor catches facts the regex scan misses.
 
-
-def _decision_gate_check(fn_name: str, user_text: str, fn_args: dict) -> dict | None:
-    if not _awareness_enabled():
-        return None
-    action = _AWARENESS_GATED_ACTIONS.get(fn_name)
-    if not action:
-        return None
+    Runs the (synchronous, blocking) LLM call in a thread executor so it never
+    delays token streaming for the user's reply.
+    """
+    from backend.core import awareness_observer as ao
+    loop = asyncio.get_running_loop()
     try:
-        store = get_awareness_store()
-        return store.can_do(action, user_text or "", entities=_gate_entities(fn_name, fn_args))
+        content = await loop.run_in_executor(None, ao.extract_facts_via_llm, llm, text)
     except Exception:
-        return None
+        content = ""
+    if content:
+        try:
+            ao.apply_llm_facts(content)
+        except Exception:
+            pass
+
+
+def _personal_recall_section(user_text: str) -> str:
+    """Auto-recall: when the message references a known person or asks about
+    personal info, inject that person's brief + related memories so the LLM
+    answers from memory without needing to call recall itself."""
+    try:
+        from backend.core.user_awareness import get_awareness_store
+        from backend.memory.memory_tools import recall
+        store = get_awareness_store()
+        people = store.list_people()
+        if not people:
+            return ""
+        PERSON_Q = re.compile(
+            r"\b(who(?:'s| is)|tell me about|what do (?:i|we) know about|info on|"
+            r"about my (?:friend|mom|dad|mother|father|sister|brother|wife|husband|"
+            r"partner|girlfriend|boyfriend|son|daughter|cousin|uncle|aunt|grandma|"
+            r"grandpa|grandmother|grandfather|best friend))\b", re.I)
+        has_q = bool(PERSON_Q.search(user_text))
+        matched = []
+        for p in people:
+            name = p["name"]
+            if re.search(r"\b" + re.escape(name) + r"\b", user_text, re.I):
+                matched.append(p)
+        if not matched and not has_q:
+            return ""
+        lines = []
+        seen = set()
+        for p in matched[:3]:
+            name = p["name"]
+            if name in seen:
+                continue
+            seen.add(name)
+            brief = store.person_brief(name)
+            lines.append(f"- {name} ({p.get('relation_type', 'relation')}): {brief}")
+        if has_q:
+            try:
+                res = recall(user_text)
+                if res and "No memories found" not in res:
+                    extra = res[:500].strip()
+                    if extra:
+                        lines.append(f"- Related memories:\n{extra}")
+            except Exception:
+                pass
+        if not lines:
+            return ""
+        return "\n\n### People & personal context (auto-recalled)\n" + "\n".join(lines)
+    except Exception:
+        return ""
+
 
 router = APIRouter()
 
@@ -190,7 +200,7 @@ emotionally intelligent friend would.
 - NEVER sound like a therapist, life-coach, or support agent. No reassurance monologues
   ("I'm here to help you navigate through that however I can"), no "I'm always here for you" speeches.
   Be a friend: react briefly and naturally, then just be present. Small words, real tone.
-- When you learn or store something about the user (via learn_belief, remember, or automatic capture),
+- When you learn or store something about the user (via remember or automatic capture),
   briefly and warmly confirm it in your reply — as if making a mental note — instead of staying silent
   or listing tool calls. Reference what you stored by name.
 - Keep replies conversational and flowing. Avoid bullet-point dumps, robotic status reports
@@ -211,6 +221,8 @@ Mayday: "Noted, Ajay — morning walks it is. I'll keep that in mind."
 - If the user gives feedback about your behavior or style, call remember(entity="Mayday", relation="style_feedback", value="<feedback>", node_type="personality")
 - Before responding, recall("style_feedback") to check for recent feedback
 - Adapt your tone based on stored feedback
+- I automatically remember important things you share every message (people, preferences, health, goals, problems) — you don't need to ask me to note them down.
+- I automatically recall relevant person/personal context and inject it, so rely on that injected context; use remember/recall only for explicit requests or to store something specific.
 - Todos and events are auto-synced to the knowledge graph when created/updated/deleted
 - Before creating a new todo, event, or entity, call recall() or recall_entity() first to check for existing data — this prevents duplicates
 - Conversations are also synced to the knowledge graph as nodes — use recall_entity() on a conversation ID to find linked projects
@@ -890,8 +902,11 @@ async def _run_engine(
     if active_block:
         system += "\n\n" + active_block
 
-    # World-model snapshot injection (awareness.enabled only)
-    system += _awareness_snapshot_section(user_text)
+    # Compact PHF habitus disposition (phf.enabled only)
+    system += _phf_context_section(user_text)
+
+    # Auto-recall: inject known person / personal-info context when referenced.
+    system += _personal_recall_section(user_text)
 
     # Proactive relationship check-ins ("what about her?")
     system += _proactive_followup_section()
@@ -1205,24 +1220,7 @@ async def _run_engine(
                 if fn_name in OPENCODE_TOOL_NAMES:
                     opencode_used = True
 
-                # ---- Decision gate (awareness) ----
-                gate = _decision_gate_check(fn_name, user_text, fn_args)
-                if gate and gate["verdict"] == "block":
-                    result = (
-                        f"[AWARENESS GATE: BLOCKED] {gate['reason']} "
-                        f"{gate['suggestion']}"
-                    )
-                    await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
-                    conv.add_message("tool", result, tool_call_id=tool_call_id)
-                    continue
-
                 result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
-
-                if gate and gate["verdict"] in ("ask", "warn"):
-                    result = (
-                        f"{result}\n[AWARENESS GATE: {gate['verdict'].upper()}] "
-                        f"{gate['reason']} {gate['suggestion']}"
-                    )
 
                 if len(result) > MAX_TOOL_RESULT_LENGTH:
                     result = result[:MAX_TOOL_RESULT_LENGTH] + "\n...[truncated]"
@@ -1534,6 +1532,25 @@ async def chat_websocket(websocket: WebSocket):
                 # parallel" (it's effectively free), satisfying the two-tier split
                 # without serializing the worker behind a model call.
                 intent = query_classifier.classify(user_text)
+                try:
+                    from backend.core.phf import log_interaction
+                    log_interaction(user_text, intent.intent)
+                except Exception:
+                    pass
+                # Auto-learn personal facts from the user's message (regex scan,
+                # always on). Nuanced facts are caught by the background LLM
+                # extraction task below (non-blocking).
+                try:
+                    from backend.core import awareness_observer as ao
+                    ao.ingest_text(user_text, source_refs=[f"conv:{conv.current_id}"])
+                except Exception:
+                    pass
+                # Background LLM extraction (non-blocking): catches facts the regex
+                # scan misses. Runs concurrently with the reply.
+                try:
+                    asyncio.create_task(_background_remember(llm, user_text, conv.current_id))
+                except Exception:
+                    pass
                 if tiering and not intent.requires_llm:
                     await _run_interactive_only(websocket, user_text, conv)
                     continue

@@ -280,13 +280,6 @@ class KnowledgeGraph:
                             sub_edges.append(edge)
             return {"nodes": sub_nodes, "edges": sub_edges}
 
-    def get_full_graph(self) -> dict:
-        with self._lock:
-            return {
-                "nodes": list(self._nodes.values()),
-                "edges": list(self._edges),
-            }
-
     def get_clean_graph(self, include_scraped: bool = False) -> dict:
         with self._lock:
             junk_ids = set()
@@ -574,14 +567,6 @@ class KnowledgeGraph:
                 self._nodes[nid]["properties"]["_text"] = text
                 self._save()
 
-    def update_document_previous_names(self, doc_id: str, names: list[str]):
-        with self._lock:
-            key = ("document", "doc_id", doc_id)
-            nid = self._prop_idx.get(key)
-            if nid and nid in self._nodes:
-                self._nodes[nid]["properties"]["_previous_names"] = names
-                self._save()
-
     def delete_document_node(self, doc_id: str):
         with self._lock:
             key = ("document", "doc_id", doc_id)
@@ -639,6 +624,19 @@ class KnowledgeGraph:
                 self._unindex_node(self._nodes[nid])
                 self._nodes[nid]["properties"]["status"] = "scraped"
                 self._index_node(self._nodes[nid])
+            # Remove legacy awareness dual-write mirror nodes (belief:* labels) and
+            # any edges touching them. These are artifacts of the old user_profile.json
+            # world model and are superseded by the graph-backed user facts.
+            belief_ids = {nid for nid, n in self._nodes.items()
+                          if n["label"].startswith("belief:")}
+            if belief_ids:
+                self._edges = [e for e in self._edges
+                               if e.get("source") not in belief_ids
+                               and e.get("target") not in belief_ids]
+                for nid in belief_ids:
+                    self._unindex_node(self._nodes[nid])
+                    del self._nodes[nid]
+                report["belief_nodes_removed"] = len(belief_ids)
             self._save()
             report["total_scraped"] = len(scraped_ids)
             return report

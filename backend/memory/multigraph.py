@@ -182,11 +182,6 @@ class MultiGraph:
             self._vectors[n["id"]] = self._embedder.embed(self._node_text(n))
         self._index_dirty = False
 
-    def index_node(self, node_id: str):
-        n = self._kg.get_node(node_id)
-        if n:
-            self._vectors[node_id] = self._embedder.embed(self._node_text(n))
-
     def vector_search(self, query: str, top_k: int = 20) -> list[tuple[str, float]]:
         if self._index_dirty or len(self._vectors) != len(self._kg._nodes):
             self._rebuild_vector_index()
