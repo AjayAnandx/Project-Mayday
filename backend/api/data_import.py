@@ -1,5 +1,4 @@
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
-from fastapi.responses import JSONResponse
 
 from backend.functions.data_import import (
     import_data,

@@ -104,12 +104,6 @@ class OperationLog:
             self._text_idx.setdefault(token, {}).setdefault(oid, 0)
             self._text_idx[token][oid] += 1
 
-    def _write_month(self, month: str):
-        ids = [oid for _, oid in self._by_date.get(month, [])]
-        ops = [self._by_id[oid] for oid in ids if oid in self._by_id]
-        lines = "\n".join(json.dumps(op, ensure_ascii=False) for op in ops)
-        self._month_path(month).write_text(lines + "\n", encoding="utf-8")
-
     def record(self, action: str, entity_type: str, entity_id: str,
                entity_name: str, details: dict | None = None, user_message: str = ""):
         with self._lock:
@@ -206,17 +200,6 @@ class OperationLog:
             else:
                 results.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
             return results[:limit]
-
-    def get_stats(self, action: str | None = None, entity_type: str | None = None) -> str:
-        with self._lock:
-            self._ensure_months_loaded(set(self._by_date.keys()))
-            ids = set(self._by_id.keys())
-            if action:
-                ids &= self._by_action.get(action, set())
-            if entity_type:
-                ids &= self._by_type.get(entity_type, set())
-            return f"{len(ids)} operations" + (f" ({action})" if action else "") + (f" [{entity_type}]" if entity_type else "")
-
 
 _instance: OperationLog | None = None
 _instance_lock = threading.Lock()

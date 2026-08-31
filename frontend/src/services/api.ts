@@ -27,9 +27,6 @@ export const api = {
   listDocuments: () =>
     request<DocumentMeta[]>('/documents'),
 
-  getDocument: (id: string) =>
-    request<DocumentMeta>(`/documents/${id}`),
-
   getDocumentText: (id: string, pages?: string) =>
     request<{ doc_id: string; text: string }>(`/documents/${id}/text${pages ? `?pages=${encodeURIComponent(pages)}` : ''}`),
 
@@ -130,9 +127,6 @@ export const api = {
   getProject: (projectId: string) =>
     request<Project>(`/projects/${projectId}`),
 
-  createProject: (data: { name: string }) =>
-    request<Project>('/projects', { method: 'POST', body: JSON.stringify(data) }),
-
   addProjectDataPoint: (projectId: string, data: { label: string; value: string; unit?: string; confidence?: string; sources?: string[] }) =>
     request<ProjectDataPoint>(`/projects/${projectId}/data-points`, { method: 'POST', body: JSON.stringify(data) }),
 
@@ -204,17 +198,4 @@ export const api = {
   getAiNews: () =>
     request<AiNewsResponse>('/dashboard/ai-news'),
 
-  // Voice
-  getVoiceStatus: () =>
-    request<{ enabled: boolean; stt: string; tts: string; note: string }>('/voice/status'),
-
-  synthesizeSpeech: async (text: string): Promise<Blob> => {
-    const res = await fetch(`${BASE}/voice/tts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    })
-    if (!res.ok) throw new Error(`TTS HTTP ${res.status}`)
-    return res.blob()
-  },
 }

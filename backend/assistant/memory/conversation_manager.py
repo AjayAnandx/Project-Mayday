@@ -48,9 +48,4 @@ class ConversationManager:
             return True
         return False
 
-    def get_title(self) -> str:
-        store = get_store()
-        if not self._current_id:
-            return "No conversation"
-        conv = store.get_conversation(self._current_id)
-        return conv["title"] if conv else "No conversation"
+

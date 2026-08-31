@@ -6,7 +6,6 @@ from pathlib import Path
 from backend.core.data_store import get_store
 from backend.core.person_brief import get_person_brief as _get_person_brief
 from backend.core.config import load_config
-from backend.core.component_store import get_component_store
 from backend.core.operation_log import get_operation_log
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
@@ -54,11 +53,8 @@ from backend.functions.visual_testing import (
     update_baseline,
 )
 from backend.functions.awareness_functions import (
-    ask_user, list_beliefs, update_belief, confirm_belief,
-    create_personal_note, list_personal_notes, search_personal_notes,
-    run_reflection, awareness_summary, learn_belief, record_answer, user_profile,
+    ask_user, record_answer, person_brief,
 )
-from backend.core.personal_notes import personal_plate
 from backend.functions.exa_functions import (
     web_search_exa, web_fetch_exa, web_search_advanced_exa,
 )
@@ -1911,134 +1907,6 @@ LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "list_beliefs",
-            "description": "List everything Mayday currently believes about the user, optionally filtered by slot or minimum confidence",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "slot": {"type": "string", "description": "Ontology slot to filter (optional)"},
-                    "min_confidence": {"type": "number", "description": "Only beliefs at or above this confidence (optional)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_belief",
-            "description": "Correct or refine a stored belief about the user (value, confidence, or consent tier)",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "belief_id": {"type": "string", "description": "Belief ID from list_beliefs"},
-                    "value": {"type": "string", "description": "New value (optional)"},
-                    "confidence": {"type": "number", "description": "New confidence 0-1 (optional)"},
-                    "consent_tier": {"type": "string", "enum": ["T0", "T1", "T2"], "description": "New consent tier (optional)"},
-                },
-                "required": ["belief_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "confirm_belief",
-            "description": "Mark a belief as explicitly confirmed by the user (sets confidence to 0.95)",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "belief_id": {"type": "string", "description": "Belief ID (optional if value given)"},
-                    "value": {"type": "string", "description": "Belief value to confirm (optional if belief_id given)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_personal_note",
-            "description": "Save a standalone personal note (distinct from project/research notes) with optional entity links",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "Note content"},
-                    "title": {"type": "string", "description": "Optional note title"},
-                    "entities": {"type": "array", "items": {"type": "string"}, "description": "Entity names to link (e.g. a person or pet from beliefs)"},
-                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_personal_notes",
-            "description": "List all personal notes",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_personal_notes",
-            "description": "Search personal notes by keyword",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_reflection",
-            "description": "Run weekly consolidation: merge duplicate beliefs, resolve contradictions (newer+explicit wins), derive traits",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "awareness_summary",
-            "description": "Summarize the user's world model and emit a compressed context snapshot for the current turn",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "context": {"type": "string", "description": "Optional context to bias the snapshot toward relevant beliefs"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "learn_belief",
-            "description": "Directly teach Mayday a fact about the user (a belief) into a specific ontology slot. Use when the user states a preference, relation, possession, goal, or problem explicitly.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "slot": {"type": "string", "enum": ["identity", "relations", "favorites", "belongings", "goals", "problems", "context", "state"], "description": "Ontology slot"},
-                    "value": {"type": "string", "description": "The belief value (e.g. 'pizza', 'mom', 'TCS exam')"},
-                    "provenance": {"type": "string", "enum": ["explicit", "repeated", "inference", "stereotype"], "description": "How this was learned (default explicit when user states it)"},
-                    "consent_tier": {"type": "string", "enum": ["T0", "T1", "T2"], "description": "Consent tier (default T0; T1 for relationships/health/finance)"},
-                },
-                "required": ["slot", "value"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "record_answer",
             "description": "Record the user's answer to a previously queued onboarding question (from ask_user) so Mayday learns the belief. Returns the learned belief.",
             "parameters": {
@@ -2049,17 +1917,6 @@ LOCAL_TOOL_DEFINITIONS = [
                     "slot": {"type": "string", "description": "Override slot if the queued question's slot was wrong"},
                 },
                 "required": ["question_id", "answer"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "user_profile",
-            "description": "Return Mayday's synthesized 'companion understanding' of the user — who they are, what they like, their stressors, and the situational coping patterns learned from their chat and actions.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
             },
         },
     },
@@ -2092,33 +1949,7 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "whats_on_my_plate",
-            "description": "Unified Personal Task Store query across todos, events, personal notes, and reminders — answers 'what's on my plate' in one call",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "context": {"type": "string", "description": "Optional context to prioritize relevant items"},
-                    "include_completed": {"type": "boolean", "description": "Include completed todos (default false)"},
-                },
-            },
-        },
-    },
 ]
-def whats_on_my_plate(context: str = "", include_completed: bool = False) -> str:
-    plate = personal_plate(context=context, include_completed=include_completed)
-    c = plate["counts"]
-    lines = [
-        f"On your plate: {c['todos']} todos, {c['events']} events, "
-        f"{c['notes']} notes, {c['reminders']} reminders.",
-    ]
-    for it in plate["items"]:
-        lines.append(f"  - [{it['kind']}] {it['text']}" + (f" ({it['time']})" if it.get("time") else ""))
-    return "\n".join(lines)
-
-
 def person_brief(name: str) -> str:
     """Return Mayday's aggregated brief about a named person (relation, when first/last
     mentioned, source chats, linked notes). Use this to resolve vague references like
@@ -2253,35 +2084,10 @@ FUNCTION_MAP = {
     "design_generate_component": design_generate_component,
     "design_write_spec": design_write_spec,
     "ask_user": ask_user,
-    "list_beliefs": list_beliefs,
-    "update_belief": update_belief,
-    "confirm_belief": confirm_belief,
-    "create_personal_note": create_personal_note,
-    "list_personal_notes": list_personal_notes,
-    "search_personal_notes": search_personal_notes,
-    "run_reflection": run_reflection,
-    "awareness_summary": awareness_summary,
-    "learn_belief": learn_belief,
     "record_answer": record_answer,
-    "user_profile": user_profile,
     "person_brief": person_brief,
     "mark_conversation_important": mark_conversation_important,
-    "whats_on_my_plate": whats_on_my_plate,
 }
-
-
-def whats_on_my_plate(context: str = "", include_completed: bool = False) -> str:
-    plate = personal_plate(context=context, include_completed=include_completed)
-    c = plate["counts"]
-    lines = [
-        f"On your plate: {c['todos']} todos, {c['events']} events, "
-        f"{c['notes']} notes, {c['reminders']} reminders.",
-    ]
-    for it in plate["items"]:
-        lines.append(f"  - [{it['kind']}] {it['text']}" + (f" ({it['time']})" if it.get("time") else ""))
-    return "\n".join(lines)
-
-
 
 
 def get_tool_definitions(mcp_tools: list[dict] | None = None) -> list[dict]:

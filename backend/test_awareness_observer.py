@@ -8,6 +8,63 @@ from backend.core import awareness_observer as ao
 from backend.core import user_awareness as ua
 
 
+class FakeGraph:
+    """In-memory stand-in for KnowledgeGraph (no file I/O)."""
+
+    def __init__(self):
+        self._nodes = {}
+        self._by_label = {}
+        self._edges = {}
+        self._counter = 0
+
+    def add_node(self, type, label, properties=None):
+        nid = "n%d" % self._counter
+        self._counter += 1
+        node = {"id": nid, "type": type, "label": label, "properties": dict(properties or {})}
+        self._nodes[nid] = node
+        self._by_label[label] = node
+        return nid
+
+    def get_node_by_label(self, label):
+        return self._by_label.get(label)
+
+    def get_node(self, nid):
+        return self._nodes.get(nid)
+
+    def search(self, query):
+        q = (query or "").lower()
+        return [n for n in self._nodes.values()
+                if q in n["label"].lower()
+                or any(q in str(v).lower() for v in n["properties"].values())]
+
+    def add_edge_if_missing(self, source, target, relation, properties=None):
+        key = (source, target, relation)
+        if key in self._edges:
+            return None
+        eid = "e%d" % len(self._edges)
+        self._edges[key] = {"id": eid, "source": source, "target": target, "relation": relation}
+        return eid
+
+    def get_subgraph(self, node_id, depth=2):
+        return {"edges": [e for e in self._edges.values()
+                          if e["source"] == node_id or e["target"] == node_id]}
+
+    def remove_node(self, nid):
+        if nid not in self._nodes:
+            return False
+        del self._nodes[nid]
+        for lab, n in list(self._by_label.items()):
+            if n["id"] == nid:
+                del self._by_label[lab]
+        return True
+
+    def _index_node(self, node):
+        self._by_label[node["label"]] = node
+
+    def _save(self):
+        pass
+
+
 class TestNameExtraction(unittest.TestCase):
     def test_lowercase_name_captured(self):
         cands = ao.extract_candidates("my name is john")
@@ -35,7 +92,6 @@ class TestNameExtraction(unittest.TestCase):
         self.assertEqual(names[0]["value"], "alex")
 
     def test_stopword_not_captured_as_name(self):
-        # "and" / filler must not be swallowed into a name
         cands = ao.extract_candidates("my name is and the dog")
         names = [c for c in cands if c.get("is_name")]
         self.assertFalse(names)
@@ -49,7 +105,7 @@ class TestNameExtraction(unittest.TestCase):
         cands = ao.extract_candidates("My grandmother Alamelu passed last year. She raised me.")
         rel = [c for c in cands if c["slot"] == "relations" and c["value"].lower() == "alamelu"]
         self.assertTrue(rel, "relation 'grandmother Alamelu' should be captured")
-        self.assertFalse(rel[0].get("is_name"), "relations must not be marked is_name (would overwrite user name)")
+        self.assertFalse(rel[0].get("is_name"), "relations must not be marked is_name")
         self.assertEqual(rel[0]["relation_type"], "family")
 
     def test_best_friend_captured(self):
@@ -63,20 +119,17 @@ class TestNameExtraction(unittest.TestCase):
         self.assertTrue(rel, "'<Name> is my grandmother' should capture the name")
 
     def test_relation_name_not_swallowed(self):
-        # "my friend is coming" must NOT capture "is" as a relation name
         cands = ao.extract_candidates("my friend is coming over later")
         rel = [c for c in cands if c["slot"] == "relations"]
         self.assertFalse(rel, "common following word must not be captured as a relation name")
 
     def test_friend_list_captured(self):
-        # A list of friends must yield one belief per person (the bug: nothing captured).
         cands = ao.extract_candidates("My friends are John, Mary, Alex")
         rels = [c for c in cands if c["slot"] == "relations"]
         vals = sorted(r["value"] for r in rels)
         self.assertEqual(vals, ["Alex", "John", "Mary"])
         self.assertTrue(all(r["relation_type"] == "friend" for r in rels))
-        self.assertTrue(all(not r.get("is_name") for r in rels),
-                         "list friends must not be marked is_name (would overwrite user name)")
+        self.assertTrue(all(not r.get("is_name") for r in rels))
 
     def test_friend_list_with_and(self):
         cands = ao.extract_candidates("My friends are John and Mary")
@@ -99,7 +152,6 @@ class TestNameExtraction(unittest.TestCase):
         self.assertEqual(vals, ["Alex", "John", "Mary"])
 
     def test_friend_list_no_false_positive(self):
-        # "My friends are coming over" has no proper-noun names -> nothing captured.
         cands = ao.extract_candidates("My friends are coming over later")
         rels = [c for c in cands if c["slot"] == "relations"]
         self.assertFalse(rels, "a friend list with no names must not invent a relation")
@@ -111,75 +163,115 @@ class TestNameExtraction(unittest.TestCase):
         self.assertTrue(all(r["relation_type"] == "family" for r in rels))
 
 
-class TestUserNameStore(unittest.TestCase):
-    def test_name_normalized_and_persisted(self):
-        cfg = {"awareness": {"profile_path": self._tmp, "consented_tiers": ["T0"]}}
-        with mock.patch.object(ua, "load_config", lambda: cfg):
-            store = ua.AwarenessStore()
-            store.set_user_name("ajay")
-            self.assertEqual(store.get_user_name(), "Ajay")
-            # reload from disk
-            store2 = ua.AwarenessStore()
-            self.assertEqual(store2.get_user_name(), "Ajay")
-
-    def _get_tmp(self):
-        import tempfile, os
-        return os.path.join(tempfile.mkdtemp(), "profile.json")
-
+class TestIngestToGraph(unittest.TestCase):
     def setUp(self):
-        self._tmp = self._get_tmp()
+        import backend.memory.knowledge_graph as kgmod
+        self._orig = getattr(kgmod, "_graph", None)
+        self.graph = FakeGraph()
+        kgmod._graph = self.graph
+        ua.get_awareness_store()._instance = None
+
+    def tearDown(self):
+        import backend.memory.knowledge_graph as kgmod
+        kgmod._graph = self._orig
+        ua.get_awareness_store()._instance = None
+
+    def test_name_persisted_to_graph(self):
+        ao.ingest_text("my name is john")
+        store = ua.get_awareness_store()
+        self.assertEqual(store.get_user_name(), "John")
+        self.assertIsNotNone(self.graph.get_node_by_label("user:Mayday-user"))
+
+    def test_relation_creates_person_node(self):
+        ao.ingest_text("my friend Sara helped me move")
+        person = self.graph.get_node_by_label("person:sara")
+        self.assertIsNotNone(person, "a person node should be created for the relation")
+        user = self.graph.get_node_by_label("user:Mayday-user")
+        self.assertIsNotNone(user)
+        edge = None
+        for e in self.graph._edges.values():
+            if e["source"] == user["id"] and e["target"] == person["id"]:
+                edge = e
+        self.assertIsNotNone(edge, "user should link to the person via 'knows'")
+        self.assertEqual(edge["relation"], "knows")
+
+    def test_favorite_written_to_graph(self):
+        ao.ingest_text("i love pizza")
+        user = self.graph.get_node_by_label("user:Mayday-user")
+        self.assertIsNotNone(user)
+        # a 'favorites' edge from user to a 'pizza' concept node should exist
+        found = any(e["relation"] == "favorites"
+                    for e in self.graph._edges.values()
+                    if e["source"] == user["id"])
+        self.assertTrue(found, "favorite fact should be stored in the graph")
+
+    def test_dedup_on_repeat(self):
+        added1 = ao.ingest_text("i love pizza")
+        added2 = ao.ingest_text("i love pizza")
+        new1 = [a for a in added1 if a.get("new")]
+        new2 = [a for a in added2 if a.get("new")]
+        self.assertTrue(new1)
+        self.assertFalse(new2, "repeating the same fact should not be marked new")
+
+    def test_person_brief_resolves(self):
+        ao.ingest_text("my sister Maya lives abroad")
+        brief = ua.get_awareness_store().person_brief("Maya")
+        self.assertIn("Maya", brief)
+        self.assertIn("family", brief)
+
+    def test_explicit_persists_immediately(self):
+        # Explicit statements are learned on the very first mention even with a
+        # high soft-signal threshold (which only gates implicit signals).
+        with mock.patch("backend.core.config.load_config",
+                        return_value={"awareness": {"soft_signal_threshold": 5}}):
+            added = ao.ingest_text("i love biriyani")
+            new = [a for a in added if a.get("new")]
+            self.assertTrue(new, "explicit fact should persist on first mention")
+            self.assertTrue(any(e["relation"] == "favorites"
+                                for e in self.graph._edges.values()
+                                if e["source"] == self.graph.get_node_by_label("user:Mayday-user")["id"]))
+
+    def test_soft_signal_requires_repeats(self):
+        with mock.patch("backend.core.config.load_config",
+                        return_value={"awareness": {"soft_signal_threshold": 2}}):
+            # "lonely" is only a situational/context trigger, not an explicit problem,
+            # so this is a pure soft signal.
+            added1 = ao.ingest_text("when I am lonely, I listen to music")
+            self.assertFalse([a for a in added1 if a.get("new")],
+                             "soft signal must NOT persist on first mention")
+            added2 = ao.ingest_text("when I am lonely, I listen to music")
+            self.assertTrue([a for a in added2 if a.get("new")],
+                            "soft signal must persist after threshold mentions")
 
 
-class TestPhoneSupersede(unittest.TestCase):
+class TestPhfPersonalFacts(unittest.TestCase):
     def setUp(self):
-        import tempfile, os
-        self._tmp = os.path.join(tempfile.mkdtemp(), "profile.json")
-        self._cfg = {"awareness": {"profile_path": self._tmp, "consented_tiers": ["T0"]}}
-        with mock.patch.object(ua, "load_config", lambda: self._cfg):
-            self.store = ua.AwarenessStore()
+        import backend.memory.knowledge_graph as kgmod
+        self._orig = getattr(kgmod, "_graph", None)
+        self.graph = FakeGraph()
+        kgmod._graph = self.graph
+        ua.get_awareness_store()._instance = None
 
-    def _phones(self):
-        return [b for b in self.store._beliefs.values() if ua._is_phone(b["value"])]
+    def tearDown(self):
+        import backend.memory.knowledge_graph as kgmod
+        kgmod._graph = self._orig
+        ua.get_awareness_store()._instance = None
 
-    def test_new_number_retires_old(self):
-        with mock.patch.object(ua, "load_config", lambda: self._cfg):
-            self.store.add_belief("context", "917608033", provenance="explicit")
-            self.store.add_belief("context", "9123456789", provenance="explicit")
-            phones = self._phones()
-            self.assertEqual(len(phones), 1, "should keep only the latest number")
-            self.assertEqual(ua._norm_phone(phones[0]["value"]), "9123456789")
+    def test_personal_facts_surfaced(self):
+        import backend.core.phf as phf
+        ao.ingest_text("my name is john")
+        ao.ingest_text("i love pizza")
+        facts = phf.personal_facts()
+        self.assertIn("Name: John", facts)
+        self.assertIn("Favorites: pizza", facts)
 
-    def test_number_change_across_slots(self):
-        # Observer may store under 'context'; LLM may store under 'identity'. Both must collapse.
-        with mock.patch.object(ua, "load_config", lambda: self._cfg):
-            self.store.add_belief("context", "917608033", provenance="explicit")
-            self.store.add_belief("identity", "9123456789", provenance="explicit")
-            phones = self._phones()
-            self.assertEqual(len(phones), 1)
-            self.assertEqual(ua._norm_phone(phones[0]["value"]), "9123456789")
-
-    def test_same_number_not_duplicated(self):
-        with mock.patch.object(ua, "load_config", lambda: self._cfg):
-            self.store.add_belief("context", "917608033", provenance="explicit")
-            self.store.add_belief("context", "917608033", provenance="explicit")
-            self.assertEqual(len(self._phones()), 1)
-
-    def test_observer_pipeline_supersedes(self):
-        # End-to-end through the same code path the chat uses.
-        with mock.patch.object(ua, "load_config", lambda: self._cfg), \
-             mock.patch.object(ao, "get_awareness_store", lambda: self.store):
-            ao.ingest_text("my number is 917608033")
-            ao.ingest_text("my new number is 9123456789")
-            phones = self._phones()
-            self.assertEqual(len(phones), 1, "observer must not keep both numbers")
-            self.assertEqual(ua._norm_phone(phones[0]["value"]), "9123456789")
-
-    def test_non_phone_values_untouched(self):
-        with mock.patch.object(ua, "load_config", lambda: self._cfg):
-            self.store.add_belief("favorites", "pizza", provenance="explicit")
-            self.store.add_belief("favorites", "biryani", provenance="explicit")
-            self.assertEqual(len(self._phones()), 0)
-            self.assertEqual(len([b for b in self.store._beliefs.values() if b["slot"] == "favorites"]), 2)
+    def test_disposition_combines_facts_and_habitus(self):
+        import backend.core.phf as phf
+        ao.ingest_text("my name is john")
+        # habitus is empty without practice log; facts must still appear.
+        summary = phf.disposition_summary()
+        self.assertIn("About you", summary)
+        self.assertIn("Name: John", summary)
 
 
 if __name__ == "__main__":

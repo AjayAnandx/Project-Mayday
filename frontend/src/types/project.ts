@@ -35,19 +35,3 @@ export interface Project {
   updated_at: string
 }
 
-export interface ProjectSummary {
-  id: string
-  name: string
-  slug: string
-  status: ProjectStatus
-  description?: string
-  data_point_count: number
-  task_count: number
-  created_at: string
-  updated_at: string
-}
-
-export interface ChartArtifact {
-  url: string
-  title: string
-}

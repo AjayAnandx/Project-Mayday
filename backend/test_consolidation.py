@@ -23,7 +23,6 @@ def _setup(monkeypatch, awareness_enabled=False):
         "consented_tiers": ["T0"],
     }
     monkeypatch.setattr(kgmod, "load_config", lambda: cfg)
-    monkeypatch.setattr(uamod, "load_config", lambda: cfg)
     monkeypatch.setattr(consmod, "load_config", lambda: cfg)
     kgmod._graph = None
     mgmod._multigraph = None
@@ -131,9 +130,10 @@ def test_junk_belief_label_rejected(monkeypatch):
     assert kg._nodes[exam].get("properties", {}).get("consolidated") is True
 
 
-def test_awareness_mirror_gated_and_validated(monkeypatch):
-    # With awareness enabled: a genuinely person-like entity is mirrored into
-    # the world model, but a junk belief: label is NOT.
+def test_awareness_mirror_removed(monkeypatch):
+    # Consolidation no longer mirrors discovered persons into a separate belief
+    # store — they live in the shared graph. Verify the graph node is still
+    # created and junk belief: labels are still rejected.
     mg = _setup(monkeypatch, awareness_enabled=True)
     kg = mg._kg
     exam = kg.add_node("event", "Event: TCS exam")
@@ -145,7 +145,9 @@ def test_awareness_mirror_gated_and_validated(monkeypatch):
     w = ConsolidationWorker()
     w.enqueue(exam)
     assert w.process_one(worker_client=_FakeClient(payload)) is True
+    labels = [n["label"] for n in kg._nodes.values()]
+    assert "Mom" in labels
+    assert not any(l.startswith("belief:") for l in labels)
+    # No separate belief store: the graph is the single source of truth.
     store = uamod.get_awareness_store()
-    vals = [b["value"] for b in store.list_beliefs("relations")]
-    assert "Mom" in vals
-    assert not any(v.startswith("belief:") for v in vals)
+    assert not hasattr(store, "list_beliefs")

@@ -1,9 +1,7 @@
 import re
 from typing import Optional
 
-from backend.core.user_awareness import (
-    get_awareness_store, SLOTS, PROVENANCE_CONFIDENCE,
-)
+from backend.core.user_awareness import get_awareness_store, _USER_LABEL
 
 
 # Extraction rules: (regex, slot, value_group, provenance, is_name)
@@ -145,8 +143,10 @@ def extract_candidates(text: str) -> list[dict]:
                 "slot": slot,
                 "value": value,
                 "provenance": prov,
-                "confidence": PROVENANCE_CONFIDENCE.get(prov, 0.55),
                 "is_name": is_name,
+                # Inference/stereotype sources are weak signals -> need a few mentions
+                # before persisting (see ingest_text soft-signal gate).
+                "soft": prov in ("inference", "stereotype"),
             })
     # relation type tagging via source_refs-like annotation
     for c in candidates:
@@ -214,6 +214,7 @@ def _extract_situations(text: str) -> list[dict]:
                 "value": value,
                 "provenance": "explicit",
                 "confidence": 0.9,
+                "soft": True,
             })
     return out
 
@@ -245,6 +246,7 @@ def _extract_relation_lists(text: str) -> list[dict]:
                 "confidence": 0.9,
                 "is_name": False,
                 "relation_type": rtype,
+                "soft": False,
             })
     return out
 
@@ -264,38 +266,78 @@ def _auto_flag_conversation(source_refs: Optional[list[str]]):
         pass
 
 
+def _ensure_person_node(value: str, relation_type: str = "relation") -> bool:
+    """Create a 'person' node + user->knows edge if missing. Returns True if newly created."""
+    from backend.memory.knowledge_graph import get_graph
+    kg = get_graph()
+    norm = re.sub(r"\s+", " ", value.strip().lower())
+    existing = kg.get_node_by_label(f"person:{norm}")
+    if existing is not None:
+        return False
+    pnode_id = kg.add_node("person", f"person:{norm}", {
+        "name": value,
+        "relation_type": relation_type,
+    })
+    user_node = kg.get_node_by_label(_USER_LABEL)
+    if user_node is None:
+        user_id = kg.add_node("user", _USER_LABEL, {"name": "", "kind": "user"})
+    else:
+        user_id = user_node["id"]
+    kg.add_edge_if_missing(user_id, pnode_id, "knows")
+    return True
+
+
 def ingest_text(text: str, source_refs: Optional[list[str]] = None) -> list[dict]:
-    """Extract candidates from text and persist them as beliefs (flag-gated by caller).
+    """Extract candidates from text and persist them into the shared knowledge
+    graph (single source of truth) via remember(). No separate belief store /
+    user_profile.json, so personal facts live alongside everything else.
 
     Side effects for newly learned personal facts:
       - mark the originating conversation "important"
       - schedule a gentle proactive follow-up when a relationship is learned
     """
+    import re as _re
+    from backend.core.config import load_config
+    from backend.memory.memory_tools import remember
+    from backend.memory.knowledge_graph import get_graph
     store = get_awareness_store()
+    soft_threshold = int(load_config().get("awareness", {}).get("soft_signal_threshold", 2))
+    user_name = store.get_user_name() or "user"
     added = []
     for cand in extract_candidates(text):
         slot, value = cand["slot"], cand["value"]
-        # De-dupe: a name stated as a generic "my X is Y" fact should upgrade to
-        # the identity slot if an identity belief with the same value exists.
-        if slot == "context" and store.find_belief("identity", value):
-            slot = "identity"
         # Normalize name values (ajay -> Ajay) so the canonical name is consistent.
         if cand.get("is_name"):
             value = " ".join(w[:1].upper() + w[1:] for w in value.split() if w)
-        pre_existing = store.find_belief(slot, value)
-        res = store.add_belief(
-            slot, value, provenance=cand["provenance"],
-            confidence=cand["confidence"], source_refs=source_refs,
-            relation_type=cand.get("relation_type", ""),
-        )
+        key = (slot, value.strip().lower())
+        soft = cand.get("soft", False)
+
+        # Soft/implicit signals (e.g. situational coping patterns, inferred
+        # preferences) need a few mentions before they are persisted, to avoid
+        # over-learning from a single offhand remark.
+        if soft and soft_threshold > 1:
+            count = store._pending_soft.get(key, 0) + 1
+            if count < soft_threshold:
+                store._pending_soft[key] = count
+                continue
+            store._pending_soft.pop(key, None)
+
+        is_new = False
+        if slot == "relations":
+            # Ensure a proper 'person' node + user->knows edge so person_brief
+            # and list_people() resolve. The person node is searchable directly.
+            is_new = _ensure_person_node(value, cand.get("relation_type", "relation"))
+        else:
+            result = remember(_USER_LABEL, slot, value)
+            is_new = not result.startswith("Already remembered")
+        # An explicit persist of a fact also satisfies any pending soft entry.
+        store._pending_soft.pop(key, None)
         # Capture the user's name as a first-class, always-available fact.
-        if cand.get("is_name") and isinstance(res, dict) and "id" in res:
+        if cand.get("is_name"):
             store.set_user_name(value)
-        if not (isinstance(res, dict) and "id" in res):
-            continue
-        added.append(res)
-        # only fire side effects on genuinely new beliefs
-        if pre_existing is not None:
+            user_name = value
+        added.append({"slot": slot, "value": value, "new": is_new})
+        if not is_new:
             continue
         if slot in ("relations", "identity"):
             _auto_flag_conversation(source_refs)
@@ -308,31 +350,86 @@ def ingest_text(text: str, source_refs: Optional[list[str]] = None) -> list[dict
 
 
 # ---------------------------------------------------------------------------
-# Observation hooks — wired into the existing save/CRUD paths (no-op unless
-# awareness.enabled). Each hook is additive and returns without raising.
+# Background LLM extraction — catches nuanced facts the regex rules miss
+# (allergies, stressors, work context, etc.) WITHOUT blocking the chat reply.
+# Runs as a fire-and-forget asyncio task on the chat loop.
+# ---------------------------------------------------------------------------
+_EXTRACTION_PROMPT = """You are Mayday's memory extractor. Read the user's message and extract ONLY personal facts worth remembering long-term.
+Output each fact on its own line as exactly: entity|relation|value
+- entity: usually "user", unless the fact is specifically about a named person (then use that person's name, e.g. "Sara").
+- relation: one of identity, relations, favorites, belongings, goals, problems, context, health, work.
+- value: a short phrase (name, preference, fact). For a person use their name as the value, e.g. "user|relations|Sara".
+- Capture: people (friends/family/colleagues), preferences, health (allergies, conditions), stressors, goals, important events, possessions, work context.
+- Do NOT capture small talk, questions, commands, or ephemeral chatter.
+- If nothing is worth remembering, output exactly: NONE
+Message: {text}
+Facts:"""
+
+
+def extract_facts_via_llm(llm, text: str) -> str:
+    """Synchronous LLM call (caller runs this in a thread executor). Returns raw text."""
+    try:
+        resp = llm.chat(
+            messages=[{"role": "system", "content": _EXTRACTION_PROMPT.format(text=text)}],
+            stream=False,
+            tools=[],
+        )
+        content, _ = llm.extract_response(resp)
+        return content or ""
+    except Exception:
+        return ""
+
+
+def apply_llm_facts(content: str) -> list[dict]:
+    """Parse 'entity|relation|value' lines and persist via remember() (idempotent)."""
+    from backend.memory.memory_tools import remember
+    added = []
+    for line in (content or "").splitlines():
+        line = line.strip()
+        if not line or line.upper() == "NONE":
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) != 3:
+            continue
+        entity, relation, value = parts
+        if not entity or not relation or not value:
+            continue
+        try:
+            if relation == "relations":
+                _ensure_person_node(value, "relation")
+            result = remember(entity, relation, value)
+            is_new = not result.startswith("Already remembered")
+            if relation == "relations" and is_new:
+                try:
+                    get_awareness_store().create_followup(value, "relation")
+                except Exception:
+                    pass
+            added.append({"entity": entity, "relation": relation, "value": value, "new": is_new})
+        except Exception:
+            pass
+    return added
+
+
+# ---------------------------------------------------------------------------
+# Observation hooks — wired into the existing save/CRUD paths. Each hook is
+# additive and returns without raising. (Scanning is always on.)
 # ---------------------------------------------------------------------------
 def hook_conversation_saved(conversation: dict):
-    from backend.core.config import load_config
-    if not load_config().get("awareness", {}).get("enabled", False):
-        return
+
     for msg in conversation.get("messages", []):
         if msg.get("role") == "user":
             ingest_text(msg.get("content", ""), source_refs=[f"conv:{conversation.get('id')}"])
 
 
 def hook_todo_created(todo: dict):
-    from backend.core.config import load_config
-    if not load_config().get("awareness", {}).get("enabled", False):
-        return
+
     text = f"{todo.get('title', '')} {todo.get('description', '')}"
     if text.strip():
         ingest_text(text, source_refs=[f"todo:{todo.get('id')}"])
 
 
 def hook_event_created(event: dict):
-    from backend.core.config import load_config
-    if not load_config().get("awareness", {}).get("enabled", False):
-        return
+
     text = f"{event.get('title', '')} {event.get('description', '')}"
     if text.strip():
         ingest_text(text, source_refs=[f"event:{event.get('id')}"])

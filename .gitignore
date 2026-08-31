@@ -32,3 +32,6 @@ uploads/
 # DSPy compiled artifacts (PII-gated, generated offline) — not committed
 dspy_artifacts/
 backend/dspy/artifacts/
+# PHF user model runtime artifacts
+habitus.json
+practices.jsonl

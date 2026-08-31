@@ -155,31 +155,6 @@ class LLMClient:
             return content, tool_calls, False
         return None, None, False
 
-    def stream_tokens(self, messages: list[dict], tools: list[dict] | None = None,
-                      tool_choice: str | None = None):
-        body = {
-            "model": self.model,
-            "messages": messages,
-            "tools": tools if tools is not None else get_tool_definitions(),
-            "stream": True,
-        }
-        if self.keep_alive is not None:
-            body["keep_alive"] = self.keep_alive
-        if tool_choice:
-            body["tool_choice"] = tool_choice
-        with self._http.stream("POST", self.endpoint, json=body, headers=self._build_headers()) as response:
-            for line in response.iter_lines():
-                line = line.strip()
-                if not line:
-                    continue
-                if not isinstance(line, bytes):
-                    line = line.encode()
-                content, tool_calls, done = self.extract_stream_chunk(line)
-                yield content, tool_calls, done
-                if done:
-                    break
-
-
 _INTERACTIVE_CLIENT: "LLMClient | None" = None
 _WORKER_CLIENT: "LLMClient | None" = None
 

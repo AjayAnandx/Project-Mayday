@@ -334,22 +334,6 @@ def add_project_data_point(name: str = "", label: str = "", value: str = "", uni
     return f"Data point added to project '{project_obj['name']}': '{label}' = {value}{unit_str} (confidence: {result.get('confidence', 'medium')})"
 
 
-def list_project_data_points(name: str = "", project: str = "") -> str:
-    store = get_project_store()
-    project_obj = _resolve_project(name, project)
-    if not project_obj:
-        return "No project name provided, or project not found."
-    dps = store.list_data_points(project_obj["id"])
-    if not dps:
-        return f"No data points collected for project '{project_obj['name']}' yet. Add some with add_project_data_point or batch_add_data_points."
-    lines = [f"Data points for '{project_obj['name']}' ({len(dps)}):"]
-    for dp in dps:
-        unit_str = f" {dp.get('unit', '')}" if dp.get('unit') else ""
-        src = f" [src: {', '.join(dp['sources'][:2])}]" if dp.get('sources') else ""
-        lines.append(f"  - {dp['label']}: {dp['value']}{unit_str} ({dp.get('confidence', 'medium')}){src}")
-    return "\n".join(lines)
-
-
 def generate_project_chart(name: str = "", chart_type: str = "auto", metric: str | None = None,
                            project: str = "") -> str:
     from backend.core.report_generator import generate_project_chart as _gen_project_chart

@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import threading
 import uuid
@@ -513,26 +512,6 @@ class ProjectStore:
             self._projects[idx]["last_activity"] = _utcnow()
             self._save()
             return True
-
-    def remove_document(self, project_id: str, doc_id: str) -> bool:
-        with self._lock:
-            idx = self._find_index(project_id)
-            if idx is None:
-                return False
-            docs = self._projects[idx].get("documents", [])
-            if doc_id in docs:
-                docs.remove(doc_id)
-                self._projects[idx]["last_activity"] = _utcnow()
-                self._save()
-                return True
-            return False
-
-    def list_documents(self, project_id: str) -> list[str]:
-        with self._lock:
-            idx = self._find_index(project_id)
-            if idx is None:
-                return []
-            return list(self._projects[idx].get("documents", []))
 
     def touch_activity(self, project_id: str):
         with self._lock:

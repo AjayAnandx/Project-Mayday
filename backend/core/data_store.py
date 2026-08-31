@@ -1,5 +1,4 @@
 import json
-import os
 import uuid
 import threading
 import calendar
@@ -127,24 +126,6 @@ class DataStore:
             json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
-    def _rebuild_index(self):
-        index = []
-        for fname in os.listdir(str(self._conv_dir)):
-            if fname.endswith(".json") and fname != "index.json":
-                try:
-                    day = json.loads((self._conv_dir / fname).read_text(encoding="utf-8"))
-                    for conv in day.get("conversations", []):
-                        index.append({
-                            "id": conv["id"],
-                            "date": day["date"],
-                            "title": conv.get("title", "Conversation"),
-                            "message_count": len(conv.get("messages", [])),
-                        })
-                except (json.JSONDecodeError, OSError):
-                    pass
-        self._conv_idx = {e["id"]: e for e in index}
-        self._save_index(index)
-
     # --- Search Indexes ---
 
     def _rebuild_search_indexes(self):
@@ -198,32 +179,6 @@ class DataStore:
 
     def _unindex_conversation(self, conv_id: str):
         self._conv_text_idx.remove(conv_id)
-
-    def search_all(self, query: str, limit: int = 20) -> dict:
-        todo_ids = {doc_id for doc_id, _ in self._todo_idx.search(query, limit)}
-        event_ids = {doc_id for doc_id, _ in self._event_idx.search(query, limit)}
-        self._ensure_conv_text_index()
-        conv_ids = {doc_id for doc_id, _ in self._conv_text_idx.search(query, limit)}
-        items = []
-        if todo_ids:
-            for t in self._todos:
-                if t["id"] in todo_ids:
-                    items.append({"type": "todo", "id": t["id"], "title": t["title"]})
-                    if len(items) >= limit:
-                        break
-        if event_ids and len(items) < limit:
-            for e in self._events:
-                if e["id"] in event_ids:
-                    items.append({"type": "event", "id": e["id"], "title": e["title"]})
-                    if len(items) >= limit:
-                        break
-        if conv_ids and len(items) < limit:
-            for entry in self._conv_idx.values():
-                if entry["id"] in conv_ids:
-                    items.append({"type": "conversation", "id": entry["id"], "title": entry.get("title", "Untitled")})
-                    if len(items) >= limit:
-                        break
-        return items
 
     # --- Todos ---
 

@@ -3,7 +3,6 @@ import logging
 import asyncio
 import os
 import struct
-import hashlib
 import base64
 import ssl
 
