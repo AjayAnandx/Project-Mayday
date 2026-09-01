@@ -68,6 +68,10 @@ export class ChatWebSocket {
     this.send({ type: 'dismiss_skill' })
   }
 
+  sendMusicCommand(payload: { action: string; video_id?: string; videoId?: string; title?: string; artist?: string; thumb?: string; language?: string }) {
+    this.send({ type: 'music_command' as any, ...payload } as any)
+  }
+
   disconnect() {
     this.shouldReconnect = false
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)

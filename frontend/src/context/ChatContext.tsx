@@ -13,6 +13,7 @@ interface ChatContextValue {
   confirmSkill: (name: string) => void
   dismissSkill: () => void
   addSystemMessage: (content: string) => void
+  sendMusicCommand: (payload: { action: string; video_id?: string; title?: string; artist?: string; thumb?: string; language?: string }) => void
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null)

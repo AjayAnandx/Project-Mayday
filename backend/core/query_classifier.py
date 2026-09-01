@@ -24,14 +24,6 @@ class QueryClassifier:
               r"\bscaffold\b", r"\binit\s+(project|app|site)",
               r"\bset\s+up\s+(a\s+)?project", r"\bmake\s+(a\s+)?(website|app|site)"]),
 
-            ("research", True, "auto",
-             ["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "DATA"],
-             ["basic", "research", "data", "project"],
-             [r"\bresearch\b", r"\binvestigate\b", r"\bfind\s+out\s+about\b",
-              r"\blook\s+into\b", r"\bstudy\b", r"\banalyze\b", r"\bsurvey\b",
-              r"\bgrowth\b", r"\btrend\b", r"\bover\s+time\b", r"\bcompare\b",
-              r"\bversus\b", r"\bvs\.?\b", r"\bstatistics\b", r"\bchart\b"]),
-
             ("project", True, "auto",
              ["BASE", "PERSONALITY", "PROJECT"],
              ["basic", "project", "file"],
@@ -72,6 +64,40 @@ class QueryClassifier:
               r"\bset\s+volume\b", r"\bwhat(\'s| is)\s+(my\s+)?volume\b",
               r"\bclipboard\b", r"\bcopy\s+(to\s+)?clipboard",
               r"\bsystem\s+info\b", r"\bsystem\s+information\b"]),
+
+            ("video_tutorial", True, "auto",
+             ["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH"],
+             ["basic", "music", "research"],
+             [r"\btutorial\b", r"\bhow\s+to\b", r"\bexplained\b", r"\blecture\b", r"\bcourse\b",
+              r"\bLLM\b", r"\bevaluation\b", r"\bbenchmark\b", r"\bRAG\b",
+              r"\battention\s+is\s+all\s+you\s+need\b", r"\btransformer\b.*\b(paper|model|explained)\b",
+              r"\brecommend.*video\b", r"\bwhich.*video.*best\b", r"\bbest.*video\b",
+              r"\bplay\b.*\b(tutorial|explained|lecture|course|video)\b"]),
+
+            ("music", True, "auto",
+             ["BASE", "PERSONALITY", "PROJECT"],
+             ["basic", "music"],
+             [r"\bplay\s+(song|music|track|radio|mood)",
+              r"\bplay\b.*\b(song|track|music)\b",
+              r"\bplay\s+\w+",
+              r"\bqueue\b", r"\badd\s+(to\s+)?queue\b",
+              r"\bwhat'?s?\s+trending\b", r"\bwhat\s+is\s+trending\b", r"\bdiscover\s+(trending|songs|music)",
+              r"\bmy\s+top\s+songs\b", r"\btop\s+songs\b", r"\bmost\s+played\b",
+              r"\bmood\s*(music|playlist)?\b", r"\bvibe\b", r"\bsomething\s+chill\b", r"\bsomething\s+focus\b",
+              r"\bradio\b", r"\btrending\b", r"\bviral\b.*\bsong\b", r"\bnew\s+songs\b",
+              r"\bchill\b.*\bmusic\b", r"\bfocus\b.*\bmusic\b", r"\bparty\b.*\bmusic\b", r"\bworkout\b.*\bmusic\b"]),
+
+            ("research", True, "auto",
+             ["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "DATA"],
+             ["basic", "research", "data", "project"],
+             [r"\bresearch\b", r"\binvestigate\b", r"\bfind\s+out\s+about\b",
+              r"\blook\s+into\b", r"\bstudy\b", r"\banalyze\b", r"\bsurvey\b",
+              r"\bgrowth\b", r"\btrend\b", r"\bover\s+time\b", r"\bcompare\b",
+              r"\bversus\b", r"\bvs\.?\b", r"\bstatistics\b", r"\bchart\b"]),
+
+
+
+
 
             ("weather", True, "auto",
              ["BASE", "PERSONALITY", "WEATHER"],
@@ -141,4 +167,5 @@ active_sections=["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "DATA", 
             "system", "file", "project", "scaffold", "visual_test",
             "document", "screenshot", "notification", "design_mcp",
             "opencode", "git", "github", "browser", "fetch",
+            "research", "data", "music",
         ]

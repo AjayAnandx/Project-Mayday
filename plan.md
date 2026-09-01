@@ -5111,7 +5111,8 @@ All 5 phases complete:
 - Layout: 	opics\{slug}\ subfolder inside the Mayday Research root
 - Promote semantics: research record KEPT as completed archive with moved_to_project property
 - Search depth: topic metadata + full text of notes/*.md + report.md + artifact filenames
-- Graph representation: new esearch node type (own color/shape), NOT project type
+- Graph representation: new 
+esearch node type (own color/shape), NOT project type
 
 ### Target Layout
 ``
@@ -5234,7 +5235,7 @@ MODIFY:
 
 ## Need to Implement: Music — Playback, Vibe Engine, History & Trending (ytmusicapi + yt-dlp)
 
-### Status — NEED TO IMPLEMENT (stack approved Aug 2026: open-source, no API key)
+### Status — IMPLEMENTED (stack approved Aug 2026: open-source, no API key)
 
 ### Goal
 Mayday plays songs on demand (text + voice), builds per-song radio mixes and mood playlists, auto-tracks play history with language detection, and surfaces new trending songs matching user taste — via chat/voice tools and a dashboard widget.
@@ -5342,7 +5343,7 @@ Same WebSocket engine → identical tool flow from both channels; tool summary d
 
 ---
 
-## Chart Visualization with Auto-Open in New Tab (Research + Projects) — Plan for Aug 11
+## Chart Visualization with Auto-Open in New Tab (Research + Projects) — Implemented
 
 ### Goal
 Enable Mayday to collect data points for both Research topics and Projects, generate interactive charts (bar/pie/line), and automatically open them in a new browser tab when the LLM generates them.
@@ -5676,9 +5677,9 @@ def suggest_chart_type(data_points: list, context: str = "") -> str:
 
 ---
 
-## DSPy System Prompt Optimization — Research Report (Aug 13)
+## DSPy System Prompt Optimization — Implemented
 
-### Status — PLANNED (research complete; detailed Module A + Module B implementation plan saved to `DSPY.txt`; no code changes yet)
+### Status — IMPLEMENTED (research complete; detailed Module A + Module B implementation plan saved to `DSPY.txt`; no code changes yet)
 
 ### Goal
 Apply DSPy ("program, don't prompt") techniques to Mayday's system prompt + tool-calling architecture to: (1) reduce input tokens, (2) improve tool-call accuracy, (3) keep/improve latency, (4) make prompt enhancement systematic instead of hand-edited.

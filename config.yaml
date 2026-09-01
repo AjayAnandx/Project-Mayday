@@ -39,6 +39,12 @@ magma:
 # the local 0.5b model. Master kill-switch off by default; when enabled, the
 # dspy path replaces the hand-written few-shot prompts in tiers.py and falls
 # back to them on any error. Artifacts in backend/dspy/artifacts (PII-gated).
+music:
+  cookies_file: ""  # optional path to YouTube cookies.txt for yt-dlp (429 / "Sign in to confirm" bypass)
+  history_path: music_history.json
+  # ytmusicapi is unauthenticated; yt-dlp is open-source. No API keys.
+  # Startup logs yt-dlp --version + ytmusicapi version; audio-only fallback accepted when progressive unavailable.
+
 data:
   storage_path: data.json
   projects_dir: C:\Users\hp\Projects\madays projects

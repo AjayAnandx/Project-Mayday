@@ -20,12 +20,20 @@ export interface DashboardOperation {
   details?: Record<string, unknown>
 }
 
+export interface DashboardMusic {
+  total_plays: number
+  language_stats: Record<string, number>
+  top_week: { video_id: string; title: string; artist: string; language: string; thumb: string; plays: number; last_played: string }[]
+  top_all: { video_id: string; title: string; artist: string; language: string; thumb: string; plays: number; last_played: string }[]
+}
+
 export interface DashboardData {
   stats: DashboardStats
   upcoming_events: Event[]
   open_todos: Todo[]
   overdue_todos: Todo[]
   recent_activity: DashboardOperation[]
+  music?: DashboardMusic
 }
 
 export interface AiNewsArticle {

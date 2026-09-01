@@ -29,6 +29,7 @@ config.local.yaml
 *.pem
 *.key
 uploads/
+music_history.json
 # DSPy compiled artifacts (PII-gated, generated offline) — not committed
 dspy_artifacts/
 backend/dspy/artifacts/

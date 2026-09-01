@@ -121,6 +121,9 @@ export function useChat() {
               setMessages(msgs)
             }
             break
+          case 'music':
+            window.dispatchEvent(new CustomEvent('mayday-music', { detail: data }))
+            break
         }
       },
       onOpen: () => {
@@ -169,6 +172,10 @@ export function useChat() {
     addMessage({ id: nextId(), role: 'assistant', content })
   }, [addMessage])
 
+  const sendMusicCommand = useCallback((payload: { action: string; video_id?: string; title?: string; artist?: string; thumb?: string; language?: string }) => {
+    wsRef.current?.sendMusicCommand(payload)
+  }, [])
+
   return {
     messages,
     connected,
@@ -181,5 +188,6 @@ export function useChat() {
     confirmSkill,
     dismissSkill,
     addSystemMessage,
+    sendMusicCommand,
   }
 }

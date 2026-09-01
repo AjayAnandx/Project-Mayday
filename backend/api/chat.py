@@ -183,6 +183,15 @@ Do not say you lack access. You have the tools.
 Be concise, helpful, and friendly. When you use a tool, explain what you did.
 You also have PDF document tools: list_pdfs, search_pdfs, read_pdf, upload_pdf, delete_pdf, rename_pdf. To create a real PDF from a markdown file, use convert_md_to_pdf (never write markdown with a .pdf extension).
 Relevant PDF content is automatically injected into your context when appropriate — use search_pdfs() only when you need to find something specific in uploaded documents.
+You also have music tools via YouTube Music (ytmusicapi + yt-dlp):
+- play_song, queue_song, play_radio, play_mood, discover_trending, my_top_songs (basic playback/history)
+- open_video_popup: open current or given video in separate window — each call opens a NEW TAB (multi-tab). Use when user says "open video", "pop out video", "show in new window", "open on youtube", "open tutorial A and tutorial B"
+- search_youtube_videos: advanced search with sort_by (relevance/view_count/rating/upload_date) + time_filter (today/week/month/year) + trusted_only flag for trusted channels
+- recommend_best_video: compare top 3 videos for a query and autoplay the best for balanced understanding — use for "LLM evaluation tutorial", "which video is best", "recommend a tutorial" (always explain why #1 wins)
+- add_favorite / remove_favorite / list_favorites / toggle_favorite / play_favorites: favorites saved in memory graph (when user says "add to favorites", "my favorites", "play my favorites")
+- add_trusted_channel / remove_trusted_channel / list_trusted_channels: trusted YouTube channels saved in memory (when user says "add @TamilBeats to trusted", "save this channel", "trusted channels")
+- list_popout_tabs / close_popout_tab / focus_popout_tab / toggle_popout_tab: multi-tab control — each tab is an independent YouTube window with its own pause/play. Use list_popout_tabs to see open tabs, then toggle/close/focus by tab_id. You can open multiple tabs by calling open_video_popup multiple times in one turn (e.g. two tutorials).
+Use play_song for "play X" (supports "play my favorites" shorthand via play_favorites). For mood use play_mood, radio play_radio, discovery discover_trending, history my_top_songs. For video popup use open_video_popup (each call = new tab). For topic search with views/likes/newest/trusted use search_youtube_videos. For "which is best / recommend" use recommend_best_video — it compares 3 and autoplays #1. If a song title is ambiguous (could be song vs tutorial video), ASK "Did you mean the song 'X' or the tutorial video 'X'?" and wait for choice. Music language auto-detected (Tamil/Hindi/English) and biases trending.
 Current date and time (your local timezone): {date}"""
 
 PERSONALITY_INSTRUCTIONS = """
@@ -572,6 +581,8 @@ CORE_TOOL_NAMES = {
     # Design tools
     *DESIGN_TOOL_NAMES,
     *DESIGN_MCP_TOOL_NAMES,
+    # Music — playback, vibe engine, history & trending (ytmusicapi + yt-dlp)
+    "play_song", "play_radio", "play_mood", "queue_song", "discover_trending", "my_top_songs",
 }
 
 BASIC_TOOL_NAMES = {
@@ -648,6 +659,14 @@ DATA_TOOL_NAMES = {
     "export_research_dataset", "list_research_outputs",
 }
 
+MUSIC_TOOL_NAMES = {
+    "play_song", "play_radio", "play_mood", "queue_song", "discover_trending", "my_top_songs",
+    "open_video_popup", "search_youtube_videos", "recommend_best_video",
+    "add_favorite", "remove_favorite", "list_favorites", "toggle_favorite", "play_favorites",
+    "add_trusted_channel", "remove_trusted_channel", "list_trusted_channels",
+    "list_popout_tabs", "close_popout_tab", "focus_popout_tab", "toggle_popout_tab",
+}
+
 SCREENSHOT_TOOL_NAMES = {
     "list_screenshots", "get_screenshot", "delete_screenshot",
 }
@@ -706,6 +725,7 @@ GROUP_SETS = {
     "research": RESEARCH_TOOL_NAMES,
     "data": DATA_TOOL_NAMES,
     "design_mcp": DESIGN_MCP_TOOL_NAMES,
+    "music": MUSIC_TOOL_NAMES,
 }
 
 
@@ -1303,6 +1323,62 @@ async def _run_engine(
                             if event:
                                 kg.sync_event(event)
 
+                # ---- Music payload extraction ----
+                # Tools return "Human summary\n{\"music\": {action, track, queue}}"
+                # Extract music JSON, keep summary for tool bubble, emit separate music WS msg
+                _music_payload = None
+                _music_summary = result
+                if '"music"' in result:
+                    # try last line JSON first
+                    _candidate = None
+                    # result may be summary + "\n" + JSON object
+                    if "\n" in result:
+                        last = result.rsplit("\n", 1)[-1].strip()
+                        if last.startswith("{") and '"music"' in last:
+                            _candidate = last
+                    if not _candidate and result.strip().startswith("{"):
+                        _candidate = result.strip()
+                    if _candidate:
+                        try:
+                            _p = json.loads(_candidate)
+                            if isinstance(_p, dict) and "music" in _p:
+                                _music_payload = _p["music"]
+                                _music_summary = result[: result.rfind(_candidate)].strip() or _music_summary.split("\n")[0]
+                        except Exception:
+                            pass
+                    if _music_payload is None:
+                        # fallback: extract first {..."music"...} block
+                        try:
+                            import re as _re
+                            m = _re.search(r'\{"music"\s*:\s*\{.*\}\s*\}', result, re.DOTALL)
+                            if m:
+                                _p = json.loads(m.group(0))
+                                # actually outer is {"music": {...}}, need to wrap
+                                # m already is {"music": {...}} slice — try full object
+                                # Try to parse larger: from m.start to matching }
+                                # Simpler: try JSON load of substring starting at first {
+                                s = result[result.find('{"music"'):]
+                                # find balanced braces
+                                depth = 0
+                                end = -1
+                                for i, ch in enumerate(s):
+                                    if ch == "{":
+                                        depth += 1
+                                    elif ch == "}":
+                                        depth -= 1
+                                        if depth == 0:
+                                            end = i + 1
+                                            break
+                                if end > 0:
+                                    _p = json.loads(s[:end])
+                                    if isinstance(_p, dict) and "music" in _p:
+                                        _music_payload = _p["music"]
+                                        _music_summary = result[: result.find('{"music"')].strip() or _music_summary.split("\n")[0]
+                        except Exception:
+                            pass
+                    if _music_payload is not None:
+                        result = _music_summary
+
                 tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
 
                 try:
@@ -1332,6 +1408,31 @@ async def _run_engine(
                     pass
 
                 await _send_json(ws, tool_msg)
+                # Emit music WS message after tool_call bubble (player auto-plays)
+                if _music_payload is not None:
+                    try:
+                        _track = _music_payload.get("track") or {}
+                        _queue = _music_payload.get("queue") or []
+                        _action = _music_payload.get("action") or "play"
+                        _tab_id = _music_payload.get("tab_id")
+                        _is_playing = _music_payload.get("is_playing")
+                        # If stream missing but video_id present, re-resolve (expired URL case)
+                        if _track.get("video_id") and not _track.get("stream_url"):
+                            try:
+                                from backend.core.youtube_client import resolve_stream as _rs
+                                _r = _rs(_track["video_id"])
+                                if not _r.get("error") and _r.get("stream_url"):
+                                    _track["stream_url"] = _r["stream_url"]
+                            except Exception:
+                                pass
+                        _payload = {"type": "music", "action": _action, "track": _track, "queue": _queue}
+                        if _tab_id:
+                            _payload["tab_id"] = _tab_id
+                        if _is_playing is not None:
+                            _payload["is_playing"] = _is_playing
+                        await _send_json(ws, _payload)
+                    except Exception as _me:
+                        logger.warning("Failed to emit music WS: %s", _me)
             except Exception as e:
                 logger.exception("Tool '%s' crashed: %s", fn_name, e)
                 await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": f"Internal error: {e}"})
@@ -1599,6 +1700,44 @@ async def chat_websocket(websocket: WebSocket):
                         "type": "conversation_loaded",
                         "conversation": conv_data,
                     })
+            elif msg.get("type") == "music_command":
+                # Widget/tab click-to-play: re-resolve stream and emit music WS
+                # Payload: {action:"play"|"queue", video_id, title, artist, thumb, language}
+                try:
+                    action = (msg.get("action") or "play").strip() or "play"
+                    vid = (msg.get("video_id") or msg.get("videoId") or "").strip()
+                    title = (msg.get("title") or "").strip() or "Unknown"
+                    artist = (msg.get("artist") or "").strip() or "Unknown"
+                    thumb = (msg.get("thumb") or msg.get("thumbnail") or "").strip()
+                    language = (msg.get("language") or "").strip() or "other"
+                    if not vid:
+                        await _send_json(websocket, {"type": "error", "content": "music_command: missing video_id"})
+                    else:
+                        # detect language if not provided
+                        if language == "other" and title != "Unknown":
+                            try:
+                                from backend.core.youtube_client import detect_language as _dl
+                                language = _dl(title, artist)
+                            except Exception:
+                                pass
+                        stream_url = ""
+                        try:
+                            from backend.core.youtube_client import resolve_stream as _rs
+                            loop = asyncio.get_running_loop()
+                            res = await loop.run_in_executor(None, lambda: _rs(vid))
+                            if not res.get("error"):
+                                stream_url = res.get("stream_url", "")
+                            else:
+                                await _send_json(websocket, {"type": "error", "content": res["error"]})
+                                # still emit without stream so player shows error and can skip
+                        except Exception as e:
+                            logger.warning("music_command resolve failed for %s: %s", vid, e)
+                        track = {"video_id": vid, "title": title, "artist": artist, "thumb": thumb, "language": language, "stream_url": stream_url}
+                        # queue is client-side; server just emits single track
+                        await _send_json(websocket, {"type": "music", "action": action, "track": track, "queue": []})
+                except Exception as e:
+                    logger.warning("music_command handler error: %s", e)
+                    await _send_json(websocket, {"type": "error", "content": f"music_command error: {e}"})
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except asyncio.CancelledError:
