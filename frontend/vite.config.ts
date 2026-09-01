@@ -23,6 +23,7 @@ export default defineConfig({
       '/pdfs': 'http://localhost:8772',
       '/research': 'http://localhost:8772',
       '/projects': 'http://localhost:8772',
+      '/uploads': 'http://localhost:8772',
     },
   },
 })

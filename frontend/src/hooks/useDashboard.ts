@@ -47,3 +47,13 @@ export function useDashboard(toolCallCount: number): UseDashboardReturn {
 
   return { data, weather, aiNews, loading, error, refresh }
 }
+
+export function useMusicStats() {
+  const [stats, setStats] = useState<import('../types/music').HistoryStats | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/music/history/stats').then(r => r.json()).then(d => { if (!cancelled) setStats(d) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+  return stats
+}

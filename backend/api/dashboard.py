@@ -57,6 +57,21 @@ def get_dashboard():
 
     recent = op_log.query(limit=10)
 
+    # Music block — top played + language mix (additive, never breaks dashboard)
+    music_block = None
+    try:
+        from backend.core.music_history import get_music_history
+        mh = get_music_history()
+        music_block = {
+            "total_plays": mh.total_plays(),
+            "language_stats": mh.language_stats(),
+            "top_week": mh.top_played(n=5, days=7),
+            "top_all": mh.top_played(n=5),
+        }
+    except Exception as e:
+        logger.warning("dashboard music block failed: %s", e)
+        music_block = {"total_plays": 0, "language_stats": {}, "top_week": [], "top_all": []}
+
     return {
         "stats": {
             "open_todos": len(open_todos),
@@ -71,6 +86,7 @@ def get_dashboard():
         "open_todos": sorted(open_todos, key=lambda t: t.get("due_date") or "9999-12-31")[:5],
         "overdue_todos": sorted(overdue_todos, key=lambda t: t.get("due_date") or "")[:5],
         "recent_activity": recent,
+        "music": music_block,
     }
 
 

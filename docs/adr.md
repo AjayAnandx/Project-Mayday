@@ -17,6 +17,7 @@
 | 13 | Electron wrapper | Jun 2026 | Accepted |
 | 14 | Skills system (markdown + YAML skill files) | Jun 28 2026 | Proposed |
 | 15 | No authentication / single-user | Jun 2026 | Accepted |
+| 16 | Music stack (ytmusicapi + yt-dlp, open-source, no API key) | Aug 2026 | Accepted |
 
 ---
 
@@ -536,20 +537,49 @@ All 4 file tools (`read_file`, `write_file`, `append_file`, `list_directory`) ca
 
 ---
 
+## ADR-16: Music Stack (ytmusicapi + yt-dlp, Open-Source, No API Key)
+
+**Status**: Accepted | **Date**: 2026-08-31
+
+### Context
+Need on-demand song playback, per-song radio, mood playlists, play-history with language detection, and trending discovery — via chat + voice + dashboard widget. Paid APIs (Spotify, YouTube Data) require API keys, quotas, and iframe restrictions. Need a zero-cost, offline-capable stack.
+
+### Decision
+**`ytmusicapi` (MIT, pip) + `yt-dlp` (Unlicense, pip, ships Windows exe).**
+
+- `ytmusicapi`: `search(filter="songs")` → videoId, `get_watch_playlist` → radio, `get_mood_categories` / `get_mood_playlists` → vibe engine, `get_charts(country="IN")` → trending
+- `yt-dlp`: `yt-dlp -g -f best` → progressive stream URL (audio+video combined, no ffmpeg merge, ~480p mini video window via native `<video>`)
+- Language: Unicode-script heuristic (Tamil `\u0b80-\u0bff`, Devanagari) + romanized-Tamil artist/title list + LLM tag assist
+- Stream URLs expire ~6h → re-resolve on replay; optional `music.cookies_file` → `yt-dlp --cookies` for rate-limit bypass; 2 retries with backoff
+- No brain node for music — history is a dedicated `music_history.json` store (pattern like `data.json` + `operation_log`), queue is session-only
+
+### Consequences
++ **Zero cost, no key, no quota, no iframe lockdown** — pure open-source, PIP install
++ **Rich catalog** — YouTube Music has Tamil/Hindi/English catalog with mood playlists
++ **Single binary** — `yt-dlp.exe` via pip, documented in `CLAUDE.md` / `requirements.txt`
++ **Unofficial libs** — Google may break them; mitigation: `pip -U ytmusicapi yt-dlp`, fallback seam in `youtube_client.py` (graceful error, not crash)
++ **Stream expiry / rate-limit** — handled via re-resolve + optional cookies + human-readable errors
++ **No downloader/cache** — intentional scope guardrail; plays stream only
+
+---
+
 ## Summary Statistics
 
 | Metric | Count |
 |--------|-------|
-| REST API endpoints | 37 |
+| REST API endpoints | 40 (37 + 3 music: POST history, GET history/stats, GET trending) |
 | WebSocket endpoints | 3 |
-| Total API endpoints | 40 |
-| Local LLM tools | 37 (in FUNCTION_MAP) |
+| Total API endpoints | 43 |
+| WebSocket message types | 5 → 6 (+ `music`) + inbound `music_command` |
+| Local LLM tools | 43 (37 + 6 music: play_song, play_radio, play_mood, queue_song, discover_trending, my_top_songs) |
 | MCP tools (static lazy defs) | 22 (18 selenium + 3 exa + 1 fetch) |
 | MCP tools (dynamic eager) | ~27 (12 git + ~15 github) |
-| Total LLM-accessible tools | ~86 |
-| Backend Python source files | 28 (~3,800 lines) |
-| Frontend TypeScript source files | 27 (~3,000 lines) |
+| Total LLM-accessible tools | ~92 |
+| Backend Python source files | 31 (~4,100 lines) |
+| Frontend TypeScript source files | 31 (~3,300 lines) |
 | In-memory indexes | 14+ (3 NgramIndex + 1 trie + 6 KG + 5 operation log) |
 | MCP servers configured | 5 (git, github, selenium, exa, fetch) |
-| Thread locks | 7 distinct lock objects across all modules |
+| Thread locks | 8 distinct lock objects across all modules |
 | Frontend dependencies | 10 packages (~270 KB gzipped) |
+| Music history store | `music_history.json` (thread-safe, Counter-aggregated, language/day filters) |
+| Music stream | `yt-dlp -g -f best` progressive URL, 15s timeout, Windows CREATE_NO_WINDOW |

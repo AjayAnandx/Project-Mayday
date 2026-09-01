@@ -55,6 +55,13 @@ from backend.functions.visual_testing import (
 from backend.functions.awareness_functions import (
     ask_user, record_answer, person_brief,
 )
+from backend.functions.media_functions import (
+    play_song, play_radio, play_mood, queue_song, discover_trending, my_top_songs,
+    add_favorite, remove_favorite, list_favorites, toggle_favorite, play_favorites,
+    add_trusted_channel, remove_trusted_channel, list_trusted_channels,
+    open_video_popup, search_youtube_videos, recommend_best_video,
+    list_popout_tabs, close_popout_tab, focus_popout_tab, toggle_popout_tab,
+)
 from backend.functions.exa_functions import (
     web_search_exa, web_fetch_exa, web_search_advanced_exa,
 )
@@ -1949,6 +1956,315 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "play_song",
+            "description": "Play a song immediately (searches YouTube Music, resolves stream, starts playback in PlayerBar). Use for 'play X', 'play virtual insanity by jamiroquai'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "artist": {"type": "string", "description": "Artist name (e.g. 'jamiroquai')"},
+                    "track": {"type": "string", "description": "Song title (e.g. 'virtual insanity')"},
+                    "song": {"type": "string", "description": "Alias for track — free-form song title"},
+                    "query": {"type": "string", "description": "Alias — free-form search query (artist + track)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "play_radio",
+            "description": "Play a radio mix seeded by a track (finds seed → generates 20-track radio queue and starts it). Use for 'radio like jamiroquai', 'make a radio from X'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "seed_track": {"type": "string", "description": "Seed song title (e.g. 'virtual insanity')"},
+                    "seed": {"type": "string", "description": "Alias for seed_track"},
+                    "query": {"type": "string", "description": "Alias — free-form seed query"},
+                    "artist": {"type": "string", "description": "Optional artist to narrow seed search"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "play_mood",
+            "description": "Play a mood/genre playlist (chill, focus, party, workout, romantic, etc.). Maps to YouTube Music mood catalog, queues playlist and starts it. Use for 'something chill', 'play focus music'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mood": {"type": "string", "description": "Mood/genre (chill, focus, party, workout, romantic, energetic, sleep, etc.). Defaults to chill."},
+                    "count": {"type": "integer", "description": "Number of tracks to queue (default 15)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "queue_song",
+            "description": "Add a song to the queue without interrupting current playback. Use for 'queue X', 'add X to queue'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "artist": {"type": "string", "description": "Artist name"},
+                    "track": {"type": "string", "description": "Song title"},
+                    "song": {"type": "string", "description": "Alias for track"},
+                    "query": {"type": "string", "description": "Alias — free-form query"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "discover_trending",
+            "description": "Show trending / new songs from YouTube Music charts, biased by your listening history language and top artists. Use for 'what's trending', 'what's trending in Tamil', 'discover new songs'. Say 'play #N' to play a pick.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "language": {"type": "string", "description": "Optional language filter (ta, hi, en). Defaults to your dominant history language."},
+                    "count": {"type": "integer", "description": "Number of picks (default 10)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "my_top_songs",
+            "description": "Show your most-played songs from play history, optionally filtered by language. Use for 'my top songs', 'what do I listen to most', 'top Tamil songs'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "n": {"type": "integer", "description": "Number of songs to list (default 10)"},
+                    "language": {"type": "string", "description": "Optional language filter (ta, hi, en, other)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_video_popup",
+            "description": "Open the currently playing video (or given video_id) in a separate popup window. Use when user says 'open video', 'pop out video', 'show video in new window', 'open on youtube'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "video_id": {"type": "string", "description": "Optional YouTube video_id to open. Omit to pop the current track."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_youtube_videos",
+            "description": "Search YouTube videos by topic with rich filters: top views/likes, newest, trusted channels. Use for 'search Tamil melody 2024', 'find most viewed Tamil songs', 'new songs from my trusted channel', 'top rated viewed video on AI'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search topic, e.g. 'Tamil melody 2024', 'A R Rahman hits'"},
+                    "sort_by": {"type": "string", "enum": ["relevance", "view_count", "rating", "upload_date"], "description": "Sort order: relevance (default), view_count (most viewed), rating (most liked), upload_date (newest first)"},
+                    "time_filter": {"type": "string", "enum": ["any", "today", "week", "month", "year"], "description": "Filter by upload recency (default any)"},
+                    "trusted_only": {"type": "boolean", "description": "If true, only results from your saved trusted channels"},
+                    "max_results": {"type": "integer", "description": "Max results (default 15, max 30)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_favorite",
+            "description": "Add a song to your favorites (saved in memory). Use when user says 'add to favorites', 'save this song', 'favorite this track'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "video_id": {"type": "string", "description": "YouTube video_id (if known)"},
+                    "title": {"type": "string", "description": "Song title fallback if video_id missing"},
+                    "artist": {"type": "string", "description": "Artist name"},
+                    "thumb": {"type": "string", "description": "Thumbnail URL (optional)"},
+                    "language": {"type": "string", "description": "Language tag ta/hi/en/other"},
+                    "duration": {"type": "string", "description": "Duration e.g. 3:45"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_favorite",
+            "description": "Remove a song from favorites by video_id or title.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "video_id": {"type": "string", "description": "YouTube video_id"},
+                    "title": {"type": "string", "description": "Song title to match (if video_id missing)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_favorites",
+            "description": "List your favorite songs, optionally filtered by language. Use for 'show my favorites', 'list favorites', 'my Tamil favorites'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "language": {"type": "string", "description": "Language filter ta/hi/en/other (optional)"},
+                    "limit": {"type": "integer", "description": "Max results (default 20)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "toggle_favorite",
+            "description": "Toggle favorite for current or given song (add if not fav, remove if fav). Used by PlayerBar heart button and 'favorite this' voice commands.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "video_id": {"type": "string", "description": "YouTube video_id"},
+                    "title": {"type": "string", "description": "Song title fallback"},
+                    "artist": {"type": "string", "description": "Artist"},
+                    "thumb": {"type": "string", "description": "Thumb url"},
+                    "language": {"type": "string", "description": "Language"},
+                    "duration": {"type": "string", "description": "Duration"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "play_favorites",
+            "description": "Play/queue songs from your favorites. Use for 'play my favorites', 'play favorites shuffle', 'play my Tamil favorites'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer", "description": "Number of tracks to queue (default 15)"},
+                    "shuffle": {"type": "boolean", "description": "Shuffle favorites (default true)"},
+                    "language": {"type": "string", "description": "Language filter ta/hi/en/other (optional)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_trusted_channel",
+            "description": "Save a trusted YouTube channel/handle to memory for filtered searches. Use when user says 'add @TamilBeats to trusted', 'trust channel Sony Music South', 'save channel ...'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "description": "YouTube handle (@name), URL, or channel name"},
+                    "notes": {"type": "string", "description": "Optional notes about this channel"},
+                },
+                "required": ["channel"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_trusted_channel",
+            "description": "Remove a trusted YouTube channel from memory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "description": "Channel handle or name to remove"},
+                },
+                "required": ["channel"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_trusted_channels",
+            "description": "List all saved trusted YouTube channels.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recommend_best_video",
+            "description": "Compare top 3 YouTube videos for a query and autoplay the best for balanced understanding (relevance+clarity+depth+recency+trust). Use for 'LLM evaluation tutorial', 'which video is best', 'recommend a tutorial'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search topic, e.g. 'LLM evaluation tutorial'"},
+                    "trusted_only": {"type": "boolean", "description": "If true, only videos from your trusted channels"},
+                    "max_results": {"type": "integer", "description": "Max candidates to consider (default 8)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_popout_tabs",
+            "description": "List all open popout video tabs (each is a separate YouTube window). Use to see open tutorial/video windows before toggling or closing. Each call to open_video_popup creates a new tab.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_popout_tab",
+            "description": "Close a specific popout tab by tab_id (from list_popout_tabs).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string", "description": "Tab ID (tab_...) from list_popout_tabs"},
+                },
+                "required": ["tab_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "focus_popout_tab",
+            "description": "Bring a popout tab window to front (focus).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string", "description": "Tab ID"},
+                },
+                "required": ["tab_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "toggle_popout_tab",
+            "description": "Toggle play/pause for a specific popout tab (each tab independent). Use when user says 'pause that tutorial', 'play the second tab', 'pause tab ...'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string", "description": "Tab ID"},
+                },
+                "required": ["tab_id"],
+            },
+        },
+    },
 ]
 def person_brief(name: str) -> str:
     """Return Mayday's aggregated brief about a named person (relation, when first/last
@@ -2087,6 +2403,27 @@ FUNCTION_MAP = {
     "record_answer": record_answer,
     "person_brief": person_brief,
     "mark_conversation_important": mark_conversation_important,
+    "play_song": play_song,
+    "play_radio": play_radio,
+    "play_mood": play_mood,
+    "queue_song": queue_song,
+    "discover_trending": discover_trending,
+    "my_top_songs": my_top_songs,
+    "open_video_popup": open_video_popup,
+    "search_youtube_videos": search_youtube_videos,
+    "list_popout_tabs": list_popout_tabs,
+    "close_popout_tab": close_popout_tab,
+    "focus_popout_tab": focus_popout_tab,
+    "toggle_popout_tab": toggle_popout_tab,
+    "add_favorite": add_favorite,
+    "remove_favorite": remove_favorite,
+    "list_favorites": list_favorites,
+    "toggle_favorite": toggle_favorite,
+    "play_favorites": play_favorites,
+    "add_trusted_channel": add_trusted_channel,
+    "remove_trusted_channel": remove_trusted_channel,
+    "list_trusted_channels": list_trusted_channels,
+    "recommend_best_video": recommend_best_video,
 }
 
 
@@ -2111,6 +2448,24 @@ def get_tool_definitions(mcp_tools: list[dict] | None = None) -> list[dict]:
 # Argument repair for sloppy LLM tool calls: alias names, fill defaults,
 # drop unknown kwargs. Kept in one place so every local tool benefits.
 _PARAM_ALIASES: dict[str, dict[str, str]] = {
+    "play_song": {"track": "song", "query": "song", "song_name": "song", "title": "song", "name": "song"},
+    "play_radio": {"track": "seed_track", "song": "seed_track", "query": "seed_track", "title": "seed_track", "seed_song": "seed_track"},
+    "play_mood": {"genre": "mood", "vibe": "mood", "style": "mood"},
+    "queue_song": {"track": "song", "query": "song", "song_name": "song", "title": "song", "name": "song"},
+    "discover_trending": {"lang": "language", "count": "count", "limit": "count", "n": "count"},
+    "my_top_songs": {"count": "n", "limit": "n", "lang": "language"},
+    "open_video_popup": {"video": "video_id", "id": "video_id", "song_id": "video_id"},
+    "search_youtube_videos": {"q": "query", "topic": "query", "sort": "sort_by", "order": "sort_by", "views": "sort_by", "time": "time_filter", "trusted": "trusted_only", "limit": "max_results", "count": "max_results", "n": "max_results"},
+    "add_favorite": {"song": "title", "name": "title", "track": "title", "video": "video_id", "id": "video_id"},
+    "remove_favorite": {"song": "title", "name": "title", "video": "video_id", "id": "video_id"},
+    "toggle_favorite": {"song": "title", "name": "title", "video": "video_id", "id": "video_id"},
+    "play_favorites": {"count": "count", "n": "count", "limit": "count", "lang": "language"},
+    "add_trusted_channel": {"channel_name": "channel", "name": "channel", "handle": "channel", "url": "channel"},
+    "remove_trusted_channel": {"channel_name": "channel", "name": "channel", "handle": "channel", "url": "channel"},
+    "recommend_best_video": {"q": "query", "topic": "query", "limit": "max_results", "count": "max_results"},
+    "close_popout_tab": {"id": "tab_id", "tab": "tab_id"},
+    "focus_popout_tab": {"id": "tab_id", "tab": "tab_id"},
+    "toggle_popout_tab": {"id": "tab_id", "tab": "tab_id"},
     "create_project": {"project": "name", "project_name": "name", "desc": "description"},
     "resume_project": {"project": "name", "project_name": "name"},
     "update_project_status": {"project": "name", "project_name": "name"},
@@ -2144,6 +2499,13 @@ _TOOL_DEFAULTS: dict[str, dict[str, object]] = {
     "add_project_note": {"filename": "notes.md"},
     "add_research_note": {"filename": "notes.md"},
     "create_research": {"type": "market"},
+    "play_mood": {"mood": "chill"},
+    "discover_trending": {"count": 10},
+    "my_top_songs": {"n": 10},
+    "search_youtube_videos": {"sort_by": "relevance", "time_filter": "any", "max_results": 15},
+    "play_favorites": {"count": 15, "shuffle": True},
+    "list_favorites": {"limit": 20},
+    "recommend_best_video": {"max_results": 8},
 }
 
 

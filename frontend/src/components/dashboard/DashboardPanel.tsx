@@ -6,9 +6,10 @@ import { UpcomingEvents } from './UpcomingEvents'
 import { RecentActivity } from './RecentActivity'
 import { WeatherWidget } from './WeatherWidget'
 import { AINewsWidget } from './AINewsWidget'
+import { MusicWidget } from './MusicWidget'
 
 export function DashboardPanel() {
-  const { toolCallCount } = useChatContext()
+  const { toolCallCount, sendMusicCommand } = useChatContext()
   const { data, weather, aiNews, loading, error, refresh } = useDashboard(toolCallCount)
 
   return (
@@ -61,6 +62,19 @@ export function DashboardPanel() {
               <UpcomingEvents events={data.upcoming_events} />
               <AINewsWidget aiNews={aiNews} />
             </div>
+
+            {data.music && (
+              <MusicWidget
+                historyStats={{
+                  total_plays: data.music.total_plays,
+                  language_stats: data.music.language_stats,
+                  most_played_artists: [],
+                  top_all: data.music.top_all,
+                  top_week: data.music.top_week,
+                }}
+                onPlayTrack={(track) => sendMusicCommand({ action: 'play', ...track })}
+              />
+            )}
 
             <RecentActivity operations={data.recent_activity} />
           </div>

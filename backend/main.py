@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications, location, projects, dashboard, documents, data_import
+from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications, location, projects, dashboard, documents, data_import, music
 from backend.api import awareness
 from backend.api.research import router as research_router
 from backend.voice import router as voice_router
@@ -24,6 +24,30 @@ async def lifespan(app: FastAPI):
     from backend.core.data_store import get_store
     get_store()
     logger.info("Data store initialized")
+    # Music stack version probe (log-only, never blocks startup)
+    try:
+        import subprocess as _sp
+        _v = _sp.run(
+            ["python", "-m", "yt_dlp", "--version"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=_sp.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        if _v.returncode == 0 and _v.stdout.strip():
+            logger.info("yt-dlp %s", _v.stdout.strip())
+        else:
+            logger.info("yt-dlp version check: %s", (_v.stderr or _v.stdout or "unknown").strip()[:200])
+    except FileNotFoundError:
+        logger.info("yt-dlp not installed (pip install yt-dlp)")
+    except Exception as _e:
+        logger.warning("yt-dlp version probe failed: %s", _e)
+    try:
+        import ytmusicapi as _ytm
+        logger.info("ytmusicapi %s", getattr(_ytm, "__version__", "unknown"))
+    except ImportError:
+        logger.info("ytmusicapi not installed (pip install ytmusicapi)")
+    except Exception as _e:
+        logger.warning("ytmusicapi version probe failed: %s", _e)
+
     from backend.core.scheduler import get_scheduler
     scheduler = get_scheduler()
     task = asyncio.create_task(scheduler.run())
@@ -68,6 +92,7 @@ app.include_router(data_import.router)
 app.include_router(research_router)
 app.include_router(voice_router)
 app.include_router(awareness.router)
+app.include_router(music.router)
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
