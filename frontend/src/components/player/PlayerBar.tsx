@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, X, ListMusic, Repeat, Maximize2, Minimize2, Loader2, ExternalLink, PictureInPicture, Heart } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, X, ListMusic, Repeat, Maximize2, Minimize2, Loader2, ExternalLink, PictureInPicture, Heart, Infinity } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import type { MusicTrack } from '../../types/music'
 
@@ -11,6 +11,7 @@ interface PlayerBarProps {
   duration: number
   volume: number
   repeat: boolean
+  autoPlay?: boolean
   expanded: boolean
   needsGesture: boolean
   playError: string | null
@@ -23,6 +24,7 @@ interface PlayerBarProps {
   onSeek: (t: number) => void
   onVolume: (v: number) => void
   onToggleRepeat: () => void
+  onToggleAutoPlay?: () => void
   onClear: () => void
   onToggleQueue: () => void
   showQueue: boolean
@@ -42,8 +44,8 @@ function fmt(t: number) {
 }
 
 export function PlayerBar({
-  current, queue, isPlaying, currentTime, duration, volume, repeat, expanded, needsGesture, playError, resolving, setExpanded,
-  onPlay, onPause, onNext, onPrev, onSeek, onVolume, onToggleRepeat, onClear, onToggleQueue, showQueue, videoRef, audioRef,
+  current, queue, isPlaying, currentTime, duration, volume, repeat, autoPlay = true, expanded, needsGesture, playError, resolving, setExpanded,
+  onPlay, onPause, onNext, onPrev, onSeek, onVolume, onToggleRepeat, onToggleAutoPlay, onClear, onToggleQueue, showQueue, videoRef, audioRef,
   onOpenYouTube, onPopout, onToggleFavorite, isFavorite,
 }: PlayerBarProps) {
   const hasTrack = !!current
@@ -122,6 +124,11 @@ export function PlayerBar({
                   {current.language.toUpperCase()}
                 </span>
               )}
+              {((current as any)?.genre || (current as any)?.mood) && (current as any)?.genre !== current?.language && (
+                <span className="shrink-0 text-[9px] font-medium px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 max-w-[80px] truncate">
+                  {((current as any).genre || (current as any).mood).toString().slice(0,12)}
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-overlay1 truncate">{current?.artist || (queue.length ? `${queue.length} in queue` : '')}</p>
           </div>
@@ -145,9 +152,14 @@ export function PlayerBar({
           <button onClick={onNext} disabled={(queue.length <= 1 && !repeat) || resolving} className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-overlay1 hover:text-text hover:bg-white/10 disabled:opacity-30 transition-colors">
             <SkipForward className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
           </button>
-          <button onClick={onToggleRepeat} className={cn('w-7 h-7 rounded-full flex items-center justify-center transition-colors hidden sm:flex', repeat ? 'text-green bg-green/15' : 'text-overlay0 hover:text-text hover:bg-white/10')}>
+          <button onClick={onToggleRepeat} className={cn('w-7 h-7 rounded-full flex items-center justify-center transition-colors hidden sm:flex', repeat ? 'text-green bg-green/15' : 'text-overlay0 hover:text-text hover:bg-white/10')} title={repeat ? 'Repeat on' : 'Repeat off'}>
             <Repeat className="h-3.5 w-3.5" />
           </button>
+          {onToggleAutoPlay && (
+            <button onClick={onToggleAutoPlay} className={cn('w-7 h-7 rounded-full flex items-center justify-center transition-colors hidden sm:flex', autoPlay ? 'text-green bg-green/15' : 'text-overlay0 hover:text-text hover:bg-white/10')} title={autoPlay ? 'Auto-play next in genre: ON' : 'Auto-play next in genre: OFF'}>
+              <Infinity className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
 
         {/* volume + queue + expand + video actions */}

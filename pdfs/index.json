@@ -46,5 +46,41 @@
     "needs_ocr": false,
     "uploaded_at": "2026-08-11T16:08:11.019979+00:00",
     "summary": "COMPREHENSIVE PROJECT REPORT\nINTELLIGENT\nPHYSIOLOGICAL\nPATTERN-BASED\nSYSTEM\nFOR\nEARLY\nANAPHYLAXIS\nDETECTION\nAND\nAUTOMATED\nEMER-\nGENCY INTERVENTION SUPPORT\nTABLE OF CONTENTS\n1. Executive Summary\n2. Problem Condition and Occurrence\n3. Current Hospital Handling and Problems\n4. Proposed Solution\n5. System Architecture and Components\n6. Working of Each Component\n7. Research Paper Analysis\n8. Project Fit to Plan\n9. Future Advancements\n10. References\n1. EXECUTIVE SUMMARY\nAnaphylaxis is a severe,"
+  },
+  {
+    "id": "b9363c294965",
+    "filename": "Medibytes TDD.pdf",
+    "pages": 56,
+    "title": "Medibytes TDD",
+    "author": "",
+    "size": 609639,
+    "sha256": "221b120a1fa763636a4aa76e6aa808216be7346c9d9c612646f4a4f715797911",
+    "needs_ocr": false,
+    "uploaded_at": "2026-09-03T16:58:33.064586+00:00",
+    "summary": "Medibytes \u2014 Technical Design Document\nDraft 0.1 \u00b7 2 September 2026 \u00b7 Derived from Medibytes PRD v1.0 (29 August 2026)\nDesign for the MVP: voice dictation \u2192 structured discharge summary \u2192 the hospital's own\nform, for admitted patients.\nThis is a standalone document. It contains no cross-links and depends on no other file.\nSection references use \u00a7numbers. Requirement identifiers ( FR-* , NFR-* ) refer to the\nMedibytes PRD v1.0 and are reproduced in the traceability matrix at Appendix A.\n0. About"
+  },
+  {
+    "id": "0803e1ffe0d8",
+    "filename": "clinical_pipeline_production_architecture_with_plan.pdf",
+    "pages": 32,
+    "title": "clinical_pipeline_production_architecture_with_plan.pdf",
+    "author": "",
+    "size": 907042,
+    "sha256": "9f227b8346a4e204164cd1c045a53977f1a5f8f33dcbf5189e700b58b0ab11e1",
+    "needs_ocr": false,
+    "uploaded_at": "2026-09-03T17:01:30.800630+00:00",
+    "summary": "Target: On-premise, offline clinical dictation workflow for transforming physician audio into\nstructured clinical data and a finalized PDF/document.\nPrimary quality target: \u226598% on the agreed clinical extraction scorecard on a locked,\nphysician-verified test set before production release. The target is an acceptance criterion, not a\nguarantee. Clinical deployment must be blocked until the measured threshold is"
+  },
+  {
+    "id": "209c23fbade6",
+    "filename": "Markdown to PDF (4).pdf",
+    "pages": 39,
+    "title": "Markdown To PDF",
+    "author": "",
+    "size": 505559,
+    "sha256": "355a2b1d4f5d87410d858da8f1168688d17e3a53f1263724babc3b7d221b0523",
+    "needs_ocr": false,
+    "uploaded_at": "2026-09-03T17:03:53.551064+00:00",
+    "summary": "Clinical Audio \u2192 Structured Medical\nDocument\nProduction-Oriented Demo Architecture, Validation,\nEvaluation & Delivery Plan\nVersion: 1.0\nDate: September 2026\nPurpose: Client demonstration / MVP architecture\nImplementation constraint: ~\u20b91,00,000 total development budget\nDatabase: Not required for the initial demo\nPrimary flow: Audio \u2192 Preprocessing \u2192 Medical STT \u2192 Transcript QA \u2192 Template \u2192 LLM\nExtraction \u2192 Validation \u2192 Structured Output\n1. Executive Summary\nThis project is a clinical"
   }
 ]

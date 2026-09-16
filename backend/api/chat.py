@@ -1,3 +1,4 @@
+import hashlib
 import json
 import asyncio
 import logging
@@ -182,6 +183,8 @@ Rule of thumb: complex → Exa tools, simple URL fetch → fetch tool.
 Do not say you lack access. You have the tools.
 Be concise, helpful, and friendly. When you use a tool, explain what you did.
 You also have PDF document tools: list_pdfs, search_pdfs, read_pdf, upload_pdf, delete_pdf, rename_pdf. To create a real PDF from a markdown file, use convert_md_to_pdf (never write markdown with a .pdf extension).
+For ANY existing file by keyword (pdf/md/csv across pdfs/, projects/, research/, uploads/), use locate_and_prepare_file(name="keyword") — it finds the file, auto-converts .md to PDF, and returns a path that Telegram will auto-send as a document. Use for "send me the X pdf", "find my notes", "export the X file".
+For datasets: export_research_dataset(topic) → CSV, export_dataset_pdf(topic, store_type="research"|"project") → bare-table PDF. Both return an artifact/file path that is auto-sent to Telegram/web as a downloadable file. Charts: generate_chart(topic) → interactive HTML + PNG (auto-sent as photo on Telegram, auto-opened in new tab on web).
 Relevant PDF content is automatically injected into your context when appropriate — use search_pdfs() only when you need to find something specific in uploaded documents.
 You also have music tools via YouTube Music (ytmusicapi + yt-dlp):
 - play_song, queue_song, play_radio, play_mood, discover_trending, my_top_songs (basic playback/history)
@@ -358,15 +361,12 @@ project-name/
 │   └── components/         # One file per component from Phase 2
 ```
 
-3a. Scaffold: Create each file via opencode_write(project_name/path, content).
-    DO NOT use create-vite — it generates wrong Tailwind v3 boilerplate.
-    DO NOT use CDN scripts for Tailwind — use build pipeline only.
-    WRITE every file listed above. Never skip vite-env.d.ts or tsconfig.json.
+3a. Scaffold: Prefer scaffold_ui_project(name=project_name, description, components, animation) — it atomically creates all 9 files per 3b with correct @import/@theme/vite.config. Only if you need per-file custom edits, use opencode_write(project_name/path, content) for deltas. DO NOT use create-vite — it generates wrong Tailwind v3 boilerplate. DO NOT use CDN scripts for Tailwind — use build pipeline only. WRITE every file listed above. Never skip vite-env.d.ts or tsconfig.json. scaffold_ui_project now counts 8-9 files (all_files) and asserts src/index.css exists.
 
 3b. CSS REQUIREMENTS (violating these = blank page):
     - src/index.css MUST start with: @import "tailwindcss";
     - Do NOT use: @tailwind base; @tailwind components; @tailwind utilities; (this is v3)
-    - Add @theme { ... } block for custom design tokens from design_spec
+    - Add @theme { ... } block for custom design tokens from design_spec. Scaffold now includes --color-midnight: #0A192F; --color-neon-mint: #00F5D4; --color-soft-slate: #E2E8F0; plus cargo tokens. If App.tsx uses bg-midnight/bg-neon-mint/text-neon-mint, verify index.css @theme has --color-midnight etc. (Tailwind v4 silently drops unknown classes).
     - vite.config.ts MUST include: import tailwindcss from '@tailwindcss/vite'
     - Without these, all Tailwind classes produce blank output
     - Animation utilities (animate-in, fade-in, slide-in-*, zoom-in-*):
@@ -383,22 +383,22 @@ project-name/
 
 3d. Install + Dev server:
     - opencode_bash("npm install", cwd=project_path)
-    - opencode_bash("npx vite --port 5174 --host", cwd=project_path, background=True)
+    - opencode_bash("npx vite --port 5174 --host", cwd=project_path, background=True)  # auto port-rewrite: if 5174 busy, mcp_server_opencode rewrites to 5175+ and returns port — probe the returned port, not hardcoded 5174
 
 3e. VERIFY (run ALL — do not skip any):
      1. opencode_bash("npx tsc --noEmit", cwd=project_path) — must pass with zero errors
      2. opencode_bash("npm run build", cwd=project_path) — must succeed (no runtime errors)
-     3. HEALTH CHECK: opencode_bash("try { (Invoke-WebRequest -Uri http://localhost:5174 -UseBasicParsing).StatusCode } catch { echo 0 }", cwd=project_path) — must return 200
+     3. HEALTH CHECK: cdp_health_check(url="http://localhost:5174") — must return status ok, httpStatus 200, blank false, no runtimeExceptions
      4. Playwright_navigate(url="http://localhost:5174") — page must load
      5. Playwright_screenshot(project_name=project_name) — check image_url in result
-     6. If screenshot is blank/white: check index.css for @import "tailwindcss"
+     6. If screenshot is blank/white or health check blank:true: check index.css for @import "tailwindcss"
      7. Playwright_get_visible_text(url="http://localhost:5174") — verify expected text renders
-     8. If text shows "Module not found" or "Failed to load": check imports and dependencies
+     8. If text shows "Module not found" or "Failed to load" or health check runtimeExceptions not empty: check imports and dependencies
     8. DEPENDENCY AUDIT: Read package.json and check each dependency is actually imported.
-       - Grep source files for each dep name (react, framer-motion, lucide-react, etc.)
+       - Grep source files for each dep name (react, motion, framer-motion, lucide-react, etc.)
        - If a dep is in package.json but NOT imported anywhere: remove it from package.json
        - If a dep IS imported but not in package.json: npm install it
-       - Unused deps bloat the build; missing deps crash the page
+       - Unused deps bloat the build; missing deps crash the page. Scaffold now includes motion ^11.11.17 — prefer `from 'motion'` over `from 'framer-motion'`.
     9. Fix any issues found and re-verify from step 1
 
 3f. Complete: update_task_status('completed', summary + URL + screenshot)
@@ -422,14 +422,15 @@ R3. EDIT OVER WRITE: For existing files, ALWAYS prefer opencode_edit over openco
     - Use replace_all=true in opencode_edit when the same pattern changes everywhere
     - opencode_write ONLY for new files or when >80% of a file needs to change
 R4. opencode_bash("npm install", cwd=project_path) if deps changed
-R5. Dev server: opencode_bash("npx vite --port 5174 --host", cwd=project_path, background=True)
+R5. Dev server: opencode_bash("npx vite --port 5174 --host", cwd=project_path, background=True)  # auto port-rewrite if busy (see 3d)
 R6. VERIFY (run ALL):
     - opencode_bash("npx tsc --noEmit", cwd=project_path)
     - opencode_bash("npm run build", cwd=project_path) if project has build script
+    - cdp_health_check(url="http://localhost:5174") — must be ok, blank false
     - Playwright_navigate(url="http://localhost:5174")
     - Playwright_screenshot(project_name=project_name)
     - Playwright_get_visible_text(url="http://localhost:5174")
-    - If blank: check @import "tailwindcss" in index.css
+    - If blank or health check blank:true: check @import "tailwindcss" in index.css
     - If animations missing: check @plugin "tailwindcss-animate" in index.css
     - Dependency audit: grep source for each dep name — remove unused, add missing
 R7. opencode_stop(pid) — kill dev server
@@ -442,7 +443,7 @@ CRITICAL:
 - Missing vite-env.d.ts = TypeScript errors on CSS imports. Add it if missing.
 - Missing @plugin "tailwindcss-animate" in index.css = animation classes silently ignored. Add it if components use animate-in/fade-in/slide-in-*/zoom-in-*.
 - Unused dependencies in package.json bloat the build. Audit them in step 3e.8.
-- framer-motion and lucide-react are NOT auto-included. Install them only when components import them.
+ - motion (from 'motion', re-exports framer-motion) and lucide-react are auto-included via scaffold (motion ^11.11.17). If you import from 'framer-motion', either change to 'motion' or install framer-motion. Keep one canonical — prefer 'motion' per scaffold.
 - Never skip create_project. Always register first, then prepare the project.
 
 **HARD BOUNDARY — DO NOT TOUCH MAYDAY SYSTEM:**
@@ -536,7 +537,7 @@ CORE_TOOL_NAMES = {
     # Project tools (always available)
     "create_project", "resume_project", "list_projects",
     "update_project_status", "add_project_note",
-    "add_project_task", "update_task_status", "list_project_tasks",
+    "add_project_task", "update_task_status", "list_project_tasks", "get_task_result",
     # System commands
     "open_application", "close_application",
     "set_volume", "get_volume",
@@ -551,7 +552,8 @@ CORE_TOOL_NAMES = {
     # Skill suggestion
     "suggest_skill",
     # PDF document tools
-    "upload_pdf", "read_pdf", "search_pdfs", "list_pdfs", "delete_pdf", "rename_pdf",
+    "upload_pdf", "read_pdf", "search_pdfs", "list_pdfs", "delete_pdf", "rename_pdf", "convert_md_to_pdf",
+    "locate_and_prepare_file", "export_dataset_pdf", "export_research_dataset",
     # Scaffold / build tools
     "store_component", "list_stored_components", "get_stored_component",
     "scaffold_ui_project",
@@ -621,7 +623,7 @@ FILE_TOOL_NAMES = {
 PROJECT_TOOL_NAMES = {
     "create_project", "resume_project", "list_projects",
     "update_project_status", "add_project_note",
-    "add_project_task", "update_task_status", "list_project_tasks",
+    "add_project_task", "update_task_status", "list_project_tasks", "get_task_result",
     "sandbox_start", "sandbox_exec", "sandbox_stop", "sandbox_status",
     "sandbox_write_file", "sandbox_read_file", "sandbox_delete_file", "sandbox_list_files",
     "sandbox_sync_from_host", "sandbox_sync_to_host", "list_host_projects",
@@ -638,7 +640,7 @@ VISUAL_TEST_TOOL_NAMES = {
 
 DOCUMENT_TOOL_NAMES = {
     "upload_pdf", "read_pdf", "search_pdfs", "list_pdfs", "delete_pdf", "rename_pdf",
-    "convert_md_to_pdf",
+    "convert_md_to_pdf", "locate_and_prepare_file",
 }
 
 RESEARCH_TOOL_NAMES = {
@@ -656,7 +658,7 @@ DATA_TOOL_NAMES = {
     "import_data", "import_data_to_store", "list_imported_files",
     "create_research", "list_research", "update_research_status",
     "add_data_point", "list_imported_files", "generate_chart",
-    "export_research_dataset", "list_research_outputs",
+    "export_research_dataset", "export_dataset_pdf", "list_research_outputs",
 }
 
 MUSIC_TOOL_NAMES = {
@@ -739,9 +741,29 @@ CONNECTION_HINT = (
 )
 
 
-async def _send_json(ws: WebSocket, data: dict):
+class WebSocketSender:
+    """Thin adapter so _run_engine can work with WebSocket or Telegram sender."""
+    def __init__(self, ws: WebSocket):
+        self.ws = ws
+    async def send_json(self, data: dict):
+        try:
+            await self.ws.send_text(json.dumps(data))
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        except Exception as e:
+            logger.warning("_send_json failed for type=%s: %s", data.get("type", "?"), e)
+
+
+async def _send_json(sender, data: dict):
+    # Polymorphic: accepts WebSocket, WebSocketSender, or TelegramSender
     try:
-        await ws.send_text(json.dumps(data))
+        if hasattr(sender, "send_json"):
+            await sender.send_json(data)  # type: ignore
+        elif hasattr(sender, "send_text"):
+            # raw WebSocket
+            await sender.send_text(json.dumps(data))  # type: ignore
+        else:
+            logger.warning("_send_json: unknown sender type %s", type(sender))
     except (WebSocketDisconnect, RuntimeError):
         pass
     except Exception as e:
@@ -783,22 +805,18 @@ def _make_voice_text(text: str) -> str:
 
 
 def _build_active_project_block():
+    # Replaced by assemble_project_context (D1) — richer bundle per project.
     from backend.core.project_store import get_project_store
     store = get_project_store()
     active_projects = store.list_projects(status="active")
     if not active_projects:
         return ""
-    lines = ["### Active Projects"]
-    for p in active_projects[:5]:
-        tasks = p.get("tasks", [])
-        done = sum(1 for t in tasks if t["status"] == "completed")
-        total = len(tasks)
-        progress = f"{done}/{total}" if total else "no tasks"
-        active_task = store.get_active_task(p["id"])
-        next_line = f" — next: {active_task['title']}" if active_task else ""
-        lines.append(f"- {p['name']} ({progress}){next_line}")
-    lines.append("###")
-    return "\n".join(lines)
+    lines = []
+    for p in active_projects[:3]:
+        block = store.format_context_block(p["id"])
+        if block:
+            lines.append(block)
+    return "\n\n".join(lines) if lines else ""
 
 
 def _auto_load_skill_for_active_task(kg, active_skill, skill_manager):
@@ -821,7 +839,7 @@ def _auto_load_skill_for_active_task(kg, active_skill, skill_manager):
                 return
 
 
-async def _run_interactive_only(websocket: WebSocket, user_text: str, conv: ConversationManager):
+async def _run_interactive_only(sender, user_text: str, conv: ConversationManager):
     """Two-tier fast path: answer locally on the interactive model, no cloud call.
 
     Used for trivial turns (greetings, simple chit-chat) when tiering is enabled,
@@ -844,12 +862,12 @@ async def _run_interactive_only(websocket: WebSocket, user_text: str, conv: Conv
         content = "I had a small hiccup locally. Could you try that again?"
     conv.add_message("assistant", content)
     voice_text = _make_voice_text(content)
-    await _send_json(websocket, {"type": "token", "content": content, "voice_content": voice_text})
-    await _send_json(websocket, {"type": "done"})
+    await _send_json(sender, {"type": "token", "content": content, "voice_content": voice_text})
+    await _send_json(sender, {"type": "done"})
 
 
 async def _run_engine(
-    ws: WebSocket,
+    sender,
     user_text: str,
     conv: ConversationManager,
     llm: LLMClient,
@@ -878,8 +896,8 @@ async def _run_engine(
         greeting = "Hello! How can I help you today?"
         conv.add_message("assistant", greeting)
         voice_text = _make_voice_text(greeting)
-        await _send_json(ws, {"type": "token", "content": greeting, "voice_content": voice_text})
-        await _send_json(ws, {"type": "done"})
+        await _send_json(sender, {"type": "token", "content": greeting, "voice_content": voice_text})
+        await _send_json(sender, {"type": "done"})
         return
 
     _personality_section = ""
@@ -1113,31 +1131,31 @@ async def _run_engine(
         return
     except httpx.TimeoutException:
         logger.warning("LLM timed out on first call (large prompt / slow cloud model)")
-        await _send_json(ws, {"type": "error", "content": "The model took too long to respond and timed out. Large research or build prompts on the cloud model can exceed the timeout — retry the request, or set `ollama.timeout` in config.yaml to a larger value."})
+        await _send_json(sender, {"type": "error", "content": "The model took too long to respond and timed out. Large research or build prompts on the cloud model can exceed the timeout — retry the request, or set `ollama.timeout` in config.yaml to a larger value."})
         try:
-            await _send_json(ws, {"type": "done"})
+            await _send_json(sender, {"type": "done"})
         except Exception:
             logger.warning("Failed to send done after TimeoutException — client may have disconnected")
         return
     except httpx.ConnectError:
-        await _send_json(ws, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
+        await _send_json(sender, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
         try:
-            await _send_json(ws, {"type": "done"})
+            await _send_json(sender, {"type": "done"})
         except Exception:
             logger.warning("Failed to send done after ConnectError — client may have disconnected")
         return
     except httpx.HTTPStatusError as e:
-        await _send_json(ws, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}. Check your model and API key."})
+        await _send_json(sender, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}. Check your model and API key."})
         try:
-            await _send_json(ws, {"type": "done"})
+            await _send_json(sender, {"type": "done"})
         except Exception:
             logger.warning("Failed to send done after HTTPStatusError — client may have disconnected")
         return
     except Exception as e:
         logger.exception("LLM error in first_call: %s", e)
-        await _send_json(ws, {"type": "error", "content": f"LLM error: {e}"})
+        await _send_json(sender, {"type": "error", "content": f"LLM error: {e}"})
         try:
-            await _send_json(ws, {"type": "done"})
+            await _send_json(sender, {"type": "done"})
         except Exception:
             logger.warning("Failed to send done after LLM error — client may have disconnected")
         return
@@ -1145,15 +1163,70 @@ async def _run_engine(
     MAX_ITERATIONS = 20
     DUPLICATE_LIMIT = 3
     seen_calls: list[tuple] = []
+    # v2: split success/error + per-project same-tool + hash cache
+    _success_seen: dict[tuple, int] = {}
+    _err_seen: dict[tuple, int] = {}
+    _success_cache: dict[tuple, str] = {}
+    _same_tool_project: dict[tuple, int] = {}
     tool_calls_log: list[dict] = []
     opencode_used = False
     iteration = 0
 
+    # Track active project for checkpointing (A2) + active dev port for probe rewrite
+    _ckpt_project_id = None
+    _active_dev_port = 5174  # default, updated when opencode_bash background returns JSON port
+    try:
+        from backend.core.project_store import get_project_store as _get_ps
+        _ps = _get_ps()
+        _aps = _ps.list_projects(status="active")
+        if _aps:
+            _ckpt_project_id = _aps[0]["id"]
+    except Exception:
+        pass
+
+    # Approval gate check before loop: if gated, notify and pause (caller must confirm)
+    try:
+        from backend.core.approval_gate import is_gated
+        _gated0, _g_phase0 = is_gated(conv.current_id or "global")
+        if _gated0:
+            await _send_json(sender, {"type": "approval_gate", "phase": _g_phase0, "message": f"Paused — awaiting approval for phase {_g_phase0}. Send 'confirm' to continue."})
+            try:
+                await _send_json(sender, {"type": "done"})
+            except Exception:
+                pass
+            return
+    except Exception:
+        pass
+
     while iteration < MAX_ITERATIONS:
+        # per-iteration gate: pause between phases if user requested approval
+        try:
+            from backend.core.approval_gate import is_gated as _is_gated_iter
+            _gated_i, _g_phase_i = _is_gated_iter(conv.current_id or "global")
+            if _gated_i:
+                await _send_json(sender, {"type": "approval_gate", "phase": _g_phase_i, "message": f"Paused on phase {_g_phase_i} — awaiting approval. Send confirm."})
+                break
+        except Exception:
+            pass
         iteration += 1
 
+        # A2: set checkpoint at start of each iteration
+        if _ckpt_project_id:
+            try:
+                from backend.core.project_store import get_project_store as _get_ps2
+                _ps2 = _get_ps2()
+                # find in_progress task if any
+                _at = _ps2.get_active_task(_ckpt_project_id)
+                _tid = _at["id"] if _at and _at.get("status") == "in_progress" else ""
+                if _tid:
+                    _ps2.set_checkpoint(_ckpt_project_id, _tid, iteration, last_tool="", partial_result=content[:300] if content else "")
+            except Exception:
+                pass
+
         if iteration > 1:
-            loop_tools = []
+            # Subsequent iterations must keep the same tool set (otherwise model hallucinates tool_calls with tools=[] → infinite loop)
+            loop_tools = filtered_tools if llm_tool_choice != "none" else []
+            logger.info("LLM iter %d: calling with %d tools, msgs=%d", iteration, len(loop_tools), len(messages))
             try:
                 def llm_call(msgs):
                     resp = llm.chat(msgs, stream=False, tools=loop_tools,
@@ -1161,22 +1234,23 @@ async def _run_engine(
                     resp.raise_for_status()
                     return llm.extract_response(resp)
                 content, tool_calls = await loop.run_in_executor(None, llm_call, messages)
+                logger.info("LLM iter %d returned %s tool_calls: %s", iteration, len(tool_calls) if tool_calls else 0, [c.get("function", {}).get("name") for c in (tool_calls or [])])
             except asyncio.CancelledError:
                 logger.info("WebSocket client disconnected during iterative tool loop")
                 break
             except httpx.TimeoutException:
                 logger.warning("LLM timed out in iterative tool loop")
-                await _send_json(ws, {"type": "error", "content": "The model took too long to respond and timed out. Retry the request, or increase `ollama.timeout` in config.yaml."})
+                await _send_json(sender, {"type": "error", "content": "The model took too long to respond and timed out. Retry the request, or increase `ollama.timeout` in config.yaml."})
                 break
             except httpx.ConnectError:
-                await _send_json(ws, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
+                await _send_json(sender, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
                 break
             except httpx.HTTPStatusError as e:
-                await _send_json(ws, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}. Check your model and API key."})
+                await _send_json(sender, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}. Check your model and API key."})
                 break
             except Exception as e:
                 logger.exception("LLM error in iterative call: %s", e)
-                await _send_json(ws, {"type": "error", "content": f"LLM error: {e}"})
+                await _send_json(sender, {"type": "error", "content": f"LLM error: {e}"})
                 break
 
         if not tool_calls:
@@ -1185,7 +1259,7 @@ async def _run_engine(
         conv.add_message("assistant", content, tool_calls=tool_calls)
 
         if content and content.strip() and not humanize_output:
-            await _send_json(ws, {"type": "token", "content": content})
+            await _send_json(sender, {"type": "token", "content": content})
 
         for tc in tool_calls:
             try:
@@ -1198,7 +1272,7 @@ async def _run_engine(
                         fn_args = json.loads(fn_args)
                     except (json.JSONDecodeError, TypeError):
                         result = f"Invalid JSON arguments from LLM for {fn_name}: {str(fn_args)[:200]}"
-                        await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
+                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
                         conv.add_message("tool", result, tool_call_id=tool_call_id)
                         continue
 
@@ -1214,7 +1288,7 @@ async def _run_engine(
                             if sd not in filtered_tools:
                                 filtered_tools.append(sd)
                         system += f"\n\n### Active Skill: {skill.name}\n{body}\n###"
-                        await _send_json(ws, {
+                        await _send_json(sender, {
                             "type": "skill_activated",
                             "name": skill_name,
                         })
@@ -1223,7 +1297,7 @@ async def _run_engine(
                         avail = skill_manager.list_skills() if skill_manager else []
                         result = f"Skill '{skill_name}' not found. Available: {', '.join(avail)}"
                     conv.add_message("tool", result, tool_call_id=tool_call_id)
-                    await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
+                    await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
 
                 if fn_name in ("capture_page_screenshot", "visual_diff", "check_element",
                                "Playwright_navigate", "Playwright_screenshot", "Playwright_click",
@@ -1240,12 +1314,86 @@ async def _run_engine(
                 if fn_name in OPENCODE_TOOL_NAMES:
                     opencode_used = True
 
+                # Port rewrite for Playwright probes if active dev port drifted (A1)
+                if fn_name.startswith("Playwright") and _active_dev_port != 5174:
+                    url = fn_args.get("url", "")
+                    if url and "5174" in url:
+                        fn_args["url"] = url.replace("5174", str(_active_dev_port))
+                        logger.info("Rewrote Playwright URL 5174→%s for %s", _active_dev_port, fn_name)
+
+                # ---- Pre-dispatch retain: if same successful call seen before, return cached without re-executing ----
+                _pre_args_hash = json.dumps(fn_args, sort_keys=True, ensure_ascii=False)
+                _pre_success_key = (fn_name, _pre_args_hash)
+                if _pre_success_key in _success_cache:
+                    # previous success exists — retain, avoid duplicate side-effects (e.g. duplicate todo)
+                    _cached_hash = _success_cache[_pre_success_key]
+                    result = f"[Cached — previously succeeded, not re-executed] {fn_name} with same arguments"
+                    # still send tool_call and persist, but do not call dispatch
+                    tool_calls_log.append({"function": {"name": fn_name}, "result": result, "args": fn_args, "is_error": False, "retryable": False, "cached": True})
+                    # update same-tool counter (counts as success)
+                    _proj_scope_pre = fn_args.get("name") or fn_args.get("project") or fn_args.get("topic") or ""
+                    _same_tool_project_key_pre = (fn_name, _proj_scope_pre) if _proj_scope_pre else (fn_name, "")
+                    _same_tool_project[_same_tool_project_key_pre] = _same_tool_project.get(_same_tool_project_key_pre, 0) + 1
+                    conv.add_message("tool", result, tool_call_id=tool_call_id)
+                    await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
+                    # skip dispatch and jump to next tc; continue loop handles KG sync etc? Keep KG skip for cached.
+                    continue
+
                 result = await dispatch_call(fn_name, fn_args, mcp_manager=mcp)
+
+                # Capture dev server port from opencode_bash background JSON (A1)
+                if fn_name == "opencode_bash" and fn_args.get("background"):
+                    try:
+                        if '"port"' in result:
+                            import json as _js2
+                            j = None
+                            try:
+                                j = _js2.loads(result)
+                            except Exception:
+                                m = re.search(r'"port"\s*:\s*(\d+)', result)
+                                if m:
+                                    j = {"port": int(m.group(1))}
+                                else:
+                                    m2 = re.search(r"on port (\d+)", result)
+                                    if m2:
+                                        j = {"port": int(m2.group(1))}
+                            if j and "port" in j:
+                                _active_dev_port = int(j["port"])
+                                logger.info("Active dev port updated to %s from opencode_bash", _active_dev_port)
+                    except Exception:
+                        pass
+                # C2: ensure hint for connection refused even if function_registry missed (double safety)
+                if any(x in result for x in ("ERR_CONNECTION_REFUSED","ERR_CONNECTION_TIMED_OUT","net::ERR")) and "Hint: dev server" not in result:
+                    result += f"\n---\nHint: dev server not reachable on probed port. Active port is {_active_dev_port}. Check previous opencode_bash JSON for actual port, verify vite is running (poll loop), and retry Playwright with correct port. If vite failed (exit code), re-run npm install before vite."
 
                 if len(result) > MAX_TOOL_RESULT_LENGTH:
                     result = result[:MAX_TOOL_RESULT_LENGTH] + "\n...[truncated]"
 
                 tool_calls_log.append({"function": {"name": fn_name}, "result": result, "args": fn_args})
+
+                # A2: if project was just created mid-loop, start tracking it
+                if not _ckpt_project_id and fn_name == "create_project" and "created" in result.lower():
+                    try:
+                        from backend.core.project_store import get_project_store as _get_ps_new
+                        _store_new = _get_ps_new()
+                        _proj_name = fn_args.get("name", "") if isinstance(fn_args, dict) else ""
+                        if _proj_name:
+                            _found = _store_new.find_project_by_name(_proj_name)
+                            if _found:
+                                _ckpt_project_id = _found["id"]
+                    except Exception:
+                        pass
+                # A2: update checkpoint with last tool after each dispatch
+                if _ckpt_project_id:
+                    try:
+                        from backend.core.project_store import get_project_store as _get_ps_tool
+                        _ps_tool = _get_ps_tool()
+                        _at2 = _ps_tool.get_active_task(_ckpt_project_id)
+                        _tid2 = _at2["id"] if _at2 and _at2.get("status") == "in_progress" else ""
+                        if _tid2:
+                            _ps_tool.set_checkpoint(_ckpt_project_id, _tid2, iteration, last_tool=fn_name, partial_result=result[:300] if result else "")
+                    except Exception:
+                        pass
 
                 if fn_name == "update_task_status" and skill_manager and not (active_skill and active_skill[0]):
                     new_status = fn_args.get("status", "")
@@ -1273,17 +1421,79 @@ async def _run_engine(
                                             active_skill.append(skill)
                                             logger.info("Point B: Auto-loaded skill '%s' for task '%s'", skill.name, target_task["title"])
 
-                args_hash = json.dumps(fn_args, sort_keys=True)
-                result_head = result[:100]
-                call_key = (fn_name, args_hash, result_head)
-                seen_calls.append(call_key)
-                dup_count = sum(1 for c in seen_calls if c == call_key)
-                if dup_count >= DUPLICATE_LIMIT:
-                    result = f"[Stuck after {dup_count} identical attempts] {result}"
-                    content = "I got stuck — the same action repeated with the same result."
-                    tool_calls = None
-                    await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": result})
-                    break
+                # ---- Duplicate / retain guard v2 ----
+                # Use full result hash (sha16) + split error vs success + per-project scope
+                args_hash = json.dumps(fn_args, sort_keys=True, ensure_ascii=False)
+                result_hash = hashlib.sha256(result.encode("utf-8")).hexdigest()[:16]
+                _RE_RESOLVE = re.compile(r"Can't resolve|Cannot find module|TS2307|TS2305|Module not found|Failed to resolve import|Cannot find package|ERR_MODULE_NOT_FOUND", re.I)
+                is_error = result.startswith("Error") or result.startswith("[Stuck") or "error" in result[:80].lower() or bool(_RE_RESOLVE.search(result))
+                # success key ignores result hash (idempotent retain), error key includes hash (different errors = not dup)
+                success_key = (fn_name, args_hash)
+                error_key = (fn_name, args_hash, result_hash)
+                # per-project same-tool scope (so 6 creates across 6 projects don't trip)
+                _proj_scope = fn_args.get("name") or fn_args.get("project") or fn_args.get("topic") or ""
+                same_tool_project_key = (fn_name, _proj_scope) if _proj_scope else (fn_name, "")
+                # update counters
+                seen_calls.append((fn_name, args_hash, result_hash))
+                if is_error:
+                    _err_seen[error_key] = _err_seen.get(error_key, 0) + 1
+                    dup_count = _err_seen[error_key]
+                    same_tool_count = _same_tool_project.get(same_tool_project_key, 0) + 1
+                    _same_tool_project[same_tool_project_key] = same_tool_count
+                    # allow 3 identical errors before stuck (retrain), then escalate
+                    if dup_count >= DUPLICATE_LIMIT:
+                        logger.warning("Stuck guard (error): %s dup=%d same_tool=%d — breaking", fn_name, dup_count, same_tool_count)
+                        # D1: extra hint for connection refused — tell actual port and how to recover
+                        if any(x in result for x in ("ERR_CONNECTION_REFUSED","ERR_CONNECTION_TIMED_OUT","net::ERR")):
+                            result = f"[Stuck after {dup_count} identical error / {same_tool_count} same-tool attempts] {result} — Dev server not on 5174. Active port is {_active_dev_port}. Hint: retry Playwright with http://localhost:{_active_dev_port}/ (from previous opencode_bash JSON port), or check opencode_bash logs / re-run npm install. Try different arguments or add force=True / confirmed=True."
+                            content = f"I got stuck — dev server on 5174 refused 3× (actual port {_active_dev_port}). Check opencode_bash output for real port and retry, or re-run npm install."
+                            # also send actionable error to UI
+                            try:
+                                await _send_json(sender, {"type": "error", "content": f"Dev server not reachable on 5174 (actual port {_active_dev_port}). The site may be on http://localhost:{_active_dev_port}/ — retrying there, or re-run npm install if vite failed."})
+                            except Exception:
+                                pass
+                        else:
+                            result = f"[Stuck after {dup_count} identical error / {same_tool_count} same-tool attempts] {result} — Try different arguments or add force=True / confirmed=True."
+                            content = "I got stuck — the same error repeated."
+                        tool_calls = None
+                        conv.add_message("tool", result, tool_call_id=tool_call_id)
+                        tool_calls_log.append({"function": {"name": fn_name}, "result": result, "args": fn_args, "is_error": True, "retryable": False})
+                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
+                        break
+                    if same_tool_count >= 6:
+                        logger.warning("Stuck guard (same_tool): %s same_tool=%d — breaking", fn_name, same_tool_count)
+                        if any(x in result for x in ("ERR_CONNECTION_REFUSED","ERR_CONNECTION_TIMED_OUT","net::ERR")):
+                            result = f"[Stuck: {same_tool_count} calls to {fn_name} in this run (scope={_proj_scope!r})] {result} — Dev server port is {_active_dev_port}. Hint: retry with http://localhost:{_active_dev_port}/."
+                        else:
+                            result = f"[Stuck: {same_tool_count} calls to {fn_name} in this run (scope={_proj_scope!r})] {result}"
+                        content = "I got stuck — too many calls to the same tool."
+                        tool_calls = None
+                        conv.add_message("tool", result, tool_call_id=tool_call_id)
+                        tool_calls_log.append({"function": {"name": fn_name}, "result": result, "args": fn_args, "is_error": True, "retryable": False})
+                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
+                        break
+                else:
+                    # success path — retain: if same success seen before, mark cached
+                    if success_key in _success_cache and _success_cache[success_key] == result_hash:
+                        # cached success — do not treat as dup, just annotate
+                        logger.info("Retain (cached success): %s args=%s", fn_name, args_hash[:120])
+                        result = f"[Cached] {result}"
+                    else:
+                        _success_cache[success_key] = result_hash
+                    _success_seen[success_key] = _success_seen.get(success_key, 0) + 1
+                    # still track per-project same_tool for success burst detection
+                    same_tool_count = _same_tool_project.get(same_tool_project_key, 0) + 1
+                    _same_tool_project[same_tool_project_key] = same_tool_count
+                    if same_tool_count >= 10:  # higher threshold for success (e.g. 10 creates)
+                        logger.warning("Stuck guard (same_tool success burst): %s same_tool=%d", fn_name, same_tool_count)
+                        result = f"[Stuck: {same_tool_count} calls to {fn_name} (scope={_proj_scope!r})] {result}"
+                        content = "I got stuck — too many successful calls to the same tool."
+                        tool_calls = None
+                        conv.add_message("tool", result, tool_call_id=tool_call_id)
+                        tool_calls_log.append({"function": {"name": fn_name}, "result": result, "args": fn_args, "is_error": False, "retryable": False})
+                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
+                        break
+                    # normal error same_tool check still applies for mixed runs
 
                 conv.add_message("tool", result, tool_call_id=tool_call_id)
 
@@ -1407,7 +1617,7 @@ async def _run_engine(
                 except (json.JSONDecodeError, TypeError):
                     pass
 
-                await _send_json(ws, tool_msg)
+                await _send_json(sender, tool_msg)
                 # Emit music WS message after tool_call bubble (player auto-plays)
                 if _music_payload is not None:
                     try:
@@ -1430,12 +1640,12 @@ async def _run_engine(
                             _payload["tab_id"] = _tab_id
                         if _is_playing is not None:
                             _payload["is_playing"] = _is_playing
-                        await _send_json(ws, _payload)
+                        await _send_json(sender, _payload)
                     except Exception as _me:
                         logger.warning("Failed to emit music WS: %s", _me)
             except Exception as e:
                 logger.exception("Tool '%s' crashed: %s", fn_name, e)
-                await _send_json(ws, {"type": "tool_call", "name": fn_name, "result": f"Internal error: {e}"})
+                await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": f"Internal error: {e}"})
                 conv.add_message("tool", f"Error: {e}", tool_call_id=tool_call_id)
                 tool_calls_log.append({"function": {"name": fn_name}, "result": f"Error: {e}", "error": True})
 
@@ -1446,6 +1656,44 @@ async def _run_engine(
 
         if iteration >= MAX_ITERATIONS:
             content = (content or "") + "\n\n[Reached maximum iterations — the build may be incomplete.]"
+
+    # A2: clear checkpoint on successful completion
+    if _ckpt_project_id:
+        try:
+            from backend.core.project_store import get_project_store as _get_ps3
+            _get_ps3().clear_checkpoint(_ckpt_project_id)
+        except Exception:
+            pass
+
+    # Seam B: auto web_search fallback for resolve errors that caused stuck (post-while, no loop state hack)
+    if content and content.startswith("I got stuck") and tool_calls_log and iteration < MAX_ITERATIONS:
+        last_res = tool_calls_log[-1].get("result", "") if tool_calls_log else ""
+        _RE_FB = re.compile(r"Can't resolve|Cannot find module|TS2307|TS2305|Module not found|Failed to resolve import|Cannot find package|ERR_MODULE_NOT_FOUND", re.I)
+        if _RE_FB.search(last_res) and not any(e.get("function", {}).get("name") == "web_search_exa" for e in tool_calls_log[-3:]):
+            m = re.search(r"['\"]([^'\"]+)['\"]", last_res)
+            spec = m.group(1) if m else last_res[:60].strip()
+            query = f"npm install {spec} fix Cannot find module TS2307 Vite React {spec}"
+            try:
+                from backend.functions.exa_functions import _api_key as _exa_key
+                if _exa_key():
+                    fb = await dispatch_call("web_search_exa", {"query": query, "numResults": 5, "type": "auto"}, mcp_manager=mcp)
+                    conv.add_message("tool", fb, tool_call_id=f"auto_web_search_fallback_{iteration}")
+                    tool_calls_log.append({"function": {"name": "web_search_exa"}, "result": fb, "args": {"query": query}, "is_error": False, "auto_injected": True})
+                    await _send_json(sender, {"type": "tool_call", "name": "web_search_exa", "result": fb})
+                    # re-run final synthesis with enriched context
+                    try:
+                        messages_fb = [{"role": "system", "content": system}] + conv.get_context()
+                        def final_call2(msgs):
+                            resp = llm.chat(msgs, stream=False, tools=[], tool_choice=None)
+                            resp.raise_for_status()
+                            return llm.extract_response(resp)
+                        summary2, _ = await loop.run_in_executor(None, final_call2, messages_fb)
+                        if summary2:
+                            content = summary2
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     try:
         if not content:
@@ -1487,7 +1735,7 @@ async def _run_engine(
             voice_text = _make_voice_text(content)
             logger.info("Voice: ui=%d chars, voice=%d chars", len(content), len(voice_text))
             conv.add_message("assistant", content)
-            await _send_json(ws, {"type": "token", "content": content, "voice_content": voice_text})
+            await _send_json(sender, {"type": "token", "content": content, "voice_content": voice_text})
 
         if kg and conv.current_id:
             conv_data = get_store().get_conversation(conv.current_id)
@@ -1520,7 +1768,7 @@ async def _run_engine(
 
         if active_skill and not tool_calls:
             active_skill.clear()
-            await _send_json(ws, {"type": "skill_deactivated"})
+            await _send_json(sender, {"type": "skill_deactivated"})
 
         if opencode_used and _BUILD_REQUEST_KEYWORDS.search(user_text) and content:
             from backend.core.scheduler import get_scheduler
@@ -1548,7 +1796,7 @@ async def _run_engine(
         logger.exception("Post-loop processing error: %s", e)
 
     try:
-        await _send_json(ws, {"type": "done"})
+        await _send_json(sender, {"type": "done"})
     except Exception:
         logger.warning("Failed to send done — client may have disconnected")
 
@@ -1556,6 +1804,7 @@ async def _run_engine(
 @router.websocket("/ws/chat")
 async def chat_websocket(websocket: WebSocket):
     await websocket.accept()
+    sender = WebSocketSender(websocket)
     conv = ConversationManager()
     llm = LLMClient()
     conv.new_conversation()
@@ -1606,6 +1855,14 @@ async def chat_websocket(websocket: WebSocket):
         try:
             skill_manager = get_skill_manager(skills_cfg.get("directory", ""))
             logger.info("Loaded %d skills", len(skill_manager.list_skills()))
+            # C3: register hooks from skills (Layer 3 -> Layer 4 seam)
+            try:
+                from backend.core.project_store import get_project_store as _get_ps_hooks
+                _store_hooks = _get_ps_hooks()
+                skill_manager.register_hooks(_store_hooks)
+                mcp.register_hooks(_store_hooks)
+            except Exception as e:
+                logger.warning("Hook registration failed: %s", e)
         except Exception as e:
             logger.error("Failed to load skills: %s", e)
 
@@ -1633,6 +1890,21 @@ async def chat_websocket(websocket: WebSocket):
                 # parallel" (it's effectively free), satisfying the two-tier split
                 # without serializing the worker behind a model call.
                 intent = query_classifier.classify(user_text)
+                # Approval gate: if user says "get my approval" pause on phase
+                try:
+                    from backend.core.approval_gate import should_gate, set_gate, clear_gate, is_gated
+                    if should_gate(user_text, intent.intent):
+                        set_gate(conv.current_id or "global", intent.intent, gated=True)
+                        await _send_json(sender, {"type": "approval_gate", "phase": intent.intent, "message": f"Paused on phase {intent.intent} — awaiting your approval. Send Confirm to continue."})
+                        # don't block engine completely; engine will check gate before each phase and pause
+                    # if user says confirm while gated, clear gate so next turn proceeds
+                    elif any(kw in user_text.lower() for kw in ("confirm", "approved", "go ahead", "continue", "approve")):
+                        _gated_c, _ = is_gated(conv.current_id or "global")
+                        if _gated_c:
+                            clear_gate(conv.current_id or "global")
+                            await _send_json(sender, {"type": "approval_gate", "phase": "", "message": "Approved — continuing."})
+                except Exception:
+                    pass
                 try:
                     from backend.core.phf import log_interaction
                     log_interaction(user_text, intent.intent)
@@ -1653,9 +1925,9 @@ async def chat_websocket(websocket: WebSocket):
                 except Exception:
                     pass
                 if tiering and not intent.requires_llm:
-                    await _run_interactive_only(websocket, user_text, conv)
+                    await _run_interactive_only(sender, user_text, conv)
                     continue
-                await _run_engine(websocket, user_text, conv, llm, tools, mcp, kg,
+                await _run_engine(sender, user_text, conv, llm, tools, mcp, kg,
                                   selector=selector, skill_manager=skill_manager,
                                   pending_suggestion=pending_suggestion,
                                   active_skill=active_skill,
@@ -1671,32 +1943,47 @@ async def chat_websocket(websocket: WebSocket):
                         if active_skill:
                             active_skill.clear()
                             active_skill.append(skill)
-                        await _send_json(websocket, {
+                        await _send_json(sender, {
                             "type": "skill_activated",
                             "name": skill_name,
                         })
-                        await _run_engine(websocket, f"Activate skill: {skill_name}", conv, llm, tools, mcp, kg,
+                        await _run_engine(sender, f"Activate skill: {skill_name}", conv, llm, tools, mcp, kg,
                                           selector=selector, skill_manager=skill_manager,
                                           pending_suggestion=pending_suggestion,
                                           active_skill=active_skill,
                                           query_classifier=query_classifier,
                                           humanize_output=_humanize_on())
                     else:
-                        await _send_json(websocket, {"type": "error", "content": f"Skill '{skill_name}' not found"})
+                        await _send_json(sender, {"type": "error", "content": f"Skill '{skill_name}' not found"})
                 pending_suggestion.clear()
             elif msg.get("type") == "dismiss_skill":
                 pending_suggestion.clear()
                 if active_skill:
                     active_skill.clear()
-                    await _send_json(websocket, {"type": "skill_deactivated"})
+                    await _send_json(sender, {"type": "skill_deactivated"})
+            elif msg.get("type") in ("confirm_phase", "confirm", "approve_phase"):
+                try:
+                    from backend.core.approval_gate import clear_gate
+                    clear_gate(conv.current_id or "global")
+                    await _send_json(sender, {"type": "approval_gate", "phase": msg.get("phase",""), "message": "Approved — continuing."})
+                    # resume by running engine with last user context if provided
+                    resume_text = msg.get("content") or msg.get("text") or "continue"
+                    await _run_engine(sender, resume_text, conv, llm, tools, mcp, kg,
+                                      selector=selector, skill_manager=skill_manager,
+                                      pending_suggestion=pending_suggestion,
+                                      active_skill=active_skill,
+                                      query_classifier=query_classifier,
+                                      humanize_output=_humanize_on())
+                except Exception as e:
+                    logger.warning("confirm_phase failed: %s", e)
             elif msg.get("type") == "new_conversation":
                 conv.new_conversation()
-                await _send_json(websocket, {"type": "conversation_created"})
+                await _send_json(sender, {"type": "conversation_created"})
             elif msg.get("type") == "load_conversation":
                 conv_id = msg.get("conversation_id", "")
                 if conv.load_conversation(conv_id):
                     conv_data = get_store().get_conversation(conv_id)
-                    await _send_json(websocket, {
+                    await _send_json(sender, {
                         "type": "conversation_loaded",
                         "conversation": conv_data,
                     })
@@ -1711,7 +1998,7 @@ async def chat_websocket(websocket: WebSocket):
                     thumb = (msg.get("thumb") or msg.get("thumbnail") or "").strip()
                     language = (msg.get("language") or "").strip() or "other"
                     if not vid:
-                        await _send_json(websocket, {"type": "error", "content": "music_command: missing video_id"})
+                        await _send_json(sender, {"type": "error", "content": "music_command: missing video_id"})
                     else:
                         # detect language if not provided
                         if language == "other" and title != "Unknown":
@@ -1728,16 +2015,16 @@ async def chat_websocket(websocket: WebSocket):
                             if not res.get("error"):
                                 stream_url = res.get("stream_url", "")
                             else:
-                                await _send_json(websocket, {"type": "error", "content": res["error"]})
+                                await _send_json(sender, {"type": "error", "content": res["error"]})
                                 # still emit without stream so player shows error and can skip
                         except Exception as e:
                             logger.warning("music_command resolve failed for %s: %s", vid, e)
                         track = {"video_id": vid, "title": title, "artist": artist, "thumb": thumb, "language": language, "stream_url": stream_url}
                         # queue is client-side; server just emits single track
-                        await _send_json(websocket, {"type": "music", "action": action, "track": track, "queue": []})
+                        await _send_json(sender, {"type": "music", "action": action, "track": track, "queue": []})
                 except Exception as e:
                     logger.warning("music_command handler error: %s", e)
-                    await _send_json(websocket, {"type": "error", "content": f"music_command error: {e}"})
+                    await _send_json(sender, {"type": "error", "content": f"music_command error: {e}"})
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except asyncio.CancelledError:

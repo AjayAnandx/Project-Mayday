@@ -163,6 +163,36 @@ PLAYWRIGHT_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "cdp_health_check",
+            "description": "Chrome DevTools health check: verify site is loading correctly via HTTP + console errors + blank detection + performance (TTFB). Returns status ok/fail with httpStatus, blank, console errors, network failures.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full URL to check (e.g. http://localhost:5174)"},
+                    "timeout": {"type": "integer", "description": "Timeout ms (default 15000)", "default": 15000},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cdp_performance",
+            "description": "Get Chrome performance metrics (TTFB, DOMContentLoaded, load) for a URL via DevTools protocol.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to measure"},
+                    "timeout": {"type": "integer", "description": "Timeout ms", "default": 15000},
+                },
+                "required": ["url"],
+            },
+        },
+    },
 ]
 
 PLAYWRIGHT_TOOL_NAMES = {t["function"]["name"] for t in PLAYWRIGHT_TOOL_DEFINITIONS}

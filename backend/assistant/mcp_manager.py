@@ -157,6 +157,11 @@ class MCPManager:
         except Exception as e:
             return f"Error calling MCP tool '{name}': {e}"
 
+    def register_hooks(self, store):
+        """MCP extensibility: if a lazy server ships a hooks.py alongside its tool defs, register it (C3 stub)."""
+        # No file layout for remote MCP servers; reserved for future local MCP tools that expose hooks.py
+        logger.debug("MCPManager.register_hooks called — no MCP hooks to register")
+
     async def close(self):
         for name, exit_stack in self._exit_stacks.items():
             try:

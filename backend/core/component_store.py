@@ -30,21 +30,28 @@ class ComponentStore:
     def _save(self):
         self._path.write_text(json.dumps({"components": self._components}, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    def _is_stub(self, code: str) -> bool:
+        s = (code or "").strip()
+        return "will be injected here" in s or s.startswith("// Source code from") or len(s) < 200 or ("export" not in s and "import" not in s)
+
     def store_component(self, name: str, code: str, description: str = "", framework: str = "react", tags: list[str] | None = None, replace: bool = False) -> dict:
         tags = tags or []
+        # B1: reject stub components at store layer (prompt-level guard not enough)
+        if self._is_stub(code):
+            return {"message": f"Rejected stub for '{name}': code contains placeholder or too short (len={len((code or '').strip())}). Fetch real source via getRegistryItem('{name}', includeSource=true) first.", "component": None, "rejected": True}
         with self._lock:
             existing = [c for c in self._components if c["name"] == name]
             if existing and not replace:
                 existing_code = existing[0].get("code", "")
+                # B1 fix inverted guard: shorter code must NOT overwrite longer real code
                 if len(code) < len(existing_code):
-                    existing[0]["code"] = code
+                    # keep existing real code, only update metadata
                     existing[0]["description"] = description
                     existing[0]["framework"] = framework
-                    existing[0]["tags"] = tags
+                    existing[0]["tags"] = list(set(existing[0].get("tags", []) + tags))
                     existing[0]["updated_at"] = _utcnow()
-                    existing[0]["version"] = existing[0].get("version", 1) + 1
                     self._save()
-                    return {"message": f"Component '{name}' replaced with shorter version (was {len(existing_code)} chars, now {len(code)} chars)", "component": existing[0]}
+                    return {"message": f"Component '{name}' already exists with longer code ({len(existing_code)} chars). Kept existing; not overwriting with shorter ({len(code)} chars). Use replace=true to force.", "component": existing[0]}
                 existing[0]["description"] = description
                 existing[0]["framework"] = framework
                 existing[0]["tags"] = list(set(existing[0].get("tags", []) + tags))

@@ -71,6 +71,9 @@ def _track_to_music(track: dict, stream_url: str = "", is_audio_only: bool = Fal
         "thumb": track.get("thumb", ""),
         "duration": track.get("duration", ""),
         "language": track.get("language", "other"),
+        "genre": track.get("genre") or track.get("mood") or track.get("mood_id") or track.get("language", "other"),
+        "mood": track.get("mood") or track.get("genre") or "",
+        "mood_id": track.get("mood_id") or track.get("moodId") or track.get("mood") or track.get("genre") or "",
         "stream_url": stream_url,
         "kind": kind if kind in ("song", "video") else "song",
     }

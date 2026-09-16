@@ -121,6 +121,9 @@ def _normalize_track(raw: dict) -> dict:
         duration = f"{m}:{s:02d}"
 
     language = detect_language(title, artist_str)
+    # optional genre/mood passthrough (set by callers like play_mood)
+    genre = raw.get("genre") or raw.get("mood") or ""
+    mood_id = raw.get("mood_id") or raw.get("moodId") or raw.get("mood") or genre
 
     return {
         "video_id": video_id,
@@ -129,6 +132,9 @@ def _normalize_track(raw: dict) -> dict:
         "thumb": thumb,
         "duration": str(duration) if duration else "",
         "language": language,
+        "genre": genre,
+        "mood": genre,
+        "mood_id": mood_id,
     }
 
 
@@ -445,7 +451,12 @@ def get_mood_tracks(mood_id: str, n: int = 20) -> dict:
                 for r in raw_tracks[:n]:
                     if not r.get("videoId"):
                         continue
-                    tracks.append(_normalize_track(r))
+                    tr = _normalize_track(r)
+                    # attach mood context so frontend can continue same genre
+                    tr["genre"] = mid
+                    tr["mood"] = mid
+                    tr["mood_id"] = mid
+                    tracks.append(tr)
                 if tracks:
                     return {"tracks": tracks, "playlist_title": title, "playlist_id": pid}
             except Exception as e:
@@ -454,7 +465,7 @@ def get_mood_tracks(mood_id: str, n: int = 20) -> dict:
         tracks = []
         for p in (playlists if isinstance(playlists, list) else [playlists])[:n]:
             if p.get("title"):
-                tracks.append({"video_id": p.get("playlistId", ""), "title": p.get("title", ""), "artist": "Playlist", "thumb": (p.get("thumbnails") or [{}])[-1].get("url", "") if p.get("thumbnails") else "", "language": "other", "duration": ""})
+                tracks.append({"video_id": p.get("playlistId", ""), "title": p.get("title", ""), "artist": "Playlist", "thumb": (p.get("thumbnails") or [{}])[-1].get("url", "") if p.get("thumbnails") else "", "language": "other", "duration": "", "genre": mid, "mood": mid, "mood_id": mid})
         if tracks:
             return {"tracks": tracks, "playlist_title": title, "playlist_id": pid}
         return {"tracks": [], "error": f"Could not load mood '{mid}'"}

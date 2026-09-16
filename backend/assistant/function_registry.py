@@ -25,10 +25,11 @@ from backend.functions.project_functions import (
     create_project, resume_project, list_projects,
     update_project_status, add_project_note,
     add_project_task, update_task_status, list_project_tasks,
+    get_task_result,
 )
 from backend.functions.document_functions import (
     upload_pdf, read_pdf, search_pdfs, list_pdfs, delete_pdf, rename_pdf,
-    convert_md_to_pdf,
+    convert_md_to_pdf, locate_and_prepare_file,
 )
 from backend.functions.data_import import (
     import_data, import_data_to_store, list_imported_files,
@@ -48,7 +49,7 @@ from backend.functions.research_functions import (
     promote_research_to_project, search_research,
     list_research_outputs, research_agent,
 )
-from backend.functions.data_export import export_research_dataset
+from backend.functions.data_export import export_research_dataset, export_dataset_pdf
 from backend.functions.visual_testing import (
     update_baseline,
 )
@@ -73,6 +74,7 @@ from backend.assistant.playwright_runner import (
     playwright_fill, playwright_evaluate, playwright_console_logs,
     playwright_get_visible_html, playwright_get_visible_text,
     playwright_expect_response, playwright_assert_response,
+    cdp_health_check, cdp_performance,
 )
 from backend.assistant.playwright_tools import PLAYWRIGHT_TOOL_DEFINITIONS
 from backend.core.sandbox import (
@@ -261,7 +263,7 @@ def design_write_spec(
 - `vite.config.ts`: `import tailwindcss from '@tailwindcss/vite'` + add to `plugins: [react(), tailwindcss()]`
 - Every component: import `React` (explicit or via JSX transform), libraries used
 - `lucide-react` icons: verify icon names exist (brand icons like `Github`/`Linkedin` may be removed — use `Code2`/`ExternalLink`/`Globe` instead)
-- `framer-motion`: import `motion` from `'framer-motion'`, not `'motion'`
+- `motion`: import `motion` from `'motion'` (canonical, re-exports framer-motion). `framer-motion` import also works if installed, but prefer `motion`.
 
 ### Verification Commands (run ALL after build)
 1. `npx tsc --noEmit` — must pass with zero errors
@@ -280,7 +282,7 @@ def design_write_spec(
 - **Framework:** React 19 + TypeScript
 - **Build:** Vite 6+
 - **Styling:** Tailwind CSS v4 (via @tailwindcss/vite plugin)
-- **Animation:** Framer Motion
+- **Animation:** motion (from 'motion', re-exports framer-motion)
 - **Icons:** Lucide React
 
 ## Component Tree
@@ -320,13 +322,13 @@ def design_write_spec(
 - Run: grep source files for each dep name
 - If a dep is installed but not imported: remove it (unused deps bloat the build)
 - If a dep is imported but not installed: `npm install <dep>` (missing deps crash the page)
-- `framer-motion` and `lucide-react` are NOT auto-included — install only when needed
+- `motion` (and `lucide-react`) are auto-included via scaffold (motion ^11.11.17). `framer-motion` is compatible but keep one canonical.
 
 ## Import Map
 | Library | Import | Notes |
 |---------|--------|-------|
 | React | `import React from 'react'` or JSX transform | |
-| Framer Motion | `import {{ motion }} from 'framer-motion'` | |
+| motion | `import {{ motion }} from 'motion'` | Canonical — re-exports framer-motion |
 | Lucide Icons | `import {{ IconName }} from 'lucide-react'` | No brand icons (Github/Linkedin) — use Code2/Globe/ExternalLink |
 | Tailwind | `@import "tailwindcss"` in CSS | v4 only — no @tailwind directives |
 """
@@ -984,7 +986,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "update_project_status",
-            "description": "Transition project between active/paused/scrapped",
+            "description": "Transition project between active/paused/scrapped. At low trust, scrapping requires confirmed=true.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -994,6 +996,7 @@ LOCAL_TOOL_DEFINITIONS = [
                         "enum": ["active", "paused", "scrapped"],
                         "description": "New status",
                     },
+                    "confirmed": {"type": "boolean", "description": "Confirm at low trust (required to scrap when trust=low)"},
                 },
                 "required": ["name", "status"],
             },
@@ -1011,6 +1014,7 @@ LOCAL_TOOL_DEFINITIONS = [
                     "filename": {"type": "string", "description": "Filename, e.g. research.md or architecture.md (optional — defaults to notes.md)"},
                     "content": {"type": "string", "description": "Markdown content of the note"},
                     "force": {"type": "boolean", "description": "Overwrite existing file (default: false — blocks if file already exists)"},
+                    "confirmed": {"type": "boolean", "description": "Confirm overwrite at low trust"},
                 },
                 "required": ["content"],
             },
@@ -1020,7 +1024,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "add_project_task",
-            "description": "Add a task to a project with type/dependencies",
+            "description": "Add a task to a project with type/dependencies. Use parent_task_id to create a subtask.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1030,6 +1034,9 @@ LOCAL_TOOL_DEFINITIONS = [
                     "type": {"type": "string", "enum": ["research", "general", "build"], "description": "Task type (default: general)"},
                     "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Task titles this task depends on (optional)"},
                     "force": {"type": "boolean", "description": "Allow duplicate task title (default: false — blocks if a task with the same title exists)"},
+                    "parent_task_id": {"type": "string", "description": "Parent task ID or title to create a subtask (optional)"},
+                    "owner": {"type": "string", "description": "Task owner: user or subagent:<id> (default: user)"},
+                    "confirmed": {"type": "boolean", "description": "Confirm duplicate at low trust (pass true to bypass trust gate)"},
                 },
                 "required": ["name", "title"],
             },
@@ -1057,14 +1064,30 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "list_project_tasks",
-            "description": "List tasks in a project, filterable by status",
+            "description": "List tasks in a project, filterable by status. Add tree=true for nested parent/child view.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Project name"},
                     "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked", "failed"], "description": "Optional status filter"},
+                    "tree": {"type": "boolean", "description": "If true, return nested tree with children"},
                 },
                 "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_task_result",
+            "description": "Get full result for a task (follows artifact file if result was offloaded).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Project name"},
+                    "task_id": {"type": "string", "description": "Task ID or exact title"},
+                },
+                "required": ["name", "task_id"],
             },
         },
     },
@@ -1197,6 +1220,37 @@ LOCAL_TOOL_DEFINITIONS = [
                     "output_path": {"type": "string", "description": "Optional absolute output path for the PDF"},
                     "name": {"type": "string", "description": "Optional output filename (no extension) — PDF is written next to the md file"},
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "locate_and_prepare_file",
+            "description": "Find an existing file by keyword across pdfs/, projects/, research/, uploads/. For .pdf/.csv returns path as-is; for .md converts to PDF and returns pdf path. Returns {path, kind, name} or candidate list. Use when user says 'send me the X pdf', 'find my notes', 'export the X file'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Filename keyword to search for (e.g. 'tcs analysis', 'report', 'nifty 50')"},
+                    "query": {"type": "string", "description": "Alias for name"},
+                    "keyword": {"type": "string", "description": "Alias for name"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_dataset_pdf",
+            "description": "Export a research or project dataset as a bare-table PDF (columns: # / Label / Value / Unit / Confidence / Source). Use for 'export the X dataset as pdf', 'send me the table pdf', 'pdf of the nifty data'. Supports research and project stores via store_type.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic or project name"},
+                    "store_type": {"type": "string", "enum": ["research", "project"], "description": "Store type: research (default) or project"},
+                    "filename": {"type": "string", "description": "Optional output filename (without path)"},
+                },
+                "required": ["topic"],
             },
         },
     },
@@ -2313,6 +2367,7 @@ FUNCTION_MAP = {
     "add_project_task": add_project_task,
     "update_task_status": update_task_status,
     "list_project_tasks": list_project_tasks,
+    "get_task_result": get_task_result,
     "create_todo": create_todo,
     "update_todo": update_todo,
     "delete_todo": delete_todo,
@@ -2361,6 +2416,8 @@ FUNCTION_MAP = {
     "delete_pdf": delete_pdf,
     "rename_pdf": rename_pdf,
     "convert_md_to_pdf": convert_md_to_pdf,
+    "locate_and_prepare_file": locate_and_prepare_file,
+    "export_dataset_pdf": export_dataset_pdf,
     "import_data": import_data,
     "import_data_to_store": import_data_to_store,
     "list_imported_files": list_imported_files,
@@ -2396,6 +2453,8 @@ FUNCTION_MAP = {
     "Playwright_get_visible_text": playwright_get_visible_text,
     "Playwright_expect_response": playwright_expect_response,
     "Playwright_assert_response": playwright_assert_response,
+    "cdp_health_check": cdp_health_check,
+    "cdp_performance": cdp_performance,
     "design_generate_layout": design_generate_layout,
     "design_generate_component": design_generate_component,
     "design_write_spec": design_write_spec,
@@ -2470,9 +2529,10 @@ _PARAM_ALIASES: dict[str, dict[str, str]] = {
     "resume_project": {"project": "name", "project_name": "name"},
     "update_project_status": {"project": "name", "project_name": "name"},
     "add_project_note": {"project": "name", "project_name": "name", "file_name": "filename", "title": "filename"},
-    "add_project_task": {"project": "name", "project_name": "name", "task": "title", "task_title": "title"},
+    "add_project_task": {"project": "name", "project_name": "name", "task": "title", "task_title": "title", "parent": "parent_task_id", "parent_id": "parent_task_id"},
     "update_task_status": {"project": "name", "project_name": "name", "task_title": "title"},
     "list_project_tasks": {"project": "name", "project_name": "name"},
+    "get_task_result": {"project": "name", "project_name": "name"},
     "add_research_note": {"project": "topic", "topic_name": "topic", "file_name": "filename", "title": "filename"},
     "create_research": {"project": "topic", "topic_name": "topic"},
     "resume_research": {"project": "topic", "topic_name": "topic"},
@@ -2493,6 +2553,10 @@ _PARAM_ALIASES: dict[str, dict[str, str]] = {
     "web_fetch_exa": {"url": "urls", "link": "urls", "links": "urls", "page": "urls", "pages": "urls"},
     "web_search_and_fetch": {"q": "query", "search": "query", "search_query": "query", "question": "query", "topic": "query", "terms": "query", "limit": "max_sources", "count": "max_sources"},
     "batch_add_data_points": {"topic_name": "topic", "store": "store_type", "name": "topic", "rows": "data_points", "extracted_data": "data_points"},
+    "locate_and_prepare_file": {"keyword": "name", "query": "name", "q": "name", "filename": "name", "file": "name"},
+    "export_dataset_pdf": {"name": "topic", "project": "topic", "project_name": "topic", "topic_name": "topic", "research_topic": "topic", "store": "store_type", "type": "store_type"},
+    "export_research_dataset": {"name": "topic", "project": "topic", "topic_name": "topic"},
+    "convert_md_to_pdf": {"path": "md_path", "file": "md_path", "md_file": "md_path", "name": "output_path"},
 }
 
 _TOOL_DEFAULTS: dict[str, dict[str, object]] = {
@@ -2506,6 +2570,7 @@ _TOOL_DEFAULTS: dict[str, dict[str, object]] = {
     "play_favorites": {"count": 15, "shuffle": True},
     "list_favorites": {"limit": 20},
     "recommend_best_video": {"max_results": 8},
+    "export_dataset_pdf": {"store_type": "research"},
 }
 
 
@@ -2562,26 +2627,99 @@ async def _invoke(fn, args: dict, mcp_manager=None) -> str:
     return await loop.run_in_executor(None, lambda: fn(**args))
 
 
+_TRANSIENT_SUBSTRS = ("timeout", "timed out", "connecterror", "connection", "503", "502", "504", "429", "rate_limit", "temporarily", "unavailable", "err_connection_refused", "err_connection_timed_out", "net::err")
+
+def _is_transient_error(msg: str) -> bool:
+    low = msg.lower()
+    return any(s in low for s in _TRANSIENT_SUBSTRS)
+
+def _is_playwright_transient_json(result: str) -> bool:
+    return isinstance(result, str) and '"status": "error"' in result and any(x in result for x in ("ERR_CONNECTION_REFUSED","ERR_CONNECTION_TIMED_OUT","net::ERR","Timed out"))
+
+
 async def dispatch_call(name: str, arguments: dict, mcp_manager=None) -> str:
     if name in FUNCTION_MAP:
         fn = FUNCTION_MAP[name]
         args, notes = _repair_arguments(name, fn, arguments or {})
-        try:
-            result = await _invoke(fn, args, mcp_manager)
-            if notes and isinstance(result, str) and result.startswith("Missing required parameter"):
-                result += f" Repair notes: {'; '.join(notes)}."
-            return result
-        except TypeError as e:
+        # retry for transient errors (up to 3 attempts with backoff)
+        for attempt in range(3):
             try:
-                return await _invoke(fn, args, mcp_manager)
-            except Exception as e2:
-                logger.exception("Error executing local function '%s' (after argument repair)", name)
-                return _actionable_error(name, fn, e2, notes)
-        except Exception as e:
-            logger.exception("Error executing local function '%s'", name)
-            return f"Error executing {name}: {e}"
+                result = await _invoke(fn, args, mcp_manager)
+                if notes and isinstance(result, str) and result.startswith("Missing required parameter"):
+                    result += f" Repair notes: {'; '.join(notes)}."
+                # C1: JSON-level transient for Playwright (success-wrapped error) — retry with backoff
+                if _is_playwright_transient_json(result) and attempt < 2:
+                    backoff = 0.5 * (2 ** attempt)
+                    logger.warning("Playwright transient JSON '%s' attempt %d — backoff %.1fs", name, attempt+1, backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+                # C2: hint injection for connection refused so LLM senses shell
+                if isinstance(result, str) and any(x in result for x in ("ERR_CONNECTION_REFUSED","ERR_CONNECTION_TIMED_OUT","net::ERR")):
+                    result += "\n---\nHint: dev server not reachable. 1) Check previous opencode_bash result for actual port (JSON port field, not 5174), 2) Read shell: opencode_bash('tasklist') or check vite.log, 3) Wait 5s and retry Playwright with returned port, 4) If vite failed (exit code), re-run npm install, 5) web_search_exa only if vite build error persists."
+                # A4: best-effort token accounting for active project
+                try:
+                    from backend.core.project_store import get_project_store
+                    _store = get_project_store()
+                    _aps = _store.list_projects(status="active")
+                    if _aps:
+                        _pid = _aps[0]["id"]
+                        _toks = max(1, len(str(result or "")) // 4 + len(str(arguments or "")) // 4)
+                        _store.add_token_usage(_pid, _toks, cost=0.0)
+                except Exception:
+                    pass
+                return result
+            except TypeError as e:
+                # Fix: retry without mcp_manager if fn doesn't accept it
+                if "mcp_manager" not in _expected_params(fn):
+                    try:
+                        loop2 = asyncio.get_running_loop()
+                        if asyncio.iscoroutinefunction(fn):
+                            result2 = await fn(**args)
+                        else:
+                            result2 = await loop2.run_in_executor(None, lambda: fn(**args))
+                        return result2
+                    except Exception as e2:
+                        logger.exception("Error executing local function '%s' (after argument repair)", name)
+                        return _actionable_error(name, fn, e2, notes)
+                logger.exception("Error executing local function '%s' (TypeError)", name)
+                return _actionable_error(name, fn, e, notes)
+            except Exception as e:
+                msg = str(e)
+                is_transient = _is_transient_error(msg)
+                is_permanent = any(s in msg for s in ("Missing required", "already exists", "not found", "Invalid status", "Cannot transition", "Allowed:"))
+                if is_permanent:
+                    logger.exception("Permanent error executing '%s'", name)
+                    return f"Error executing {name}: {e}"
+                if is_transient and attempt < 2:
+                    backoff = 0.5 * (2 ** attempt)
+                    logger.warning("Transient error '%s' attempt %d — backoff %.1fs", name, attempt+1, backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.exception("Error executing local function '%s'", name)
+                return f"Error executing {name}: {e}"
+        # fallback (should not reach)
+        return f"Error executing {name}: transient failure after retries"
     if mcp_manager is not None:
-        return await mcp_manager.call_tool(name, arguments)
+        # MCP tools: retry transient with backoff + JSON-level transient
+        for attempt in range(3):
+            try:
+                result = await mcp_manager.call_tool(name, arguments)
+                if _is_playwright_transient_json(result) and attempt < 2:
+                    backoff = 0.5 * (2 ** attempt)
+                    logger.warning("MCP Playwright transient JSON '%s' attempt %d — backoff %.1fs", name, attempt+1, backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+                if isinstance(result, str) and any(x in result for x in ("ERR_CONNECTION_REFUSED","ERR_CONNECTION_TIMED_OUT","net::ERR")):
+                    result += "\n---\nHint: dev server not reachable. Check opencode_bash port JSON and retry with correct port."
+                return result
+            except Exception as e:
+                msg = str(e)
+                if _is_transient_error(msg) and attempt < 2:
+                    backoff = 0.5 * (2 ** attempt)
+                    logger.warning("MCP transient '%s' attempt %d — backoff %.1fs", name, attempt+1, backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+                raise
     return f"Unknown function: {name}"
 
 

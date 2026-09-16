@@ -87,6 +87,13 @@ class QueryClassifier:
               r"\bradio\b", r"\btrending\b", r"\bviral\b.*\bsong\b", r"\bnew\s+songs\b",
               r"\bchill\b.*\bmusic\b", r"\bfocus\b.*\bmusic\b", r"\bparty\b.*\bmusic\b", r"\bworkout\b.*\bmusic\b"]),
 
+            ("deep_learn", True, "auto",
+             ["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "DATA"],
+             ["basic", "research", "data", "project"],
+             [r"\blearn\s+(fully\s+)?about\b", r"\blearn\s+.*\bfully\b", r"\bmaster\b.*\b(fluid|thermo|mechanics|physics|chemistry|math)",
+              r"\bdeep\s*dive\b", r"\bfor\s+1\s*day\b", r"\bfluid\s*mechanics\b", r"\bthermodynamics\b",
+              r"\bstudy\s+in\s+depth\b", r"\bunderstand\s+.*\bfully\b"]),
+
             ("research", True, "auto",
              ["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "DATA"],
              ["basic", "research", "data", "project"],

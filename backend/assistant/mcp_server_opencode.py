@@ -53,7 +53,7 @@ BLOCKED_PATTERNS = [
 STATIC_TOOL_DEFINITIONS = [
     {
         "name": "opencode_bash",
-        "description": "Run a shell command in projects dir. background=True starts a dev server. Whitelisted cmds: npm, npx, pip, python, git.",
+        "description": "Run a shell command in projects dir. background=True starts a dev server (auto port-rewrite if vite --port in use). Whitelisted cmds: npm, npx, pip, python, git.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -66,12 +66,13 @@ STATIC_TOOL_DEFINITIONS = [
     },
     {
         "name": "opencode_write",
-        "description": "Create or overwrite a file. ONLY allowed in projects/ directory — NEVER Mayday system.",
+        "description": "Create or overwrite a file. ONLY allowed in projects/ directory — NEVER Mayday system. Auto tsc check for .ts/.tsx unless skip_tsc=true.",
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "File path (relative to project root or absolute)"},
                 "content": {"type": "string", "description": "File content"},
+                "skip_tsc": {"type": "boolean", "description": "Skip post-write tsc --noEmit check (default false for .ts/.tsx). Set true for bulk scaffolds.", "default": False},
             },
             "required": ["path", "content"],
         },
@@ -89,7 +90,7 @@ STATIC_TOOL_DEFINITIONS = [
     },
     {
         "name": "opencode_edit",
-        "description": "Replace text in a file. ONLY allowed in projects/ directory — NEVER Mayday system.",
+        "description": "Replace text in a file. ONLY allowed in projects/ directory — NEVER Mayday system. Auto tsc check for .ts/.tsx unless skip_tsc=true.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -97,6 +98,7 @@ STATIC_TOOL_DEFINITIONS = [
                 "old_string": {"type": "string", "description": "Text to replace"},
                 "new_string": {"type": "string", "description": "Replacement text"},
                 "replace_all": {"type": "boolean", "description": "Replace ALL occurrences instead of just the first one"},
+                "skip_tsc": {"type": "boolean", "description": "Skip post-edit tsc --noEmit check", "default": False},
             },
             "required": ["path", "old_string", "new_string"],
         },
@@ -185,7 +187,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="opencode_bash",
-            description="Run a shell command. background=True starts a dev server. Whitelisted cmds: npm, npx, pip, python, git.",
+            description="Run a shell command. background=True starts a dev server (auto port-rewrite if vite --port in use). Whitelisted cmds: npm, npx, pip, python, git.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -198,12 +200,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="opencode_write",
-            description="Create or overwrite a file. ONLY allowed in projects/ directory — NEVER Mayday system.",
+            description="Create or overwrite a file. ONLY allowed in projects/ directory — NEVER Mayday system. Auto tsc check for .ts/.tsx unless skip_tsc=true.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "File path (relative to project root or absolute)"},
                     "content": {"type": "string", "description": "File content"},
+                    "skip_tsc": {"type": "boolean", "description": "Skip post-write tsc check", "default": False},
                 },
                 "required": ["path", "content"],
             },
@@ -221,13 +224,14 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="opencode_edit",
-            description="Replace text in a file. ONLY allowed in projects/ directory — NEVER Mayday system.",
+            description="Replace text in a file. ONLY allowed in projects/ directory — NEVER Mayday system. Auto tsc check for .ts/.tsx unless skip_tsc=true.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "File path (projects/ only)"},
                     "old_string": {"type": "string", "description": "Text to replace"},
                     "new_string": {"type": "string", "description": "Replacement text"},
+                    "skip_tsc": {"type": "boolean", "description": "Skip post-edit tsc check", "default": False},
                 },
                 "required": ["path", "old_string", "new_string"],
             },
@@ -286,7 +290,38 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 cwd = cwd.resolve()
 
             if arguments.get("background"):
-                import time
+                import time, json as _json
+                # D1: auto port-rewrite for vite --port and --port= (parity with project_runner.py:75)
+                actual_port = None
+                req_port = None
+                m_port = re.search(r"--port[=\s]+(\d+)", cmd)
+                if m_port:
+                    try:
+                        req_port = int(m_port.group(1))
+                    except Exception:
+                        req_port = 5174
+                elif "vite" in cmd or "npm run dev" in cmd:
+                    req_port = 5174
+                if req_port is not None:
+                    try:
+                        from backend.core.port_utils import find_free_port
+                        actual_port = find_free_port(req_port)
+                        if actual_port != req_port:
+                            if m_port:
+                                cmd = re.sub(r"--port[=\s]+\d+", f"--port {actual_port}", cmd)
+                            else:
+                                # vite without explicit port or npm run dev -> append correct --port
+                                if "npm run dev" in cmd:
+                                    # npm needs -- to pass args to vite
+                                    cmd = cmd.rstrip() + f" -- --port {actual_port} --host"
+                                else:
+                                    cmd = cmd.rstrip() + f" --port {actual_port} --host"
+                        else:
+                            actual_port = req_port
+                    except Exception:
+                        actual_port = req_port
+                    except Exception:
+                        actual_port = req_port
                 proc = subprocess.Popen(
                     cmd, shell=True, cwd=cwd,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -294,8 +329,47 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
                 )
                 _background_processes[proc.pid] = proc
-                time.sleep(2)
-                return [TextContent(type="text", text=f"Started server (PID {proc.pid})")]
+                # A4: register with ProjectStore if cwd is inside a project folder
+                try:
+                    from backend.core.project_store import get_project_store as _get_ps_bg
+                    _store_bg = _get_ps_bg()
+                    for _proj in _store_bg.list_projects(status="active"):
+                        _pdir = str((_store_bg.projects_dir / _proj.get("folder", "")).resolve())
+                        if str(cwd.resolve()).startswith(_pdir):
+                            _store_bg.register_process(_proj["id"], proc.pid)
+                            break
+                except Exception:
+                    pass
+                # B1: poll loop instead of fixed sleep — wait for vite to listen or fail
+                poll_port = actual_port if actual_port is not None else (req_port or 5174)
+                started_ok = False
+                poll_err = ""
+                for _ in range(30):
+                    if proc.poll() is not None:
+                        try:
+                            _, err = proc.communicate(timeout=1)
+                            poll_err = (err or b"").decode(errors="ignore")[:1500]
+                        except Exception:
+                            poll_err = ""
+                        break
+                    try:
+                        import httpx
+                        r = httpx.get(f"http://localhost:{poll_port}", timeout=0.5)
+                        if r.status_code < 500:
+                            started_ok = True
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                else:
+                    # after 15s, check once more if process still alive
+                    if proc.poll() is None:
+                        started_ok = True  # assume started, playwright will probe
+                if poll_err and proc.poll() is not None:
+                    return [TextContent(type="text", text=json.dumps({"status":"error","pid":proc.pid,"port":poll_port,"message":f"Dev server failed to start (exit {proc.returncode}): {poll_err[:800]}"}))]
+                payload = {"status":"ok","pid":proc.pid,"port":poll_port,"message":f"Started server (PID {proc.pid}) on port {poll_port}" + ("" if started_ok else " (poll timeout — may still be starting)")}
+                # keep legacy text for regex parsers + structured JSON for new code
+                return [TextContent(type="text", text=json.dumps(payload))]
 
             result = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True,
@@ -306,16 +380,54 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             output = result.stdout or result.stderr or "(no output)"
             if result.returncode != 0:
                 output = f"Exit code {result.returncode}:\n{result.stderr}"
+                # B2: hint if npm install failed — don't start vite
+                if "npm install" in cmd:
+                    output += "\n---\nHint: npm install did not complete (see exit code). Re-run npm install and check network before starting vite."
+            # also surface timeout hint
+            if "timed out" in output.lower() and "npm install" in cmd:
+                output += "\nHint: npm install timed out after 60s (large deps on slow network). Re-run npm install."
             return [TextContent(type="text", text=output.strip())]
 
         elif name == "opencode_write":
             path = _resolve_path(arguments["path"])
             if not _is_path_writable(path):
                 return [TextContent(type="text", text=f"Path not allowed. Can only write to projects directory, not Mayday system.")]
+            content = arguments["content"]
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-            Path(path).write_text(arguments["content"], encoding="utf-8")
-            size = len(arguments["content"])
-            return [TextContent(type="text", text=f"Wrote {size} chars to {path}")]
+            Path(path).write_text(content, encoding="utf-8")
+            size = len(content)
+            msg = f"Wrote {size} chars to {path}"
+            # C2: file.written hook (outside lock) + inline invariant checks
+            try:
+                from backend.core.project_store import get_project_store as _get_ps_fw
+                _store_fw = _get_ps_fw()
+                _store_fw.emit_hook("file.written", {"path": path, "content": content[:500]})
+            except Exception:
+                pass
+            # C1: tsc gate for .ts/.tsx unless skip_tsc
+            skip = bool(arguments.get("skip_tsc", False))
+            if not skip and path.endswith((".tsx", ".ts")):
+                try:
+                    # derive project dir (first segment under PROJECTS_DIR)
+                    rel = Path(path).resolve().relative_to(PROJECTS_DIR.resolve())
+                    proj_dir = PROJECTS_DIR / rel.parts[0] if rel.parts else Path(path).parent
+                    if (proj_dir / "tsconfig.json").exists():
+                        r = subprocess.run("npx tsc --noEmit --pretty false", shell=True, cwd=proj_dir, capture_output=True, text=True, timeout=20,
+                                           creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                        if r.returncode != 0:
+                            out = (r.stdout or r.stderr or "")[:1500].strip()
+                            msg += f"\n⚠ tsc --noEmit failed (fix before build):\n{out}"
+                except Exception as e:
+                    msg += f"\n(tsc check skipped: {e})"
+            # inline invariant warnings (fast, no tsc)
+            try:
+                if path.endswith("src/index.css") and not content.lstrip().startswith('@import "tailwindcss"'):
+                    msg += "\n⚠ src/index.css must start with @import \"tailwindcss\"; (Tailwind v4) — page will be white/unstyled."
+                if path.endswith("vite.config.ts") and "tailwindcss" not in content:
+                    msg += "\n⚠ vite.config.ts missing tailwindcss import/plugin — Tailwind will not inject."
+            except Exception:
+                pass
+            return [TextContent(type="text", text=msg)]
 
         elif name == "opencode_read":
             path = _resolve_path(arguments["path"])
@@ -351,7 +463,32 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 new_content = content.replace(old, new, 1)
             Path(path).write_text(new_content, encoding="utf-8")
             actual = count if replace_all else 1
-            return [TextContent(type="text", text=f"Replaced {actual} occurrence(s) in {path}")]
+            msg = f"Replaced {actual} occurrence(s) in {path}"
+            try:
+                from backend.core.project_store import get_project_store as _get_ps_fe
+                _store_fe = _get_ps_fe()
+                _store_fe.emit_hook("file.written", {"path": path, "content": new_content[:500]})
+            except Exception:
+                pass
+            skip = bool(arguments.get("skip_tsc", False))
+            if not skip and path.endswith((".tsx", ".ts")):
+                try:
+                    rel = Path(path).resolve().relative_to(PROJECTS_DIR.resolve())
+                    proj_dir = PROJECTS_DIR / rel.parts[0] if rel.parts else Path(path).parent
+                    if (proj_dir / "tsconfig.json").exists():
+                        r = subprocess.run("npx tsc --noEmit --pretty false", shell=True, cwd=proj_dir, capture_output=True, text=True, timeout=20,
+                                           creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                        if r.returncode != 0:
+                            out = (r.stdout or r.stderr or "")[:1500].strip()
+                            msg += f"\n⚠ tsc --noEmit failed (fix before build):\n{out}"
+                except Exception as e:
+                    msg += f"\n(tsc check skipped: {e})"
+            try:
+                if path.endswith("src/index.css") and not new_content.lstrip().startswith('@import "tailwindcss"'):
+                    msg += "\n⚠ src/index.css must start with @import \"tailwindcss\"; — page will be white."
+            except Exception:
+                pass
+            return [TextContent(type="text", text=msg)]
 
         elif name == "opencode_glob":
             pattern = arguments["pattern"]
@@ -445,6 +582,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 except Exception:
                     pass
                 del _background_processes[pid]
+                try:
+                    from backend.core.project_store import get_project_store as _get_ps_stop
+                    _store_stop = _get_ps_stop()
+                    for _proj in _store_stop.list_projects():
+                        if pid in (_proj.get("process_handles") or []):
+                            _store_stop.unregister_process(_proj["id"], pid)
+                            break
+                except Exception:
+                    pass
                 return [TextContent(type="text", text=f"Process {pid} terminated")]
             try:
                 subprocess.run(
@@ -452,6 +598,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     capture_output=True, timeout=5,
                     creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
                 )
+                try:
+                    from backend.core.project_store import get_project_store as _get_ps_stop2
+                    _store_stop2 = _get_ps_stop2()
+                    for _proj in _store_stop2.list_projects():
+                        if pid in (_proj.get("process_handles") or []):
+                            _store_stop2.unregister_process(_proj["id"], pid)
+                            break
+                except Exception:
+                    pass
                 return [TextContent(type="text", text=f"Process {pid} terminated via taskkill")]
             except Exception:
                 return [TextContent(type="text", text=f"Process {pid} not found")]

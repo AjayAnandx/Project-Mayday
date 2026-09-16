@@ -52,7 +52,30 @@ async def lifespan(app: FastAPI):
     scheduler = get_scheduler()
     task = asyncio.create_task(scheduler.run())
     logger.info("Scheduler started")
+
+    # Telegram poller — runs inside backend process (covered by NSSM auto-restart)
+    telegram_task = None
+    try:
+        _tg_cfg = _load_config().get("telegram", {}) or {}
+        if _tg_cfg.get("enabled") and (_tg_cfg.get("token") or "").strip():
+            from backend.telegram.bot import start_telegram_poller
+            telegram_task = asyncio.create_task(start_telegram_poller())
+            logger.info("Telegram poller started")
+        else:
+            logger.info("Telegram poller disabled (telegram.enabled=false or token empty)")
+    except Exception as _e:
+        logger.warning("Telegram poller failed to start: %s", _e)
+
     yield
+    if telegram_task:
+        telegram_task.cancel()
+        try:
+            await telegram_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as _e:
+            logger.warning("Telegram poller stop error: %s", _e)
+        logger.info("Telegram poller stopped")
     task.cancel()
     try:
         await task
