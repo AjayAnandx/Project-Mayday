@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from pydantic import BaseModel
 
 from backend.core.music_history import get_music_history
-from backend.core.youtube_client import get_chart_trending, resolve_stream
+from backend.core.youtube_client import get_chart_trending, resolve_stream, get_radio, get_mood_tracks
 from backend.memory.knowledge_graph import get_graph
 
 logger = logging.getLogger(__name__)
@@ -126,6 +126,59 @@ def trending(language: str | None = None, count: int = Query(default=10, ge=1, l
 
     count = max(1, min(int(count or 10), 30))
     return {"tracks": tracks[:count], "country": _trending_cache.get("country", "IN"), "biased_by": target_lang}
+
+
+@router.get("/next")
+def next_track(video_id: str | None = None, language: str | None = None, mood: str | None = None, count: int = Query(default=5, ge=1, le=20)):
+    """Auto-queue next track(s) in same genre/mood/language.
+
+    Cascade: mood → get_mood_tracks, video_id → get_radio filtered by language, else trending biased.
+    Used by frontend onended when queue exhausts.
+    """
+    mood = (mood or "").strip()
+    language = (language or "").strip().lower()
+    video_id = (video_id or "").strip()
+    count = max(1, min(int(count or 5), 20))
+
+    # 1) mood path
+    if mood:
+        res = get_mood_tracks(mood, n=count + 2)
+        tracks = res.get("tracks") or []
+        if tracks:
+            # filter out the current video_id if present
+            if video_id:
+                tracks = [t for t in tracks if t.get("video_id") != video_id]
+            if tracks:
+                return {"track": tracks[0], "queue": tracks[1:count], "source": "mood", "mood": mood}
+    # 2) radio path
+    if video_id:
+        res = get_radio(video_id, n=count + 5)
+        tracks = res.get("tracks") or []
+        if tracks:
+            # filter language if caller provided one
+            if language and language != "other":
+                # keep matching language first
+                matching = [t for t in tracks if (t.get("language") or "").lower() == language]
+                others = [t for t in tracks if t not in matching]
+                # prefer matching, but don't return empty if none match
+                if matching:
+                    tracks = matching + others
+            # remove current video_id
+            tracks = [t for t in tracks if t.get("video_id") != video_id]
+            if tracks:
+                return {"track": tracks[0], "queue": tracks[1:count], "source": "radio", "seed": video_id}
+    # 3) fallback → trending biased by language
+    try:
+        # reuse trending logic with bias
+        trend = trending(language=language or None, count=count + 2)
+        tracks = trend.get("tracks") or []
+        if video_id:
+            tracks = [t for t in tracks if t.get("video_id") != video_id]
+        if tracks:
+            return {"track": tracks[0], "queue": tracks[1:count], "source": "trending", "biased_by": trend.get("biased_by")}
+    except Exception as e:
+        logger.warning("next_track trending fallback failed: %s", e)
+    return {"track": None, "queue": [], "source": "none"}
 
 
 @router.get("/stream")

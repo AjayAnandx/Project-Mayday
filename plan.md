@@ -5929,3 +5929,371 @@ telegram:
 1. Create bot via @BotFather → get token.
 2. Get your chat id (send message to bot, read update, or @userinfobot) → add to `allowed_chat_ids`.
 3. Put token in `.env` as `TELEGRAM_BOT_TOKEN` (or `config.yaml` env section).
+
+---
+
+## Gmail API — Consumer Mailbox for Mayday (Dedicated `mayday@` @gmail.com) — Plan
+
+### Status — PLANNED (no code yet)
+
+### Decision (Confirmed Sep 2026)
+| Decision | Choice |
+|----------|--------|
+| Mailbox type | **Consumer Gmail** (`@gmail.com`) — manual creation, not Workspace |
+| Username | `mayday` → address like `mayday.<user>.<random>@gmail.com` (e.g. `mayday.akash.4821@gmail.com`) |
+| Inbound handling | Poll via `Scheduler` 60s + `history.list` incremental sync (no Pub/Sub) |
+| Outbound handling | `users.messages.send` raw RFC2822 + `Idempotency-Key` style dedup via local cache |
+| Auto-reply | **Approval-gated**: LLM drafts with `gmail_reply`, user says "approve/send" before send — no silent auto-send |
+| UI v1 | **Minimal**: Dashboard badge (`📧 mayday@... • N unread`) + notification toast + chat tools — no full inbox page |
+| Personal Gmail | Untouched — separate token file, no cross-read |
+
+### Why Consumer Mailbox Cannot Be Auto-Created
+Gmail API has **zero** account-creation endpoints. `@gmail.com` accounts are global Google accounts created only via `accounts.google.com/SignUp` (phone + CAPTCHA). For isolation you must **manually create** a second free Gmail for Mayday during onboarding. Mayday stores two token sets: `tokens/agent_token.json` (Mayday) vs `tokens/user_token.json` (you, if you ever connect personal). `userId="me"` resolves to whichever credentials are loaded — no cross-pollution. Workspace `@yourdomain.com` would allow `POST /admin/directory/v1/users` but is out of scope for this plan.
+
+### Architecture Overview
+```
+User creates mayday.xxx@gmail.com manually (one-time)
+        │
+        ▼
+OAuth consent (Web/Desktop app) → tokens/agent_token.json + tokens/user_token.json
+        │
+        ▼
+backend/core/gmail_service.py (google-api-python-client)
+   ├── get_gmail_service(account="agent") — loads + refreshes Credentials
+   ├── send_message / list_messages / get_message / search / modify_labels
+   ├── get_thread / get_history / get_profile
+   └── gmail_state.json {history_id_agent, agent_email, last_sync}
+
+Scheduler._check_gmail() every 60s
+   → history.list(startHistoryId) → new messages → fire_notification(category="email")
+   → knowledge_graph node type=email + operation_log record
+   → frontend polls GET /api/notifications/fired (3s) → ReminderDialog + Toast
+
+LLM tools (gmail_*) via function_registry → dispatch_call → gmail_service
+   → WS tool_call bubble → chat
+
+REST: /api/gmail/status|messages|send + /api/auth/gmail/start|callback
+Frontend minimal: Dashboard badge + useGmail hook (30s poll)
+```
+
+### Reuse of Existing Mayday Patterns
+*   Secrets via `backend/core/config.py:6` `ENV_OVERRIDES` + `.env` (`GOOGLE_CLIENT_ID/SECRET` or `credentials.json` path) — add `gmail.token_path_agent`, `gmail.credentials_path`.
+*   Tool dispatch via `function_registry.py:339` `LOCAL_TOOL_DEFINITIONS` + `GROUP_SETS` + `ToolSelector` BM25 (new group `gmail`).
+*   Lifespan background tasks in `backend/main.py:23` already runs `Scheduler` + telegram poller — add `_check_gmail` there (no extra task needed for poll).
+*   Notifications already polled every 3s (`useNotifications` → `GET /api/notifications/fired`) — reuse for "New Email".
+*   Operation log + knowledge_graph sync mirrors `todo_functions.py` fix.
+
+### Phase 0 — GCP One-Time Setup (manual, 30 min)
+1.  Cloud Console → new project `mayday-gmail` → Enable **Gmail API** (`gmail.googleapis.com`).
+2.  OAuth consent screen: **External** → test users add `you@gmail.com` + `mayday.xxx@gmail.com` → add scopes `https://www.googleapis.com/auth/gmail.modify` + `https://www.googleapis.com/auth/userinfo.email` + `openid`.
+3.  Create credentials: **OAuth client ID** → type **Web application** (primary) or **Desktop** (Electron fallback) → authorized redirect URIs: `http://localhost:8772/api/auth/gmail/callback` (dev) + `http://100.x.x.x:8771/api/auth/gmail/callback` (Tailscale prod if needed). Download `credentials.json` → `backend/credentials/gmail_credentials.json` (gitignore).
+4.  `pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib` (add to `requirements.txt`).
+5.  **Publish consent to Production** immediately (otherwise refresh_token expires in 7 days for External Testing + restricted scopes).
+
+### Phase 1 — Config + Core Service (backend foundation)
+
+**Files:**
+
+| File | Change |
+|------|--------|
+| `config.yaml` | Add `gmail:` block (below) |
+| `backend/core/config.py` | Add `gmail` to `ENV_OVERRIDES` (credentials/token paths) |
+| `backend/credentials/.gitkeep` | Create dir for credentials.json |
+| `backend/core/gmail_service.py` | **NEW** — singleton wrapper around `googleapiclient.discovery.build("gmail","v1")` |
+| `backend/core/gmail_store.py` | **NEW** — `gmail_state.json` persistence `{history_id_agent, agent_email, last_sync_at}` thread-safe |
+| `requirements.txt` | Add `google-api-python-client`, `google-auth-oauthlib` |
+
+**`config.yaml` addition:**
+```yaml
+gmail:
+  enabled: true
+  account: agent                 # agent | user | both
+  agent_email: ""                # filled after OAuth, e.g. mayday.akash.4821@gmail.com
+  credentials_path: backend/credentials/gmail_credentials.json
+  token_path_agent: tokens/agent_token.json
+  token_path_user: tokens/user_token.json
+  polling_interval: 60
+  watch_enabled: false           # v2 only (Pub/Sub)
+  auto_reply: false              # approval-gated per your choice
+  ui_mode: minimal
+```
+
+**`gmail_service.py` responsibilities:**
+*   `get_gmail_service(account="agent")` → `Credentials.from_authorized_user_file(token_path, SCOPES)` → if `expired and refresh_token: creds.refresh(Request())` → `build("gmail","v1", credentials=creds)`.
+*   `ensure_token(account)` → raise `NeedsOAuth` if missing/refresh fails (frontend shows "Connect Gmail").
+*   `get_profile(account)` → `users.getProfile(userId="me")` → `{emailAddress, messagesTotal, threadsTotal, historyId}` (bootstraps `historyId`).
+*   `send_message(to, subject, text, html, cc, bcc, thread_id, in_reply_to, attachments)` → build `EmailMessage()` → `base64.urlsafe_b64encode(msg.as_bytes()).decode()` → `users.messages.send(userId="me", body={raw, threadId?})` → returns `{id, threadId, historyId}`. Attachments via `msg.add_attachment`.
+*   `list_messages(query, label_ids, max_results, page_token)` → `users.messages.list` (returns `{id, threadId}` only).
+*   `get_message(id, format="FULL"|"METADATA"|"MINIMAL"|"RAW")` → full payload + headers + snippet. `METADATA` with `metadataHeaders=["Subject","From","Date"]` for cheap poll.
+*   `search(query, limit)` → `list(q=query)` wrapper with highlights via snippet.
+*   `get_thread(id, format)` → `users.threads.get` ordered `messages[]`.
+*   `modify_labels(id, add_label_ids, remove_label_ids)` → `users.messages.modify` (e.g. `UNREAD`→read, custom `Label_123`).
+*   `create_label(name)` → `users.labels.create`.
+*   `get_history(start_history_id, history_types)` → `users.history.list`.
+*   Local idempotency cache: `sent_cache: dict[idempotency_key -> {message_id, thread_id, expires_at}]` (24h TTL) to prevent double-send on LLM retry.
+
+**Verification:** `python -c "from backend.core.gmail_service import get_gmail_service; print(get_gmail_service('agent').users().getProfile(userId='me').execute()['emailAddress'])"` → `mayday.xxx@gmail.com`.
+
+### Phase 2 — Inbound Polling (Scheduler + History Sync)
+
+**Why poll for v1:** Mayday is desktop/Electron behind NAT. Gmail docs say *"For installed apps, poll-based Synchronize is still recommended."* Poll reuses `Scheduler.run()` 60s loop (`backend/core/scheduler.py:54` already polls events/todos/reminders). Pub/Sub push needs GCP project + public HTTPS (not viable for consumer desktop without Tailscale Funnel) and adds no latency win over 60s poll (1440 `history.list` calls/day ≪ 1B units quota).
+
+**New `Scheduler._check_gmail()` (called every 60s in `run()`):**
+```python
+async def _check_gmail(self):
+    for acct in (["agent"] if gmail.account=="agent" else ["agent","user"]):
+        svc = get_gmail_service(acct)
+        last = gmail_store.get_history_id(acct)
+        if last is None:
+            prof = svc.users().getProfile(userId="me").execute()
+            last = prof["historyId"]; gmail_store.set_history_id(acct, last); continue
+        try:
+            hist = svc.users().history().list(userId="me", startHistoryId=last, historyTypes=["messageAdded","labelAdded"]).execute()
+        except HttpError as e:
+            if "404" in str(e):  # history expired (≥1 week, sometimes shorter)
+                msgs = svc.users().messages().list(userId="me", q="is:unread", maxResults=20).execute()
+                for m in msgs.get("messages",[]):
+                    meta = svc.users().messages().get(userId="me", id=m["id"], format="METADATA", metadataHeaders=["From","Subject"]).execute()
+                    self.fire_notification("New Email", f"{From}: {Subject}", category="email")
+                continue
+            raise
+        for rec in hist.get("history",[]):
+            for added in rec.get("messagesAdded",[]):
+                mid = added["message"]["id"]; tid = added["message"]["threadId"]
+                msg = svc.users().messages().get(userId="me", id=mid, format="METADATA", metadataHeaders=["From","Subject","Date"]).execute()
+                hdrs = {h["name"]:h["value"] for h in msg["payload"]["headers"]}
+                self.fire_notification("New Email", f"{hdrs.get('From','')}: {hdrs.get('Subject','')}", category="email", action_page="chat")
+                # KG + op log:
+                get_graph().add_node("email", f"email:{mid}", {subject: hdrs.get("Subject",""), from: hdrs.get("From",""), thread_id: tid, account: acct})
+                get_operation_log().record("create", "email", mid, hdrs.get("Subject",""))
+                # Mark UNREAD handling: leave UNREAD until user reads via gmail_read + gmail_modify
+        if hist.get("historyId"):
+            gmail_store.set_history_id(acct, hist["historyId"])
+```
+*   Uses `METADATA` for cheap poll, `FULL` only on explicit `gmail_read`.
+*   Persists `historyId` to `gmail_state.json` (survives restart).
+*   Filters: `q="is:unread"` for fallback; primary path uses `history.list` labelIds.
+
+**Optional v2 Push (deferred):** `POST /users/me/watch {topicName:"projects/PROJECT/topics/mayday-gmail-topic", labelIds:["INBOX"]}` → `{historyId, expiration 7d}` → renew daily. Needs `gcloud pubsub topics create` + IAM grant `gmail-api-push@system.gserviceaccount.com` publisher + `POST /pubsub/push` webhook verifying OIDC JWT. Pull variant via `SubscriberClient.pull()` runs in `lifespan` but is redundant over direct `history.list` poll.
+
+### Phase 3 — LLM Tools (approval-gated, minimal scope)
+
+Register new group `gmail` in `function_registry.py:339` `GROUP_SETS` + `ToolSelector`.
+
+| Tool | Params | Behavior |
+|------|--------|----------|
+| `gmail_send` | `to: str\|list, subject: str, text: str, html?: str, cc?: list, bcc?: list, idempotency_key?: str` | `gmail_service.send_message` with local `Idempotency-Key` cache (409 on reuse with different payload) |
+| `gmail_reply` | `message_id: str, text: str, html?: str` | Fetch parent `Message-ID` + `threadId` via `get_message(format=METADATA)` → send with `In-Reply-To` + `References` + `threadId` |
+| `gmail_draft` | `to, subject, text, html?` | `users.drafts.create` → returns draft id (approval-gate can use drafts) |
+| `gmail_list` | `query?: str="is:unread", limit?: int=10, label_ids?: list` | `list_messages` + `get` METADATA for each → `From | Subject | snippet | message_id | labelIds` |
+| `gmail_search` | `query: str, limit?: int=10` | Same as list but `q` uses Gmail UI syntax (`from:`, `subject:`, `has:attachment`, `after:`, `filename:pdf`) |
+| `gmail_read` | `message_id: str` | `get_message(FULL)` → `snippet + body (text/plain + text/html) + attachments list + headers` |
+| `gmail_thread` | `thread_id: str` | `get_thread(FULL)` → ordered messages with snippet per message |
+| `gmail_modify` | `message_id: str, add_labels?: list, remove_labels?: list` | `modify` (e.g. `UNREAD`→read, `Label_123` custom `Mayday/Processed`) |
+| `gmail_create_label` | `name: str` | `users.labels.create` (e.g. `Mayday/Processed`, `Mayday/NeedsHuman`) |
+
+*   Implement handlers in **NEW** `backend/functions/gmail_functions.py` (~150 lines) returning human-readable strings for the iterative loop.
+*   Add to `CORE_TOOL_NAMES` only `gmail_list`, `gmail_search`, `gmail_read` (always available); keep `gmail_send/reply` gated behind intent (or keep all in `gmail` group with `ToolSelector` threshold 0.9, fallback passes all if empty).
+*   **Aliases & defaults** via existing `_PARAM_ALIASES` / `_TOOL_DEFAULTS` in `function_registry.py` (e.g. `q↔query`, `recipient→to`).
+*   System prompt addition in `backend/api/chat.py` `GMAIL_INSTRUCTIONS`:
+    > You have a dedicated consumer inbox `mayday.xxx@gmail.com` via Gmail API. Use `gmail_*` tools to send/read. Inbound mail arrives as notifications. **Do not auto-reply** — draft with `gmail_reply`/`gmail_draft` only after user says "approve", "send", "reply".
+
+### Phase 4 — REST API + OAuth Flow
+
+**NEW `backend/api/gmail.py` router (register in `backend/main.py:102`):**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/gmail/status` | `{enabled, account, agent_email, authenticated, history_id, quota, ui_mode}` |
+| `GET` | `/api/auth/gmail/start?account=agent` | 302 redirect to `https://accounts.google.com/o/oauth2/v2/auth?client_id=...&redirect_uri=...&response_type=code&scope=gmail.modify+userinfo.email+openid&access_type=offline&prompt=consent&state=agent&include_granted_scopes=true&login_hint=mayday.xxx@gmail.com` (state=CSRF) |
+| `GET` | `/api/auth/gmail/callback?code=&state=` | Verify `state`, `POST https://oauth2.googleapis.com/token {code, client_id, client_secret, redirect_uri, grant_type=authorization_code}` → `{access_token, refresh_token, expires_in, scope}` → write `tokens/agent_token.json` (0600) + fetch `userinfo` to fill `agent_email` → return `{emailAddress, success}` |
+| `GET` | `/api/gmail/messages?q=&labelIds=&limit=&pageToken=` | Proxy `list_messages` + METADATA for UI |
+| `GET` | `/api/gmail/messages/{id}` | Proxy `get_message(FULL)` |
+| `POST` | `/api/gmail/send {to, subject, text, html, threadId?}` | Proxy `send_message` (non-LLM UI trigger) |
+| `POST` | `/api/gmail/modify {message_id, addLabelIds, removeLabelIds}` | Proxy `modify` |
+
+*   `login_hint` + `prompt=select_account` forces account picker so user doesn't accidentally OAuth personal Gmail into agent slot.
+*   Token refresh is transparent in `gmail_service.py` (`creds.refresh(Request())` → rewrite `token.json`).
+*   For Electron, `InstalledAppFlow.from_client_secrets_file(...).run_local_server(port=0)` is alternative (no redirect URI) — handled inside `get_gmail_service` fallback.
+
+**Frontend minimal (your choice):**
+
+| File | Change |
+|------|--------|
+| `frontend/src/types/gmail.ts` | **NEW** `GmailMessage`, `GmailThread`, `GmailStatus` interfaces |
+| `frontend/src/services/api.ts` | Add `getGmailStatus()`, `listGmailMessages(q, limit)`, `getGmailMessage(id)`, `sendGmail(params)`, `startGmailAuth(account)` |
+| `frontend/src/hooks/useGmail.ts` | **NEW** poll `GET /api/gmail/messages?q=is:unread` 30s + status; expose `unreadCount` for badge |
+| `frontend/src/components/dashboard/DashboardPanel.tsx` | Add badge `📧 mayday.xxx@gmail.com • 2 unread` from `useGmail` |
+| `frontend/src/components/layout/Sidebar.tsx` | No new nav item v1 (minimal) — badge only |
+
+### Phase 5 — Security, Quotas, Verification
+
+| Concern | Handling |
+|---------|----------|
+| **Token storage** | `tokens/*.json` gitignored, 0600, `ENV_OVERRIDES` fallback; refresh_token long-lived but revoked if unused 6mo, password change with Gmail scopes, 100/client-user limit (oldest auto-invalidated), 7-day expiry only while consent = Testing |
+| **Verification** | `gmail.modify` + `userinfo.email` are **Restricted** → External app needs Google verification + security assessment if storing/transmitting mail on server (which Mayday does). Budget weeks. **Mitigation:** set OAuth consent to **Production** immediately; Workspace Internal would avoid but not applicable to consumer. `gmail.send` alone is Sensitive (lighter) if you ever want send-only. |
+| **Quotas** | Default 1B units/day, 250 units/user/sec. `messages.send=100`, `get=5`, `list=5`, `history.list=2`. Handle `429 Too Many Requests` + `Retry-After` with exponential backoff `(2^n + jitter, ≤10 retries)`. Daily **mail sending limits** (~500/day consumer, ~2000/day Workspace) are separate — `429 Mail sending` with hours-long block; queue and surface `dailyLimitExceeded`. |
+| **History expiry** | `historyId` valid ≥1 week, may purge sooner on high churn → 404 → fallback to full `messages.list` (already in `_check_gmail`). |
+| **Payload limits** | 25 MB decoded per message (≈36 MB base64), 50 recipients, `batchModify` ≤100 (recommend ≤50). |
+| **Trash vs delete** | Use `messages.trash` (recoverable, 30d) not `delete` (permanent, needs `mail.google.com` scope). |
+| **Idempotency** | Local `sent_cache` 24h keyed on `idempotency_key` (LLM generates `mayday-<uuid>`); same key + same payload → return cached `message_id`; different payload → 409. |
+| **Tests** | **NEW** `backend/test_gmail_service.py` mocked `googleapiclient` (send/list/history/404 fallback, refresh, idempotency) — zero repo pollution like `test_research_store.py`. |
+| **Docs** | `docs/adr.md` new ADR: Gmail consumer vs AgentMail (you own data, free consumer, no GCP for poll) + `CLAUDE.md` API table rows + `docs/deployment.md` Gmail env section. |
+
+### File Change Checklist (ordered)
+
+| # | File | Action |
+|---|------|--------|
+| 1 | `config.yaml` | Add `gmail:` block |
+| 2 | `.env.example` + `.env` | `GOOGLE_CREDENTIALS_PATH`, `GMAIL_TOKEN_PATH_AGENT` (or rely on defaults) |
+| 3 | `backend/core/config.py` | Add `gmail` to `ENV_OVERRIDES` |
+| 4 | `backend/core/gmail_service.py` | **NEW** — Gmail SDK wrapper + idempotency cache |
+| 5 | `backend/core/gmail_store.py` | **NEW** — `gmail_state.json` persistence |
+| 6 | `backend/api/gmail.py` | **NEW** — REST + OAuth start/callback + proxy |
+| 7 | `backend/functions/gmail_functions.py` | **NEW** — 9 LLM tools |
+| 8 | `backend/assistant/function_registry.py` | Register `LOCAL_TOOL_DEFINITIONS` + `GROUP_SETS["gmail"]` + `dispatch_call` wiring |
+| 9 | `backend/api/chat.py` | Inject `GMAIL_INSTRUCTIONS` + gmail context (agent_email, history_id) |
+| 10 | `backend/core/scheduler.py` | Add `_check_gmail()` polling fallback (60s) |
+| 11 | `backend/main.py` | `include_router(gmail_router)` |
+| 12 | `requirements.txt` | `google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib` |
+| 13 | `frontend/src/types/gmail.ts` | **NEW** types |
+| 14 | `frontend/src/services/api.ts` | Add gmail client methods |
+| 15 | `frontend/src/hooks/useGmail.ts` | **NEW** hook (30s poll) |
+| 16 | `frontend/src/components/dashboard/DashboardPanel.tsx` | Add inbox badge + unread count |
+| 17 | `docs/adr.md`, `CLAUDE.md`, `docs/deployment.md` | Document decision + endpoints + setup |
+
+### Onboarding Flow (what the user sees)
+
+1.  Mayday shows banner: "Set up a dedicated email for your agent — `Create mayday.xxx@gmail.com` → opens `accounts.google.com/signup` in system browser.
+2.  User creates `mayday.xxx@gmail.com`, confirms it exists.
+3.  Mayday button "Connect Gmail for Mayday" → `GET /api/auth/gmail/start?account=agent` → Google account picker (login_hint) → grant `gmail.modify` → redirect to `http://localhost:8772/api/auth/gmail/callback` → writes `tokens/agent_token.json` → shows `Connected: mayday.xxx@gmail.com`.
+4.  Chat: "send an email to bob@example.com" → LLM calls `gmail_send` → sends *as* `mayday.xxx@gmail.com` (isolated SENT).
+5.  Inbound: anyone emails `mayday.xxx@gmail.com` → scheduler picks up within 60s → toast "New Email — alice@example.com: Invoice" + dashboard badge increments → user says "read it" → LLM calls `gmail_read` → "approve reply: ..." → user says "approve" → LLM calls `gmail_reply`.
+
+### When to Consider AgentMail or Workspace Upgrade
+*Keep `email_provider: gmail|agentmail` switch behind config* → AgentMail `inboxes.create(client_id)` is instant, no OAuth, no verification weeks, ideal prototype. Gmail poll v1 is long-term own-data path. If you later get Workspace, swap to `admin.directory.users.insert` + DWD service account (no per-mailbox refresh tokens).
+
+### Verification Checklist
+1.  `tokens/agent_token.json` created + `getProfile` returns `mayday.xxx@gmail.com`.
+2.  `gmail_send` to own `you@gmail.com` arrives, `gmail_list?q=is:sent` shows it, `history.list` advances.
+3.  Inbound to `mayday.xxx@gmail.com` → within 60s toast + badge + `knowledge_graph` node.
+4.  Double-send with same `idempotency_key` → one physical mail + 409 on mismatch.
+5.  `history.list` 404 after forced expiry → fallback `messages.list` recovers.
+6.  Full backend suite (`212+` tests) green, `npx tsc --noEmit` clean, no `GMAIL_API_KEY` committed.
+
+---
+
+## Self-Improving Mayday — Daily World Evolution + Deep-Topic Mastery + No-Gate + Dup-Retain + Chrome DevTools + Genre Continuity — Plan
+
+### Status — PLANNED (no code yet, approved daily/auto-apply choices)
+
+### Confirmed Choices (Sep 2026)
+| Choice | Value | Impact |
+|--------|-------|--------|
+| Frequency | **Daily 09:00 IST** (not hourly) | 1 cycle/day × 3 queries × 10 sources = ~30 Exa calls/day vs 720; matches "learn for 1 day" rhythm |
+| Auto-apply | **Yes when confidence ≥0.90 + trust=high** | `evolution/proposals/*.md` auto-applies via `opencode_edit` only if both gates pass + `pytest` + `tsc --noEmit` pass; else human-review toast. `medium/low` trust never auto-applies |
+| Snapshot | **habitus + liked-persons followups + recent todos/events** | Daily `world_snapshots/YYYY-MM-DD.json` ≈1.2k tokens (habitus 4 + 3 persons + 3 followups + 5 todos + 5 events + 5 ops) under `magma.token_budget:4000` |
+| Deep topic | **"learn fluid mechanics fully for 1 day" → intensive** | `deep_learn` intent (priority 2) → `create_research(topic, type="academic", depth=4)` 6 tasks + dedicated Exa bank (arxiv/semanticscholar/nasa) that **replaces** generic trends that day |
+
+### Architecture — Two Loops
+```
+09:00 daily — Scheduler._check_world_snapshot() → world_snapshots/YYYY-MM-DD.json
+09:05 daily — TrendMonitor (3 queries/cycle, round-robin 7 TREND_QUERIES + 5 FRAMEWORK_QUERIES)
+             → create_research(type="trend"|"technical", depth=2) → batch_add_data_points → report+chart
+On-demand — "learn fluid mechanics fully for 1 day" → Deep-Topic intensive (depth 4, 6 tasks, 12 sources/query, 36 Exa calls) REPLACES generic that day
+Weekly Sun 10:00 — ProjectAuditor → evolution/proposals/{slug}-YYYY-MM-DD.md (never direct backend/ write)
+Post-build — evolution.run_post_mortem() → build_lesson → extract_preferences → next BUILD injects
+All loops respect Approval Gate ("get my approval" → pause phase until Continue)
+```
+
+### Requirement 1 — No Per-Step Confirmation (unless "get my approval")
+
+**Current:** Skills `SkillManager:16 needs_confirm` blocks `suggest_skill` card; iterative loop otherwise auto-executes (already no-gate). **Fix:** add `backend/core/approval_gate.py:1` `should_gate(user_text, phase)` regex `r"get my approval|pause (on|at) phase|wait for approval"` (i). At each phase boundary (`chat.py:823` Point A `+` `chat.py:1172` checkpoint `+` `trend_monitor:45` `+` `project_auditor:88`) check; if matched emit `{"type":"approval_gate","phase":...}` WS → frontend `ApprovalGateCard` (Continue/Abort) → backend awaits `{"type":"confirm_phase"}` (24h timeout → auto-resume). Persist to `approval_gates.json` (like `gmail_state.json`) so restart doesn't lose gate. Default = no gate.
+
+### Requirement 2 — Same Tool ×N: Retrain/Retry, Retain vs Fail, Edge Cases
+
+**Current bug `chat.py:1346-1358`:** `result[:100]` false positives, `same_tool>=6` kills 6 legit `update_task_status`, success/error conflated, stuck break doesn't persist `role:tool`.
+
+**Fix `chat.py:1346` + `function_registry.py:2627` + `project_store.py:1116`:**
+
+*   `full_hash = sha256(result)[:16]` not `result[:100]`
+*   Split counters: `is_error = result.startswith("Error")` → `err_seen[key] +=1` (retry budget 3) vs `success_seen[key]` → `[Cached] prev_result` return without re-dispatch (retain — no duplicate todo)
+*   Per-tool scoped counter `same_tool_key=(fn, fn_args.get("name")||project)` not global; threshold 10 for `create_project`
+*   Persist stuck: `conv.add_message("tool", result, tool_call_id)` before break
+*   Intra-batch dedup collapse before dispatch
+*   Retry training `function_registry.py:2627`: classify `transient=("timeout","503","429")` → backoff `0.5*2**attempt` ×3 vs `permanent=("Missing required","already exists")` → immediate `_actionable_error`; fix TypeError retry bug line 2650
+*   Task idempotency `project_store.py:1116`: `update_task_status` already-`in_progress` → `{"cached":True}` success retain; `add_task` duplicate → return existing id + `retryable=False`
+*   **12 edge-case tests** → NEW `backend/test_dup_guard.py` (6) + restore `test_dispatch_repair.py` (13) — see plan verbatim for list
+
+### Requirement 3 — Chrome DevTools: "Site Is Loading Correctly"
+
+**Current `local_playwright.py:41` only:** `goto(waitUntil:networkidle)` + `title()` + PowerShell `Invoke-WebRequest 200` one-shot; no `pageerror`/`requestfailed` listeners, no perf, `dev_monitor.py` **missing** (documented `CLAUDE.md:93`).
+
+**Fix:**
+
+*   **P0 `local_playwright.py:+80`:** new `cdp_health_check(url) -> {status, httpStatus, lifecycle, performance:{TTFB,FCP}, network:{failed,4xx}, console:{errors}, runtimeExceptions, blank}` using existing `sync_playwright` + `page.on("pageerror")` + `page.on("requestfailed")` + `page.on("console")` (error level) + `performance.getEntriesByType('navigation')` + `document.body.innerText.length` blank detection. Keep backward `navigate()` for compat.
+*   **Replace** `chat.py:393` health one-liner in VERIFY Phase 3e.3 + REBUILD R6 with `cdp_health_check`
+*   **P1 optional CDP MCP:** `config.yaml:104` add `chrome-devtools: {command:npx, args:["-y","chrome-devtools-mcp@latest","--headless","--isolate"], lazy:true}` + NEW `backend/core/cdp_health.py` wrapping `Performance/Network/Runtime/Log` domains (`Performance.getMetrics`, `Network.enable`, `Runtime.exceptionThrown`) + LLM tools `CDP_health_check`, `CDP_performance`, `CDP_network_log` in `playwright_tools.py`
+*   **Restore `backend/core/dev_monitor.py`:** 15s `httpx.get(timeout=3)` poll + `ProjectRunner.status()` + `cdp_health_check`; auto-restart `ProjectRunner.exec_background` up to 3× exp backoff; wire into `backend/main.py:52` lifespan
+
+### Requirement 4 — Play Next Song in Same Genre After Current Finishes
+
+**Current `useMusicPlayer.ts:258 onEnded`:** `if (idx+1 < q.length) next else if(repeat) 0 else setIsPlaying(false)` — always **stops** on single `play_song` (`queue=[]`). `MusicTrack` `types/music.ts:7` has only `language`, no `genre/mood`; `play_mood:216` discards `mood_id`; no `GET /api/music/next`.
+
+**Fix:**
+
+*   **Data model:** extend `MusicTrack` `types/music.ts:6` + `youtube_client._normalize_track:125` + `media_functions._track_to_music:66` + `music_history.record_play:75` with optional `genre?: string` + `mood_id?: string`; persist `mood_id` from `play_mood`/`play_radio` seed; backfill via `detect_language:57`
+*   **Backend:** NEW `GET /api/music/next?video_id=&language=&mood=&count=5` `backend/api/music.py:62` — cascade: `if mood → get_mood_tracks(mood,1)`, `elif video_id → get_radio(video_id,10) filtered by language`, `else get_chart_trending biased by language + top_played` (TTL 5m)
+*   **Frontend:** `useMusicPlayer.ts:258` replace `else setIsPlaying(false)` with fetch to `/api/music/next` using `lastContextRef={moodId,language,seedVideoId}` set in `handleMusicMessage:771` + `localStorage`; add `autoPlay` toggle persisted (next to repeat) — when off preserve stop; fix patch race `useMusicPlayer.ts:196` snapshot idx before await
+*   **UI:** `PlayerBar.tsx:120` render `current.mood ?? genre ?? language` badge + `PlayerQueue.tsx:64`; extend `music_history` once
+
+### Deep-Topic Query Banks (for "fluid mechanics / thermodynamics for 1 day")
+
+```python
+DEEP_QUERIES = {
+  "fluid_core": 'fluid mechanics Navier-Stokes Bernoulli Reynolds number textbook',
+  "fluid_adv":  'computational fluid dynamics CFD turbulence 2024 review',
+  "fluid_lab":  'fluid mechanics experiments wind tunnel PIV visualization',
+  "thermo_core":'thermodynamics first second law entropy enthalpy Gibbs',
+  "thermo_apps":'thermodynamics heat engine refrigeration power cycle 2024',
+}
+# Sources: category:"research", includeDomains:["arxiv.org","semanticscholar.org","nasa.gov","mit.edu"], livecrawl:"preferred"
+# Intensive day: 3 DEEP queries × 12 sources = 36 Exa calls, replaces generic 30 that day
+```
+
+### File Change Checklist (ordered)
+| # | File | Action |
+|---|------|--------|
+| 1 | `config.yaml` | Add `research.auto_trends:{enabled:false, interval:"daily", time:"09:00"}`, `evolution:{auto_apply:false, threshold:0.90}`, `world_snapshot:{include_persons:true, include_todos_events:true}` + `chrome-devtools` MCP lazy + `cdp.lighthouse_enabled:false` |
+| 2 | `backend/core/approval_gate.py` | **NEW** — `should_gate(text, phase)` regex + `approval_gates.json` persistence |
+| 3 | `backend/core/trend_monitor.py` | **NEW** — daily cycle, 3 queries/cycle, DEEP_QUERIES bank |
+| 4 | `backend/core/world_snapshot.py` | **NEW** — daily 1.2k snapshot |
+| 5 | `backend/core/project_auditor.py` | **NEW** — weekly diff + proposals writer |
+| 6 | `backend/core/cdp_health.py` | **NEW** — CDP domains wrapper (optional) |
+| 7 | `backend/core/dev_monitor.py` | **NEW/RESTORE** — 15s poll + auto-restart |
+| 8 | `backend/core/local_playwright.py` | Add `cdp_health_check(url)` (+80 lines, keep compat) |
+| 9 | `backend/core/youtube_client.py` | Extend `_normalize_track` + `genre/mood_id` passthrough |
+| 10 | `backend/core/music_history.py` | Extend entry with `genre/mood_id` |
+| 11 | `backend/api/music.py` | Add `GET /next` endpoint |
+| 12 | `backend/api/chat.py` | Inject GMAIL/TREND instructions, replace health check, gate checks, duplicate detector v2, approval WS handlers |
+| 13 | `backend/assistant/function_registry.py` | 2 tools `audit_project`, `get_build_lessons` + GROUP_SETS + `_PARAM_ALIASES` for genre |
+| 14 | `backend/core/query_classifier.py` | Add `deep_learn` intent (priority 2) |
+| 15 | `backend/assistant/playwright_tools.py` | Add `CDP_*` defs |
+| 16 | `backend/functions/media_functions.py` | Pass mood_id through `_track_to_music` |
+| 17 | `frontend/src/types/music.ts` | Add `genre?, mood_id?` |
+| 18 | `frontend/src/hooks/useMusicPlayer.ts` | Auto-queue genre fetch + lastContextRef + autoPlay toggle + race fix |
+| 19 | `frontend/src/components/player/PlayerBar.tsx` | Genre badge + autoPlay button |
+| 20 | `backend/test_dup_guard.py` | **NEW** 6 tests |
+| 21 | `evolution/proposals/.gitkeep` | Allowlisted dir |
+| 22 | `backend/main.py` | Lifespan: start trend/auditor/dev_monitor tasks |
+
+### Verification Checklist
+1. Daily trend 09:05 creates `trend` research with 3 queries when enabled; deep "fluid mechanics for 1 day" suspends generics that day
+2. Proposal `confidence 0.91 trust high + tests pass` auto-applies; `medium` stays as toast
+3. "get my approval" pauses at phase boundary until Confirm
+4. Same `gmail_send` 3× identical success → second/third returns `[Cached]` without duplicate mail; transient timeout retries 3× with backoff; permanent error returns hint immediately
+5. `cdp_health_check(http://localhost:5174)` returns `blank:false` + `httpStatus:200` + `console.errors:[]` on good build; returns `fail` + `pageerror` on throw
+6. `play_song` single → onended auto-fetches `language=ta` next track; `play_mood chill` drains 15 → 16th same mood; `autoPlay off` stops correctly
+7. `pytest` suite green, `npx tsc --noEmit` clean
+
+

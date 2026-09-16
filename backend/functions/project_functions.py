@@ -92,6 +92,20 @@ def resume_project(name: str = "", project: str = "") -> str:
         if active_task:
             lines.append(f"Next: {active_task['title']}")
 
+    # Checkpoint + runtime (A2/A4) so resume tells the LLM how to continue mid-task
+    cp = project_obj.get("active_checkpoint")
+    if cp:
+        lines.append(f"Checkpoint: task {cp.get('task_id', '')} iter {cp.get('iteration', '')} last_tool={cp.get('last_tool', '')} — continue this task from iteration {cp.get('iteration', '')}")
+        if cp.get("partial_result"):
+            lines.append(f"  Partial result: {cp['partial_result'][:200]}")
+    rt_tu = project_obj.get("token_usage", 0)
+    rt_cost = project_obj.get("cost_usd", 0.0)
+    if rt_tu or rt_cost:
+        lines.append(f"Tokens: {rt_tu}  Cost: ${rt_cost:.4f}")
+    handles = project_obj.get("process_handles", [])
+    if handles:
+        lines.append(f"Live processes: {handles} (use opencode_stop to kill orphaned dev servers)")
+
     kg = get_graph()
     node = kg.get_node_by_label(f"project:{project_obj['name']}")
     if node:
@@ -117,7 +131,7 @@ def list_projects(status: str = "") -> str:
     return "\n".join(lines)
 
 
-def update_project_status(name: str = "", status: str = "", project: str = "") -> str:
+def update_project_status(name: str = "", status: str = "", project: str = "", confirmed: bool = False) -> str:
     valid = ("active", "paused", "scrapped")
     if not name and project:
         name = project
@@ -131,16 +145,18 @@ def update_project_status(name: str = "", status: str = "", project: str = "") -
     if not project_obj:
         return f"No project found with the name '{name}'."
 
-    updated = store.update_project_status(project_obj["id"], status)
+    updated = store.update_project_status(project_obj["id"], status, confirmed=confirmed)
     if not updated:
         return f"Failed to update project '{name}'."
+    if isinstance(updated, dict) and "error" in updated:
+        return updated["error"] + (" (pass confirmed=True to proceed)" if updated.get("requires_confirmation") else "")
 
     if status == "scrapped":
         return f"Project '{name}' has been scrapped. You can resume it later with resume_project()."
     return f"Project '{name}' status updated to '{status}'."
 
 
-def add_project_note(filename: str = "", content: str = "", name: str = "", project: str = "", file_name: str = "", force: bool = False) -> str:
+def add_project_note(filename: str = "", content: str = "", name: str = "", project: str = "", file_name: str = "", force: bool = False, confirmed: bool = False) -> str:
     if not filename and file_name:
         filename = file_name
     if not filename:
@@ -170,6 +186,10 @@ def add_project_note(filename: str = "", content: str = "", name: str = "", proj
             f"Note '{filename}' already exists in project '{name}'. "
             f"Pass force=True to overwrite it."
         )
+    if file_path.exists() and force and not confirmed:
+        trust_err = store._check_trust("force_overwrite", project=project_obj)
+        if trust_err:
+            return trust_err["error"] + " (pass confirmed=True to proceed)"
     file_path.write_text(content, encoding="utf-8")
 
     store.touch_activity(project_obj["id"])
@@ -189,7 +209,7 @@ def add_project_note(filename: str = "", content: str = "", name: str = "", proj
     return f"Note saved: {folder_path / filename} ({len(content)} chars)"
 
 
-def add_project_task(name: str = "", title: str = "", type: str = "general", depends_on: list[str] | None = None, description: str = "", project: str = "", force: bool = False) -> str:
+def add_project_task(name: str = "", title: str = "", type: str = "general", depends_on: list[str] | None = None, description: str = "", project: str = "", force: bool = False, parent_task_id: str | None = None, owner: str = "user", confirmed: bool = False) -> str:
     if not name and project:
         name = project
     if not name:
@@ -203,14 +223,18 @@ def add_project_task(name: str = "", title: str = "", type: str = "general", dep
     if type not in valid_types:
         return f"Invalid type '{type}'. Must be one of {valid_types}."
 
-    result = store.add_task(project_obj["id"], title, type, depends_on or [], description, force=force)
+    result = store.add_task(project_obj["id"], title, type, depends_on or [], description, force=force, parent_task_id=parent_task_id, owner=owner, confirmed=confirmed)
     if "error" in result:
+        # surface trust confirmation hint
+        if result.get("requires_confirmation"):
+            return result["error"] + " (pass confirmed=True with force=True to proceed)"
         return result["error"]
 
     tasks = project_obj.get("tasks", [])
     done = sum(1 for t in tasks if t["status"] == "completed")
     total = len(tasks)
-    return f"Task '{title}' added to '{name}'. Progress: {done}/{total}."
+    extra = f" parent={parent_task_id}" if parent_task_id else ""
+    return f"Task '{title}' added to '{name}'{extra}. Progress: {done}/{total}."
 
 
 def update_task_status(name: str = "", task_id: str = "", status: str = "in_progress", result: str = "", task_title: str | None = None, project: str = "") -> str:
@@ -266,6 +290,11 @@ def update_task_status(name: str = "", task_id: str = "", status: str = "in_prog
     updated = store.update_task_status(project_obj["id"], task["id"], status, result)
     if "error" in updated:
         return updated["error"]
+    if updated.get("cached"):
+        tasks = project_obj.get("tasks", [])
+        done = sum(1 for t in tasks if t["status"] == "completed")
+        total = len(tasks)
+        return f"Task '{task['title']}' already {status} (cached). Progress: {done}/{total}."
 
     tasks = project_obj.get("tasks", [])
     done = sum(1 for t in tasks if t["status"] == "completed")
@@ -278,7 +307,7 @@ def update_task_status(name: str = "", task_id: str = "", status: str = "in_prog
     return msg
 
 
-def list_project_tasks(name: str = "", status: str = "", project: str = "") -> str:
+def list_project_tasks(name: str = "", status: str = "", project: str = "", tree: bool = False) -> str:
     if not name and project:
         name = project
     if not name:
@@ -287,6 +316,30 @@ def list_project_tasks(name: str = "", status: str = "", project: str = "") -> s
     project_obj = store.find_project_by_name(name)
     if not project_obj:
         return f"No project found with the name '{name}'."
+
+    if tree:
+        tasks = store.list_tasks(project_obj["id"], status or None, tree=True)
+        if not tasks:
+            return f"No tasks found in '{name}'." if not status else f"No {status} tasks in '{name}'."
+        icons = {"completed": "✅", "in_progress": "⏳", "pending": "⬜", "blocked": "🚫", "failed": "❌"}
+        lines = [f"Tasks (tree) for {name}:"]
+        def _walk(nodes, depth=0):
+            for t in nodes:
+                icon = icons.get(t["status"], "⬜")
+                indent = "  " * depth
+                owner = f" [{t.get('owner','user')}]" if t.get("owner") != "user" else ""
+                lines.append(f"{indent}{icon} {t['title']} ({t['type']}){owner}")
+                if t.get("children"):
+                    _walk(t["children"], depth+1)
+        _walk(tasks)
+        all_tasks = project_obj.get("tasks", [])
+        done = sum(1 for t in all_tasks if t["status"] == "completed")
+        total = len(all_tasks)
+        lines.append(f"\nProgress: {done}/{total}")
+        active_task = store.get_active_task(project_obj["id"])
+        if active_task:
+            lines.append(f"Next: {active_task['title']}")
+        return "\n".join(lines)
 
     tasks = store.list_tasks(project_obj["id"], status or None)
     if not tasks:
@@ -298,7 +351,11 @@ def list_project_tasks(name: str = "", status: str = "", project: str = "") -> s
         icon = icons.get(t["status"], "⬜")
         desc = f" — {t['description']}" if t.get("description") else ""
         deps = f" — depends on: {', '.join(t['depends_on'])}" if t.get("depends_on") else ""
-        lines.append(f"{i+1}. {icon} {t['title']} ({t['type']}){desc}{deps}")
+        parent = f" [parent: {t['parent_task_id']}]" if t.get("parent_task_id") else ""
+        owner = f" [{t.get('owner')}]" if t.get("owner") and t.get("owner") != "user" else ""
+        lines.append(f"{i+1}. {icon} {t['title']} ({t['type']}){desc}{deps}{parent}{owner}")
+        if t.get("result_artifact"):
+            lines.append(f"   artifact: {t['result_artifact']}")
 
     all_tasks = project_obj.get("tasks", [])
     done = sum(1 for t in all_tasks if t["status"] == "completed")
@@ -308,6 +365,23 @@ def list_project_tasks(name: str = "", status: str = "", project: str = "") -> s
     if active_task:
         lines.append(f"Next: {active_task['title']}")
     return "\n".join(lines)
+
+
+def get_task_result(name: str = "", task_id: str = "", project: str = "") -> str:
+    if not name and project:
+        name = project
+    if not name or not task_id:
+        return "Provide project name and task_id."
+    store = get_project_store()
+    project_obj = store.find_project_by_name(name)
+    if not project_obj:
+        return f"No project found with the name '{name}'."
+    result = store.get_task_result(project_obj["id"], task_id)
+    if result is None:
+        return f"Task '{task_id}' not found."
+    if not result:
+        return f"Task '{task_id}' has no result yet."
+    return result[:5000] + ("...[truncated]" if len(result) > 5000 else "")
 
 
 def _resolve_project(name: str = "", project: str = "") -> dict | None:

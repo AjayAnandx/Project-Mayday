@@ -60,3 +60,20 @@ def playwright_expect_response(project_name: str = "", url_pattern: str = "", ur
 def playwright_assert_response(project_name: str = "", url: str = "", expected_status: int = 200, timeout: int = 30000) -> str:
     result = local_playwright.assert_response(url, expected_status, timeout)
     return json.dumps(result)
+
+
+def cdp_health_check(url: str = "", timeout: int = 15000) -> str:
+    if not url:
+        return json.dumps({"status": "error", "message": "cdp_health_check: 'url' is required"})
+    result = local_playwright.cdp_health_check(url, timeout)
+    return json.dumps(result)
+
+
+def cdp_performance(url: str = "", timeout: int = 15000) -> str:
+    if not url:
+        return json.dumps({"status": "error", "message": "cdp_performance: 'url' is required"})
+    # reuse health check performance subset for now
+    result = local_playwright.cdp_health_check(url, timeout)
+    perf = result.get("performance", {})
+    lifecycle = result.get("lifecycle", {})
+    return json.dumps({"status": result.get("status"), "url": url, "performance": perf, "lifecycle": lifecycle, "httpStatus": result.get("httpStatus")})

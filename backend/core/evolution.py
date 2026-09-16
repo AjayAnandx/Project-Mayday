@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from backend.memory.knowledge_graph import get_graph
@@ -39,10 +40,12 @@ def run_post_mortem(
     what_failed: list[str] = []
     user_corrections: list[str] = []
 
+    _RE_RESOLVE_EVO = re.compile(r"Can't resolve|Cannot find module|TS2307|TS2305|Module not found|Failed to resolve import|Cannot find package|ERR_MODULE_NOT_FOUND", re.I)
     if tool_calls_list:
         for tc in tool_calls_list:
             fn_name = tc.get("function", {}).get("name", "")
-            if "error" in str(tc.get("result", "")).lower() or "fail" in str(tc.get("result", "")).lower():
+            res_low = str(tc.get("result", ""))
+            if "error" in res_low.lower() or "fail" in res_low.lower() or bool(_RE_RESOLVE_EVO.search(res_low)):
                 what_failed.append(f"{fn_name}: {tc.get('result', '')[:100]}")
             elif "wrote" in str(tc.get("result", "")).lower() or "replaced" in str(tc.get("result", "")).lower():
                 what_worked.append(f"{fn_name} succeeded")

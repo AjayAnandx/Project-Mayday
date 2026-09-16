@@ -34,6 +34,8 @@ interface UseMusicPlayerReturn {
   seek: (t: number) => void
   setVolume: (v: number) => void
   toggleRepeat: () => void
+  toggleAutoPlay: () => void
+  autoPlay: boolean
   jumpTo: (index: number) => void
   clearQueue: () => void
   handleMusicMessage: (data: any) => void
@@ -57,10 +59,16 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(0.85)
   const [repeat, setRepeat] = useState(false)
+  const [autoPlay, setAutoPlay] = useState<boolean>(() => {
+    try { const v = localStorage.getItem('mayday_music_autoplay'); return v === null ? true : v !== 'false' } catch { return true }
+  })
   const [expanded, setExpanded] = useState(false)
   const [needsGesture, setNeedsGesture] = useState(false)
   const [playError, setPlayError] = useState<string | null>(null)
   const [resolving, setResolving] = useState(false)
+  const lastContextRef = useRef<{ mood?: string; language?: string; genre?: string; seedVideoId?: string }>({})
+  const autoPlayRef = useRef(autoPlay)
+  useEffect(() => { autoPlayRef.current = autoPlay; try { localStorage.setItem('mayday_music_autoplay', String(autoPlay)) } catch {} }, [autoPlay])
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
@@ -116,6 +124,9 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
           title: track.title,
           artist: track.artist,
           language: track.language,
+          genre: (track as any).genre || track.language,
+          mood: (track as any).mood || (track as any).genre || '',
+          mood_id: (track as any).mood_id || (track as any).mood || '',
           thumb: track.thumb,
           duration: track.duration,
         }),
@@ -186,17 +197,17 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
     // lazy resolve: queued radio/mood items arrive with empty stream_url — fetch just-in-time
     let effectiveTrack = track
     if (!track.stream_url && track.video_id && !resolvingRef.current) {
+      const snapIdx = currentIdxRef.current
       setResolving(true)
       setPlayError(null)
       const res = await fetchStream(track.video_id)
       setResolving(false)
       if (res?.stream_url) {
         effectiveTrack = { ...track, stream_url: res.stream_url, is_audio_only: !!res.is_audio_only }
-        // patch queue so next/prev don't re-fetch
+        // patch queue so next/prev don't re-fetch — use snapIdx to avoid race
         setQueue(prev => {
           const copy = [...prev]
-          const idx = currentIdxRef.current
-          if (copy[idx]?.video_id === track.video_id) copy[idx] = effectiveTrack
+          if (copy[snapIdx]?.video_id === track.video_id) copy[snapIdx] = effectiveTrack
           return copy
         })
       } else {
@@ -259,9 +270,33 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
         const idx = currentIdxRef.current
         const q = queueRef.current
         if (repeat && q.length === 1) { el.currentTime = 0; el.play().catch(()=>{}) ; return }
-        if (idx + 1 < q.length) setCurrentIdx(idx + 1)
-        else if (repeat && q.length > 0) setCurrentIdx(0)
-        else setIsPlaying(false)
+        if (idx + 1 < q.length) { setCurrentIdx(idx + 1); return }
+        if (repeat && q.length > 0) { setCurrentIdx(0); return }
+        // auto-play next in same genre/mood/language when queue exhausts
+        if (!autoPlayRef.current) { setIsPlaying(false); return }
+        const cur = q[idx] as any
+        const ctx = lastContextRef.current
+        const vid = cur?.video_id || ctx.seedVideoId || ''
+        const lang = cur?.language || ctx.language || ''
+        const mood = cur?.mood_id || cur?.mood || cur?.genre || ctx.mood || ctx.genre || ''
+        if (!vid && !lang && !mood) { setIsPlaying(false); return }
+        setResolving(true)
+        const params = new URLSearchParams()
+        if (vid) params.set('video_id', vid)
+        if (lang) params.set('language', lang)
+        if (mood) params.set('mood', mood)
+        params.set('count', '5')
+        fetch(`/api/music/next?${params.toString()}`).then(r=>r.json()).then(j=>{
+          setResolving(false)
+          if (j.track && j.track.video_id) {
+            const newTracks: MusicTrack[] = [j.track, ...(j.queue || [])]
+            setQueue(prev=>[...prev, ...newTracks])
+            // advance to first new track
+            setTimeout(()=> setCurrentIdx(idx+1), 50)
+          } else {
+            setIsPlaying(false)
+          }
+        }).catch(()=>{ setResolving(false); setIsPlaying(false) })
       }
       const onPlay = () => { setIsPlaying(true); setNeedsGesture(false); setPlayError(null) }
       const onPause = () => setIsPlaying(false)
@@ -331,8 +366,29 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
   const next = useCallback(() => {
     const idx = currentIdxRef.current
     const q = queueRef.current
-    if (idx + 1 < q.length) setCurrentIdx(idx + 1)
-    else if (repeat && q.length > 0) setCurrentIdx(0)
+    if (idx + 1 < q.length) { setCurrentIdx(idx + 1); return }
+    if (repeat && q.length > 0) { setCurrentIdx(0); return }
+    if (!autoPlayRef.current) return
+    const cur = q[idx] as any
+    const ctx = lastContextRef.current
+    const vid = cur?.video_id || ctx.seedVideoId || ''
+    const lang = cur?.language || ctx.language || ''
+    const mood = cur?.mood_id || cur?.mood || cur?.genre || ctx.mood || ctx.genre || ''
+    if (!vid && !lang && !mood) return
+    const params = new URLSearchParams()
+    if (vid) params.set('video_id', vid)
+    if (lang) params.set('language', lang)
+    if (mood) params.set('mood', mood)
+    params.set('count', '5')
+    setResolving(true)
+    fetch(`/api/music/next?${params.toString()}`).then(r=>r.json()).then(j=>{
+      setResolving(false)
+      if (j.track && j.track.video_id) {
+        const newTracks: MusicTrack[] = [j.track, ...(j.queue || [])]
+        setQueue(prev=>[...prev, ...newTracks])
+        setTimeout(()=> setCurrentIdx(idx+1), 50)
+      }
+    }).catch(()=> setResolving(false))
   }, [repeat])
 
   const prev = useCallback(() => {
@@ -351,6 +407,7 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
   }, [getActiveEl])
 
   const toggleRepeat = useCallback(() => setRepeat(r => !r), [])
+  const toggleAutoPlay = useCallback(() => setAutoPlay(v => !v), [])
   const jumpTo = useCallback((index: number) => { if (index >= 0 && index < queueRef.current.length) setCurrentIdx(index) }, [])
   const clearQueue = useCallback(() => {
     setQueue([]); setCurrentIdx(-1); setIsPlaying(false); setNeedsGesture(false); setPlayError(null); setResolving(false)
@@ -773,15 +830,31 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
       const filteredQ = q.filter((x:any) => (x as any)?.kind !== 'video')
       setResolving(false); setPlayError(null); setNeedsGesture(false)
       const newQueue = [track, ...filteredQ]
+      // store genre context for auto-queue continuity
+      lastContextRef.current = {
+        mood: (track as any).mood_id || (track as any).mood || (track as any).genre || '',
+        genre: (track as any).genre || (track as any).mood || '',
+        language: track.language || '',
+        seedVideoId: track.video_id || '',
+      }
+      try { localStorage.setItem('mayday_last_music_context', JSON.stringify(lastContextRef.current)) } catch {}
       setQueue(newQueue); setCurrentIdx(0); return
     }
     if (action === 'pause') setIsPlaying(false)
     if (action === 'resume') play()
   }, [play, openYouTube, popoutVideo, closeTab, focusTab, toggleTabPlay])
 
+  // hydrate lastContext from localStorage once
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('mayday_last_music_context')
+      if (raw) lastContextRef.current = JSON.parse(raw)
+    } catch {}
+  }, [])
+
   return {
-    queue, current, currentIdx, isPlaying, currentTime, duration, volume, repeat, expanded, needsGesture, playError, resolving, openPopouts,
-    setExpanded, play, pause, next, prev, seek, setVolume: setVolume, toggleRepeat, jumpTo, clearQueue,
+    queue, current, currentIdx, isPlaying, currentTime, duration, volume, repeat, autoPlay, expanded, needsGesture, playError, resolving, openPopouts,
+    setExpanded, play, pause, next, prev, seek, setVolume: setVolume, toggleRepeat, toggleAutoPlay, jumpTo, clearQueue,
     handleMusicMessage, videoRef, audioRef, openYouTube, popoutVideo, closeTab, focusTab, toggleTabPlay,
   }
 }

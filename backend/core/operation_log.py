@@ -1,5 +1,6 @@
 import json
 import re
+import time
 import uuid
 import threading
 from bisect import insort, bisect_left, bisect_right
@@ -36,7 +37,15 @@ class OperationLog:
         self._text_idx: dict[str, dict[str, int]] = {}
         self._loaded_months: set[str] = set()
 
+        # Rec 4: async file flusher — keep index sync, file IO off critical path
+        self._write_queue: list[tuple[str, dict]] = []
+        self._queue_lock = threading.Lock()
+        self._queue_cond = threading.Condition(self._queue_lock)
+        self._flush_thread: threading.Thread | None = None
+        self._flush_started = False
+
         self._load_index()
+        self._ensure_flusher()
 
     def _index_path(self) -> Path:
         return self._dir / "index.json"
@@ -104,6 +113,60 @@ class OperationLog:
             self._text_idx.setdefault(token, {}).setdefault(oid, 0)
             self._text_idx[token][oid] += 1
 
+    def _ensure_flusher(self):
+        if self._flush_started:
+            return
+        self._flush_started = True
+        def _flusher():
+            while True:
+                batch: list[tuple[str, dict]] = []
+                with self._queue_cond:
+                    while not self._write_queue:
+                        self._queue_cond.wait(timeout=0.5)
+                        if not self._write_queue:
+                            continue
+                    batch = self._write_queue[:]
+                    self._write_queue.clear()
+                # group by month to minimize file opens
+                by_month: dict[str, list[dict]] = {}
+                for month, op in batch:
+                    by_month.setdefault(month, []).append(op)
+                for month, ops in by_month.items():
+                    try:
+                        with self._month_path(month).open("a", encoding="utf-8") as f:
+                            for op in ops:
+                                f.write(json.dumps(op, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                # save index after batch
+                try:
+                    self._save_index()
+                except Exception:
+                    pass
+        t = threading.Thread(target=_flusher, daemon=True, name="op-log-flusher")
+        t.start()
+        self._flush_thread = t
+
+    def flush(self, timeout: float = 1.0):
+        """Flush pending queue synchronously (for tests / shutdown)."""
+        deadline = time.time() + timeout if 'time' in globals() else 0
+        # wait for queue to drain
+        import time as _t
+        start = _t.time()
+        while True:
+            with self._queue_lock:
+                empty = not self._write_queue
+            if empty:
+                break
+            if _t.time() - start > timeout:
+                break
+            _t.sleep(0.02)
+        # also ensure file
+        try:
+            self._save_index()
+        except Exception:
+            pass
+
     def record(self, action: str, entity_type: str, entity_id: str,
                entity_name: str, details: dict | None = None, user_message: str = ""):
         with self._lock:
@@ -121,10 +184,34 @@ class OperationLog:
             month = _month_key(ts[:10])
             self._ensure_months_loaded({month})
             self._index_op(op)
+        # Rec 4: file IO off critical path — enqueue, return immediately
+        with self._queue_cond:
+            self._write_queue.append((month, op))
+            self._queue_cond.notify()
+        # ensure flusher running (lazy after reload)
+        self._ensure_flusher()
+        return op
 
+    def record_sync(self, action: str, entity_type: str, entity_id: str,
+               entity_name: str, details: dict | None = None, user_message: str = ""):
+        """Synchronous version for tests that need immediate durability."""
+        with self._lock:
+            ts = _utcnow()
+            op = {
+                "id": uuid.uuid4().hex[:12],
+                "timestamp": ts,
+                "action": action,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "entity_name": entity_name,
+                "details": details or {},
+                "user_message": user_message,
+            }
+            month = _month_key(ts[:10])
+            self._ensure_months_loaded({month})
+            self._index_op(op)
             with self._month_path(month).open("a", encoding="utf-8") as f:
                 f.write(json.dumps(op, ensure_ascii=False) + "\n")
-
             self._save_index()
             return op
 

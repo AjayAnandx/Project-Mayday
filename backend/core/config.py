@@ -13,6 +13,7 @@ ENV_OVERRIDES = {
         }
     },
     "ollama": {"endpoint": "OLLAMA_ENDPOINT"},
+    "telegram": {"token": "TELEGRAM_BOT_TOKEN"},
 }
 
 

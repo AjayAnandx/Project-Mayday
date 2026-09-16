@@ -72,12 +72,18 @@ class MusicHistory:
             language = (track.get("language") or "").strip() or "other"
             thumb = track.get("thumb") or track.get("thumbnail") or ""
             duration = track.get("duration") or ""
+            genre = (track.get("genre") or track.get("mood") or track.get("mood_id") or "").strip() or language
+            mood = (track.get("mood") or genre).strip()
+            mood_id = (track.get("mood_id") or track.get("moodId") or mood).strip()
             entry = {
                 "id": uuid.uuid4().hex[:10],
                 "video_id": vid,
                 "title": title,
                 "artist": artist,
                 "language": language,
+                "genre": genre,
+                "mood": mood,
+                "mood_id": mood_id,
                 "thumb": thumb,
                 "duration": str(duration) if duration else "",
                 "played_at": _utcnow(),

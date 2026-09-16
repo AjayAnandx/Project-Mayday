@@ -195,6 +195,104 @@ def console_logs(url: str, timeout: int = 10000) -> dict:
         return {"status": "error", "message": str(e)[:200]}
 
 
+def cdp_health_check(url: str, timeout: int = 15000) -> dict:
+    """Chrome-DevTools-style health check for 'site is loading correctly'.
+
+    Uses Playwright listeners to emulate CDP domains:
+      - Runtime/pageerror + requestfailed (like Runtime.exceptionThrown + Network.loadingFailed)
+      - console error capture
+      - performance.getEntriesByType('navigation') for TTFB/FCP
+      - blank detection via body innerText + child count
+    Returns unified dict used by VERIFY protocol.
+    """
+    _check_available()
+    p, browser = _browser()
+    try:
+        page = browser.new_page(viewport={"width": 1280, "height": 720})
+        errors: list[dict] = []
+        failed: list[dict] = []
+        console_errors: list[dict] = []
+
+        page.on("pageerror", lambda exc: errors.append({"type": "pageerror", "text": str(exc)[:300]}))
+        page.on("requestfailed", lambda req: failed.append({"url": req.url, "error": (req.failure or "")[:200], "type": req.resource_type}))
+        page.on("console", lambda msg: console_errors.append({"level": msg.type, "text": msg.text[:300]}) if msg.type == "error" else None)
+
+        resp = None
+        http_status = 0
+        try:
+            resp = page.goto(url, timeout=timeout, wait_until="networkidle")
+            if resp:
+                http_status = resp.status
+        except Exception as e:
+            # goto threw — capture as error but still try to evaluate what we can
+            errors.append({"type": "goto", "text": str(e)[:300]})
+
+        # performance timing (best-effort)
+        perf = {}
+        try:
+            perf = page.evaluate("""() => {
+                const nav = performance.getEntriesByType('navigation')[0];
+                if (!nav) return {};
+                return {
+                    ttfb: Math.round(nav.responseStart - nav.requestStart),
+                    domContentLoaded: Math.round(nav.domContentLoadedEventEnd - nav.startTime),
+                    load: Math.round(nav.loadEventEnd - nav.startTime),
+                    transferSize: nav.transferSize || 0
+                };
+            }""")
+        except Exception:
+            perf = {}
+
+        # blank detection
+        blank = False
+        text_len = 0
+        child_count = 0
+        try:
+            text_len = page.evaluate("document.body ? document.body.innerText.length : 0")
+            child_count = page.evaluate("document.body ? document.body.children.length : 0")
+            blank = (text_len < 20 and child_count < 3)
+        except Exception:
+            pass
+
+        # also consider failed 4xx/5xx collected via request log - we already have failed list
+        status = "ok"
+        if http_status and http_status >= 400:
+            status = "fail"
+        if errors or any(f for f in failed if "failed" in f.get("error","").lower() or f.get("type")=="document"):
+            # only fail on document-level failures or page errors, not sub-resource 404s
+            doc_failed = [f for f in failed if f.get("type") == "document"]
+            if errors or doc_failed:
+                status = "fail"
+        if blank and http_status != 0:
+            status = "fail"
+
+        browser.close()
+        p.stop()
+        return {
+            "status": status,
+            "url": url,
+            "httpStatus": http_status,
+            "lifecycle": {"domContentLoaded": perf.get("domContentLoaded", 0), "load": perf.get("load", 0)},
+            "performance": {"TTFB": perf.get("ttfb", 0), "transferSize": perf.get("transferSize", 0)},
+            "network": {"failed": failed},
+            "console": {"errors": console_errors},
+            "runtimeExceptions": errors,
+            "blank": blank,
+            "textLength": text_len,
+            "childCount": child_count,
+        }
+    except Exception as e:
+        try:
+            browser.close()
+        except Exception:
+            pass
+        try:
+            p.stop()
+        except Exception:
+            pass
+        return {"status": "error", "message": str(e)[:300], "url": url}
+
+
 def expect_response(url_pattern: str, url: str = "", timeout: int = 10000) -> dict:
     try:
         p, browser, page = _with_browser(url)

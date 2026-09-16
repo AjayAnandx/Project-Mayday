@@ -5,6 +5,9 @@ export interface MusicTrack {
   thumb: string
   duration: string
   language: string  // ta | hi | en | other
+  genre?: string    // same as mood/language for auto-queue continuity
+  mood?: string
+  mood_id?: string
   stream_url: string
   is_audio_only?: boolean
   kind?: 'song' | 'video'

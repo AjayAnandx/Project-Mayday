@@ -182,6 +182,7 @@ function AppContent() {
         duration={music.duration}
         volume={music.volume}
         repeat={music.repeat}
+        autoPlay={(music as any).autoPlay ?? true}
         expanded={music.expanded}
         needsGesture={music.needsGesture}
         playError={music.playError}
@@ -194,6 +195,7 @@ function AppContent() {
         onSeek={music.seek}
         onVolume={music.setVolume}
         onToggleRepeat={music.toggleRepeat}
+        onToggleAutoPlay={(music as any).toggleAutoPlay}
         onClear={music.clearQueue}
         onToggleQueue={() => setShowQueue(v => !v)}
         showQueue={showQueue}

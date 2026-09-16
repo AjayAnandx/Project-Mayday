@@ -1,7 +1,7 @@
-"""LLM tool: export a research topic's collected data points to a CSV dataset file.
+"""LLM tool: export a research/project dataset to CSV or bare-table PDF.
 
-The file is written into the configured `uploads/` directory so it appears in the
-Data Import panel and is directly downloadable/served at /uploads/<file_id>.
+CSV goes to the configured ``uploads/`` directory (served at /uploads/<file_id>).
+PDF uses FPDF with the same dark/green style as report_generator._pdf_section.
 """
 import csv
 import json
@@ -30,6 +30,103 @@ def _slugify(name: str) -> str:
     s = name.lower().strip()
     s = re.sub(r"[^a-z0-9]+", "-", s)
     return s.strip("-") or "dataset"
+
+
+def _get_data_points(topic: str, store_type: str = "research") -> tuple[list[dict] | None, str | None]:
+    """Return (data_points, error). Looks in research store or project store."""
+    if store_type == "project":
+        from backend.core.project_store import get_project_store
+        ps = get_project_store()
+        proj = ps.find_project_by_name(topic) or ps.get_project(topic)
+        if not proj:
+            return None, f"Project '{topic}' not found"
+        dps = proj.get("data_points", [])
+        return dps, None
+    store = get_research_store()
+    project = store._get_by_topic(topic)
+    if not project:
+        return None, f"Research '{topic}' not found"
+    return project.get("data_points", []), None
+
+
+def export_dataset_pdf(topic: str, store_type: str = "research", filename: str | None = None) -> str:
+    """Bare-table dataset PDF for a research topic or project.
+
+    Columns: # / Label / Value / Unit / Confidence / Source  (same style as
+    report_generator._pdf_section table). Supports both stores via store_type.
+    Returns JSON with ``pdf_path`` / ``artifact`` so Telegram sender can send it.
+    """
+    dps, err = _get_data_points(topic, store_type=store_type)
+    if err:
+        return json.dumps({"error": err})
+    if not dps:
+        return json.dumps({"error": "No data points to export — collect data first with batch_add_data_points."})
+
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.add_page()
+    pdf.set_fill_color(13, 13, 13)
+    pdf.rect(0, 0, 210, 297, "F")
+
+    pdf.set_text_color(34, 197, 94)
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 12, f"Dataset: {topic}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_text_color(163, 163, 163)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(0, 6, f"Rows: {len(dps)}   Store: {store_type}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(6)
+
+    # header
+    col_w = [8, 55, 25, 20, 40, 35]
+    headers = ["#", "Label", "Value", "Unit", "Confidence", "Source"]
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_fill_color(30, 30, 30)
+    pdf.set_text_color(204, 204, 204)
+    for j, h in enumerate(headers):
+        pdf.cell(col_w[j], 7, h, border=0, fill=True, align="C" if j == 0 else "L")
+    pdf.ln()
+
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(229, 229, 229)
+    for i_dp, dp in enumerate(dps, 1):
+        if pdf.get_y() > 270:
+            pdf.add_page()
+            pdf.set_fill_color(13, 13, 13)
+            pdf.rect(0, 0, 210, 297, "F")
+            pdf.set_text_color(229, 229, 229)
+            pdf.set_font("Helvetica", "", 7)
+        src_text = ", ".join(dp.get("sources", [])[:1]) if dp.get("sources") else "-"
+        if len(src_text) > 32:
+            src_text = src_text[:30] + ".."
+        unit_str = dp.get("unit", "") or "-"
+        conf = (dp.get("confidence") or "medium").title()
+        vals = [str(i_dp), str(dp.get("label", "")), str(dp.get("value", "")), unit_str, conf, src_text]
+        for j, v in enumerate(vals):
+            # sanitize for latin-1 Helvetica
+            try:
+                v.encode("latin-1")
+            except UnicodeEncodeError:
+                v = v.encode("latin-1", errors="replace").decode("latin-1")
+            pdf.cell(col_w[j], 6, v, border=0, align="C" if j == 0 else "L")
+        pdf.ln()
+
+    udir = _uploads_dir()
+    base = filename or f"{_slugify(topic)}_dataset"
+    base = re.sub(r"[^a-zA-Z0-9_.-]", "_", base)
+    if not base.lower().endswith(".pdf"):
+        base += ".pdf"
+    file_id = f"{uuid.uuid4().hex[:12]}_{base}"
+    path = udir / file_id
+    pdf.output(str(path))
+    url = f"/uploads/{file_id}"
+    return json.dumps({
+        "message": f"Exported **{len(dps)}** rows from '{topic}' ({store_type}) to PDF (`{file_id}`).",
+        "pdf_path": str(path),
+        "artifact": {"url": url, "title": base},
+        "files": [{"format": "pdf", "file_id": file_id, "name": base, "url": url, "path": str(path)}],
+    })
 
 
 def export_research_dataset(topic: str, filename: str | None = None) -> str:

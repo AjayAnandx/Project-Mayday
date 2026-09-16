@@ -1,0 +1,1 @@
+"""Mayday Telegram bridge package."""

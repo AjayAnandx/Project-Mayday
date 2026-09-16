@@ -90,6 +90,11 @@ skills:
   enabled: true
   directory: C:\Users\hp\agent-skills\skills
 
+projects:
+  trust: medium  # graduated trust: low | medium | high (C2)
+  artifact_threshold: 2000
+  append_only_hot_path: false
+
 sandbox:
   enabled: true
   image: mayday-sandbox:latest
@@ -176,6 +181,14 @@ awareness:
 # 2606.md. Reuses QueryClassifier intents + graph node-types as the practice
 # codebook; HabitusBuilder aggregates practice signals with sqrt-recency. No
 # model training. Disabled = context section omitted and practice logging skipped.
+telegram:
+  enabled: true
+  token: ""                 # set via TELEGRAM_BOT_TOKEN env var or .env
+  allowed_chat_ids: []      # numeric chat ids; empty = no one (fail closed) — after /start, put your chat_id here
+  search_dirs: []           # optional; defaults to pdfs/ + projects_dir + research_outputs_dir + uploads/
+  chart_png_dir: uploads    # temp PNG output
+  verbose_tools: false      # when true, every tool_call (list_*, search_*) is echoed as 🛠 message; false = silent (only files/charts/errors)
+
 phf:
   enabled: true
   practice_log: practices.jsonl

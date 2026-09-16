@@ -141,6 +141,26 @@ class SkillManager:
                 return skill
         return None
 
+    def register_hooks(self, store):
+        """Load hooks.py from each skill dir and call register_hooks(store) if present (C3)."""
+        for skill in self._skills.values():
+            hooks_py = Path(skill.path) / "hooks.py"
+            if not hooks_py.exists():
+                continue
+            try:
+                spec = importlib.util.spec_from_file_location(f"skill_{skill.name}_hooks", hooks_py)
+                if not spec or not spec.loader:
+                    continue
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules[f"skill_{skill.name}_hooks"] = mod
+                spec.loader.exec_module(mod)
+                fn = getattr(mod, "register_hooks", None)
+                if callable(fn):
+                    fn(store)
+                    logger.info("Registered hooks from skill '%s'", skill.name)
+            except Exception as e:
+                logger.warning("Failed to register hooks for skill '%s': %s", skill.name, e)
+
 
 _SKILL_MANAGER: Optional[SkillManager] = None
 

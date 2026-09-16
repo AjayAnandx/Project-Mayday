@@ -87,6 +87,16 @@ class ProjectRunner:
                 _background_processes[self.slug] = []
             _background_processes[self.slug].append(proc.pid)
         time.sleep(2)
+        # A4: register pid with ProjectStore (best-effort, needs project id lookup by slug)
+        try:
+            from backend.core.project_store import get_project_store
+            store = get_project_store()
+            for proj in store.list_projects():
+                if proj.get("folder") == self.slug:
+                    store.register_process(proj["id"], proc.pid)
+                    break
+        except Exception:
+            pass
         return {"pid": proc.pid, "port": actual_port, "message": f"Started (PID {proc.pid})"}
 
     def stop(self) -> str:
@@ -98,6 +108,16 @@ class ProjectRunner:
                 subprocess.run(["taskkill", "/F", "/PID", str(pid)],
                                capture_output=True, timeout=5)
                 killed += 1
+            except Exception:
+                pass
+            # A4: unregister pid
+            try:
+                from backend.core.project_store import get_project_store
+                store = get_project_store()
+                for proj in store.list_projects():
+                    if proj.get("folder") == self.slug:
+                        store.unregister_process(proj["id"], pid)
+                        break
             except Exception:
                 pass
         self.remove(self.slug)
