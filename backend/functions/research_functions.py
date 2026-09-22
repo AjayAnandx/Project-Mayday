@@ -277,6 +277,54 @@ async def research_agent(topic: str, max_hops: int | None = None, auto_report: b
     )
 
 
+def fan_hypothesis(topic: str, hypotheses: list[str], parent_task_id: str | None = None) -> str:
+    store = get_research_store()
+    result = store.fan_hypothesis(topic, parent_task_id, hypotheses)
+    if "error" in result:
+        return f"Error: {result['error']}"
+    lines = [f"Branched **{len(result['tasks'])}** hypothesis tasks under parent **'{result['parent']}'** in '{topic}':"]
+    for t in result["tasks"]:
+        lines.append(f"  - **{t['title']}** (id: {t['id']})")
+    lines.append("Next: set one hypothesis to in_progress via update_research_task_status, then descend onto winner and freeze losers.")
+    return "\n".join(lines)
+
+
+def update_research_task_status(topic: str, task_id: str, status: str, result: str | None = None) -> str:
+    store = get_research_store()
+    res = store.update_task_status(topic, task_id, status, result or "")
+    if "error" in res:
+        return f"Error: {res['error']}"
+    note = res.get("note", "")
+    msg = f"Task **'{res['title']}'** in '{topic}' now **{res['status']}** (frozen={res.get('frozen', False)}, run_count={res.get('run_count',0)})"
+    if note:
+        msg += f"\nNote: {note}"
+    return msg
+
+
+def freeze_research_task(topic: str, task_id: str) -> str:
+    store = get_research_store()
+    res = store.freeze_task(topic, task_id)
+    if "error" in res:
+        return f"Error: {res['error']}"
+    return f"Task **'{res['title']}'** frozen — now immutable (winner answered). Siblings remain pending but can be frozen explicitly."
+
+
+def list_research_tasks(topic: str, status: str | None = None) -> str:
+    store = get_research_store()
+    result = store.list_tasks(topic, status)
+    if isinstance(result, dict) and "error" in result:
+        return f"Error: {result['error']}"
+    if not result:
+        return f"No tasks found for '{topic}'" + (f" with status {status}" if status else "")
+    lines = [f"Tasks for '{topic}' ({len(result)} total):"]
+    for t in result:
+        frozen = " [FROZEN]" if t.get("frozen") else ""
+        hyp = f" hypothesis='{t.get('hypothesis')}'" if t.get("hypothesis") else ""
+        parent = f" parent={t.get('parent_task_id','')[:8]}" if t.get("parent_task_id") else ""
+        lines.append(f"  - **{t['title']}** ({t['status']}{frozen}) id:{t['id']}{hyp}{parent} run={t.get('run_count',0)}")
+    return "\n".join(lines)
+
+
 def generate_chart(topic: str, chart_type: str = "auto", metric: str | None = None) -> str:
     result = _generate_chart(topic, chart_type, metric)
     if "error" in result:

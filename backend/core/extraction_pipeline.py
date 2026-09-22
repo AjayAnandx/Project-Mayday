@@ -58,9 +58,25 @@ def _fmt_scalar(value) -> str:
 # ── Phase 1: Search + fetch ───────────────────────────────────────
 
 def web_search_and_fetch(query: str, max_sources: int = 10, source_type: str = "web") -> list[dict]:
-    """Exa search → fetch page text. Returns [{url, title, content, score}]."""
+    """Exa search → fetch page text. Returns [{url, title, content, score}].
+    For source_type in (academic, arxiv, openalex) delegates to academic_search 3-corpus fan.
+    """
     if not query:
         return []
+    # Academic path: 3-corpus fan (arXiv → DOI → OpenAlex)
+    if (source_type or "web").lower() in ("academic", "arxiv", "openalex", "paper"):
+        try:
+            from backend.core.academic_search import academic_search as _academic_search
+            # map source_type to include flags
+            include_arxiv = source_type.lower() in ("academic", "arxiv", "paper")
+            include_openalex = source_type.lower() in ("academic", "openalex", "paper")
+            results = _academic_search(query, max_sources=int(max_sources), difficulty=5, include_arxiv=include_arxiv, include_openalex=include_openalex)
+            # normalize to expected {url,title,content,score,published_date,doi,citationCount,corpus}
+            return results
+        except Exception as e:
+            logger.warning("academic_search failed, falling back to Exa: %s", e)
+            # fall through to Exa paper category
+            source_type = "academic"
     if not _exa_key():
         return [{"error": "EXA_API_KEY not configured. Add it to config.yaml or .env."}]
 
@@ -91,6 +107,9 @@ def web_search_and_fetch(query: str, max_sources: int = 10, source_type: str = "
                 "content": (r.get("text", "") or "")[:3000],
                 "score": r.get("score", 0.5),
                 "published_date": (r.get("publishedDate") or "")[:10],
+                "doi": None,
+                "citationCount": None,
+                "corpus": "exa_" + (source_type or "web"),
             })
         return results
     except httpx.HTTPStatusError as e:

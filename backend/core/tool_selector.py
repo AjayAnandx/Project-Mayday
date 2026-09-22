@@ -188,3 +188,40 @@ class ToolSelector:
                 if len(normalized) > 1 and normalized not in STOPWORDS:
                     result.append(normalized)
         return result
+
+
+def apply_tool_cap(tools: list[dict], preferred_names: set[str], limit: int) -> list[dict]:
+    """Cap the per-request tool list so providers' tool-count limits aren't hit.
+
+    Priority: preferred (intent-group/selector hits, in original order) first,
+    then everything else (core essentials, skill defs) in original order.
+    Order within each tier is stable. Logs dropped tool names at warning level.
+    """
+    if limit <= 0 or len(tools) <= limit:
+        return tools
+    preferred, rest = [], []
+    for t in tools:
+        try:
+            name = t.get("function", t).get("name", "")
+        except Exception:
+            name = ""
+        (preferred if name in preferred_names else rest).append(t)
+    capped = (preferred + rest)[:limit]
+    dropped = []
+    for t in (preferred + rest)[limit:]:
+        try:
+            dropped.append(t.get("function", t).get("name", "?"))
+        except Exception:
+            dropped.append("?")
+    import logging
+    logging.getLogger(__name__).warning(
+        "Tool cap: sending %d of %d tools (limit %d); dropped: %s",
+        len(capped), len(tools), limit, ", ".join(dropped[:20]))
+    return capped
+
+
+def max_tools_limit(cfg: dict, default: int = 64) -> int:
+    try:
+        return int((cfg.get("providers", {}) or {}).get("max_tools", default))
+    except Exception:
+        return default

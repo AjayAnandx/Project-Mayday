@@ -5,11 +5,12 @@ Each searchable item is one doc:
 
   topic:{slug}          -> topic metadata (name, type, summary, questions)
   note:{slug}:{name}    -> full text of notes/*.md
-  report:{slug}         -> full text of outputs/report.md
-  artifact:{slug}:{name}-> artifact filenames (chart dirs, pdfs, etc.)
+  report:{slug}         -> full text of artifacts/reports/report.md + legacy outputs/report.md
+  artifact:{slug}:{name}-> artifact filenames + chart.json content (labels) for figures
 
-Rebuilt on first access and refreshed lazily (max 30s staleness) so boot is
+Rebuilt on first access and refreshed lazily (max 10s staleness for artifacts) so boot is
 cheap and newly written notes/reports become searchable without a restart.
+Text reads capped at 200k and pdfs <5MB to avoid OOM.
 """
 import threading
 
@@ -31,8 +32,9 @@ class ResearchIndex:
 
     def _rebuild(self, force: bool = False):
         import time
+        import json
         with self._lock:
-            if self._built and not force and time.time() - self._built_at < 30:
+            if self._built and not force and time.time() - self._built_at < 10:
                 return
             store = get_research_store()
             projects = store.list_projects()
@@ -61,7 +63,7 @@ class ResearchIndex:
                 if notes_dir.is_dir():
                     for f in sorted(notes_dir.glob("*.md")):
                         try:
-                            text = f.read_text(encoding="utf-8", errors="replace")
+                            text = f.read_text(encoding="utf-8", errors="replace")[:200_000]
                         except OSError:
                             continue
                         doc_id = f"note:{slug}:{f.name}"
@@ -72,25 +74,65 @@ class ResearchIndex:
                             "kind": "note", "slug": slug, "topic": full["topic"], "filename": f.name,
                         }
 
-                outputs_dir = topic_dir / "outputs"
-                if outputs_dir.is_dir():
-                    for f in sorted(outputs_dir.glob("report.*")):
-                        if f.suffix.lower() not in (".md", ".txt"):
-                            continue
-                        try:
-                            text = f.read_text(encoding="utf-8", errors="replace")
-                        except OSError:
-                            continue
-                        doc_id = f"report:{slug}"
-                        name_text = self._doc_text([f.name, f"report:{slug}"])
-                        self._ngram.add(doc_id, self._doc_text([name_text, text]))
-                        self._ranker.add(doc_id, self._doc_text([name_text, text]))
-                        self._meta[doc_id] = {
-                            "kind": "report", "slug": slug, "topic": full["topic"], "filename": f.name,
-                        }
-                    for f in outputs_dir.iterdir():
+                # Index reports from both new artifacts/reports and legacy outputs
+                for base in (topic_dir / "artifacts" / "reports", topic_dir / "outputs"):
+                    if base.is_dir():
+                        for f in sorted(base.glob("report.*")):
+                            if f.suffix.lower() not in (".md", ".txt"):
+                                continue
+                            try:
+                                text = f.read_text(encoding="utf-8", errors="replace")[:200_000]
+                            except OSError:
+                                continue
+                            doc_id = f"report:{slug}"
+                            # dedup: if already added from artifacts, extend text
+                            if doc_id in self._meta:
+                                # already indexed artifacts report, skip legacy duplicate
+                                if str(base).find("artifacts") != -1:
+                                    continue
+                                else:
+                                    continue
+                            name_text = self._doc_text([f.name, f"report:{slug}"])
+                            self._ngram.add(doc_id, self._doc_text([name_text, text]))
+                            self._ranker.add(doc_id, self._doc_text([name_text, text]))
+                            self._meta[doc_id] = {
+                                "kind": "report", "slug": slug, "topic": full["topic"], "filename": f.name,
+                            }
+                # Pdf reports lightweight probe (<5MB) — filename + size only to avoid heavy pdf parsing
+                for base in (topic_dir / "artifacts" / "reports", topic_dir / "outputs"):
+                    if base.is_dir():
+                        for f in base.glob("report.pdf"):
+                            try:
+                                if f.stat().st_size > 5 * 1024 * 1024:
+                                    text = f"{f.name} large pdf {f.stat().st_size} bytes"
+                                else:
+                                    # try lightweight text extraction if pypdf available, else filename
+                                    try:
+                                        from pypdf import PdfReader as _PdfReader
+                                        reader = _PdfReader(str(f))
+                                        text = " ".join((page.extract_text() or "") for page in reader.pages[:3])[:200_000]
+                                        if not text.strip():
+                                            text = f.name
+                                    except Exception:
+                                        text = f.name
+                            except OSError:
+                                continue
+                            doc_id = f"artifact:{slug}:report.pdf"
+                            name_text = self._doc_text([f.name, doc_id, text[:500]])
+                            self._ngram.add(doc_id, self._doc_text([name_text, text]))
+                            self._ranker.add(doc_id, self._doc_text([name_text, text]))
+                            self._meta[doc_id] = {
+                                "kind": "artifact", "slug": slug, "topic": full["topic"], "filename": f.name,
+                            }
+                # Figures and data
+                for base in (topic_dir / "artifacts" / "figures", topic_dir / "outputs"):
+                    if not base.is_dir():
+                        continue
+                    for f in base.iterdir():
                         if f.is_file() and f.name != "report.md":
                             doc_id = f"artifact:{slug}:{f.name}"
+                            if doc_id in self._meta:
+                                continue
                             name_text = self._doc_text([f.name, doc_id])
                             self._ngram.add(doc_id, name_text)
                             self._ranker.add(doc_id, name_text)
@@ -98,15 +140,52 @@ class ResearchIndex:
                                 "kind": "artifact", "slug": slug, "topic": full["topic"], "filename": f.name,
                             }
                         elif f.is_dir():
+                            # chart_* dir: index chart.json labels/title
                             doc_id = f"artifact:{slug}:{f.name}"
-                            name_text = self._doc_text([f.name, doc_id])
-                            self._ngram.add(doc_id, name_text)
-                            self._ranker.add(doc_id, name_text)
+                            if doc_id in self._meta:
+                                continue
+                            chart_text = ""
+                            json_path = f / "chart.json"
+                            if json_path.is_file():
+                                try:
+                                    j = json.loads(json_path.read_text(encoding="utf-8")[:200_000])
+                                    labels = j.get("data", {}).get("labels", []) if isinstance(j.get("data"), dict) else []
+                                    title = j.get("options", {}).get("plugins", {}).get("title", {}).get("text", "") if isinstance(j.get("options"), dict) else ""
+                                    chart_text = " ".join(str(x) for x in labels[:50])
+                                    if title:
+                                        chart_text = f"{title} {chart_text}"
+                                except Exception:
+                                    pass
+                            name_text = self._doc_text([f.name, doc_id, chart_text[:1000]])
+                            full_text = self._doc_text([name_text, chart_text])
+                            self._ngram.add(doc_id, full_text)
+                            self._ranker.add(doc_id, full_text)
+                            self._meta[doc_id] = {
+                                "kind": "artifact", "slug": slug, "topic": full["topic"], "filename": f.name,
+                            }
+                # data dir
+                data_dir = topic_dir / "artifacts" / "data"
+                if data_dir.is_dir():
+                    for f in data_dir.iterdir():
+                        if f.is_file():
+                            doc_id = f"artifact:{slug}:{f.name}"
+                            if doc_id in self._meta:
+                                continue
+                            try:
+                                text = f.read_text(encoding="utf-8", errors="replace")[:5000] if f.suffix.lower() == ".csv" else f.name
+                            except OSError:
+                                text = f.name
+                            name_text = self._doc_text([f.name, doc_id, text[:500]])
+                            self._ngram.add(doc_id, self._doc_text([name_text, text]))
+                            self._ranker.add(doc_id, self._doc_text([name_text, text]))
                             self._meta[doc_id] = {
                                 "kind": "artifact", "slug": slug, "topic": full["topic"], "filename": f.name,
                             }
             self._built = True
             self._built_at = time.time()
+
+    def force_rebuild(self):
+        self._rebuild(force=True)
 
     def search(self, query: str, limit: int = 10) -> list[dict]:
         if not query or not query.strip():

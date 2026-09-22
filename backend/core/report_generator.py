@@ -26,14 +26,44 @@ def _fmt_date(iso_str: str) -> str:
     return iso_str[:10]
 
 
-def _source_badge(sources: list[str]) -> str:
+def _normalize_source_for_display(s):
+    if isinstance(s, dict):
+        url = s.get("url", "") or s.get("doi", "") or ""
+        # prefer doi link if url missing
+        if not url and s.get("doi"):
+            url = f"https://doi.org/{s['doi']}"
+        return url or s.get("title", "") or str(s)
+    return str(s)
+
+def _is_trusted_source(s) -> bool:
+    if isinstance(s, dict):
+        # dict source trusted if score>0.7 or citationCount>10 or explicit trusted tag
+        if float(s.get("score", 0) or 0) > 0.7:
+            return True
+        try:
+            if s.get("citationCount") is not None and int(s.get("citationCount") or 0) > 10:
+                return True
+        except Exception:
+            pass
+        url = (s.get("url", "") or "").lower()
+        if "trusted" in url or "trusted" in (s.get("title", "") or "").lower():
+            return True
+        return False
+    return "trusted" in str(s).lower()
+
+def _source_badge(sources: list) -> str:
     if not sources:
         return "*No source cited*"
-    trusted = any("trusted" in s.lower() for s in sources)
+    trusted = any(_is_trusted_source(s) for s in sources)
     badge = "✓ Verified Source" if trusted else "Source"
-    urls = ", ".join(sources[:3])
+    display = [_normalize_source_for_display(s) for s in sources[:3]]
+    urls = ", ".join(display)
     if len(sources) > 3:
         urls += f" (+{len(sources)-3} more)"
+    # pick first url for link target
+    first_url = display[0] if display and display[0].startswith("http") else urls.split(",")[0].strip()
+    if first_url.startswith("http"):
+        return f"[{badge}]({first_url}) {urls}"
     return f"[{badge}]({urls})"
 
 
@@ -118,19 +148,22 @@ def _collect_all_sources(projects: list[dict]) -> list[str]:
     for p in projects:
         for dp in p.get("data_points", []):
             for s in dp.get("sources", []):
-                if s not in seen:
-                    seen.add(s)
-                    sources.append(s)
+                key = s.get("url", str(s)) if isinstance(s, dict) else str(s)
+                if key not in seen:
+                    seen.add(key)
+                    sources.append(_normalize_source_for_display(s) if isinstance(s, dict) else str(s))
         for ent in p.get("entities", []):
             for s in ent.get("sources", []):
-                if s not in seen:
-                    seen.add(s)
-                    sources.append(s)
+                key = s.get("url", str(s)) if isinstance(s, dict) else str(s)
+                if key not in seen:
+                    seen.add(key)
+                    sources.append(_normalize_source_for_display(s) if isinstance(s, dict) else str(s))
         for fin in p.get("findings", []):
             for s in fin.get("sources", []):
-                if s not in seen:
-                    seen.add(s)
-                    sources.append(s)
+                key = s.get("url", str(s)) if isinstance(s, dict) else str(s)
+                if key not in seen:
+                    seen.add(key)
+                    sources.append(_normalize_source_for_display(s) if isinstance(s, dict) else str(s))
     return sources
 
 
@@ -188,8 +221,8 @@ def generate_combined_report(topics: list[str] | None = None, title: str = "Comb
         if not projects:
             return {"error": "No research projects found"}
 
-    slug = "combined-research-report"
-    outputs_dir = store._outputs_dir / slug / "outputs"
+    slug = f"combined-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    outputs_dir = store._outputs_dir / slug / "artifacts" / "reports"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
     md_content = build_combined_md(projects, title)
@@ -220,7 +253,11 @@ def generate_report(topic: str, fmt: str = "md") -> dict:
     if not project:
         return {"error": f"Research '{topic}' not found"}
 
-    outputs_dir = store.get_outputs_dir(project)
+    # Prefer new artifacts layout, fallback to legacy handled by store
+    try:
+        outputs_dir = store.get_reports_dir(project)
+    except Exception:
+        outputs_dir = store.get_outputs_dir(project)
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
     md_content = build_combined_md([project], f"Research Report: {project['topic']}")
@@ -690,7 +727,10 @@ def generate_chart(topic: str, chart_type: str = "auto", metric: str | None = No
     if chart_type == "pie" and len(chart_data["values"]) > 20:
         chart_type = "bar"
 
-    outputs_dir = store.get_outputs_dir(project)
+    try:
+        outputs_dir = store.get_figures_dir(project)
+    except Exception:
+        outputs_dir = store.get_outputs_dir(project)
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
     title = title_override or f"{project['topic']} — {chart_type.title()} Chart"
@@ -712,7 +752,11 @@ def generate_chart(topic: str, chart_type: str = "auto", metric: str | None = No
 
     store.add_generated_output(project, str(json_path), "chart_json", chart_type)
 
-    relative_path = str(Path(project["slug"]) / "outputs" / chart_dir.name / "index.html").replace("\\", "/")
+    # relative url under artifacts/figures if new layout
+    if "artifacts" in str(outputs_dir).replace("\\", "/"):
+        relative_path = str(Path(project["slug"]) / "artifacts" / "figures" / chart_dir.name / "index.html").replace("\\", "/")
+    else:
+        relative_path = str(Path(project["slug"]) / "outputs" / chart_dir.name / "index.html").replace("\\", "/")
 
     return {
         "chart_type": chart_type,
