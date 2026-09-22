@@ -172,9 +172,9 @@ class DataStore:
             self._conv_text_idx_built = True
 
     def _index_conversation(self, conv: dict):
-        text = conv.get("title", "")
+        text = conv.get("title", "") or ""
         for m in conv.get("messages", []):
-            text += " " + m.get("content", "")
+            text += " " + (m.get("content") or "")
         self._conv_text_idx.add(conv["id"], text)
 
     def _unindex_conversation(self, conv_id: str):
@@ -499,6 +499,10 @@ class DataStore:
             return False
 
     def add_message(self, conversation_id: str, role: str, content: str, tool_call_id: str | None = None, tool_calls: list | None = None) -> dict | None:
+        # content may be None for tool-call-only assistant turns (native
+        # tool_calls with null content). Coerce centrally: None poisons
+        # _index_conversation (" " + None) and title slicing below.
+        content = content if isinstance(content, str) else ""
         with self._lock:
             entry = self._conv_idx.get(conversation_id)
             if not entry:

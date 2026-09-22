@@ -83,6 +83,34 @@ def extract_data_from_sources(sources: list, schema: dict | None = None, context
     return summary.strip()
 
 
+def search_academic(query: str, max_sources: int = 20, difficulty: int = 5) -> str:
+    """Academic search: arXiv → DOI → OpenAlex 3-corpus fan with citation rerank. Use for academic/technical literature, papers, citations."""
+    if not query or not query.strip():
+        return "Missing required parameter: query."
+    try:
+        from backend.core.academic_search import academic_search as _academic
+    except Exception as e:
+        return f"Error: academic search unavailable: {e}"
+    results = _academic(query, max_sources=int(max_sources), difficulty=int(difficulty))
+    if not results:
+        return "No academic sources found."
+    if len(results) == 1 and "error" in results[0]:
+        return f"Error: {results[0]['error']}"
+    lines = [f"Found {len(results)} academic sources for '{query}':"]
+    for i, r in enumerate(results, 1):
+        doi_str = f" DOI:{r.get('doi')}" if r.get("doi") else ""
+        cite_str = f" cites:{r.get('citationCount')}" if r.get("citationCount") is not None else ""
+        lines.append(f"  {i}. **{r.get('title', 'Untitled')}** — {r.get('url', '')}{doi_str}{cite_str} [{r.get('corpus','')}]")
+        snippet = (r.get("content", "") or "")[:200].replace("\n", " ")
+        if snippet:
+            lines.append(f"     {snippet}…")
+    lines.append("\n---\nSOURCES_JSON:")
+    lines.append("```json")
+    lines.append(json.dumps(results, ensure_ascii=False))
+    lines.append("```")
+    return "\n".join(lines)
+
+
 def batch_add_data_points(topic: str, data_points: list, store_type: str = "research") -> str:
     """Bulk-store extracted rows as data points in a research topic or project (auto-creates research)."""
     if not topic or not topic.strip():

@@ -292,6 +292,8 @@ def _convert_df_to_data_points(df: pd.DataFrame, detected: dict) -> list[dict]:
     return data_points
 
 
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 def list_imported_files() -> list[dict]:
     """List all files in uploads directory."""
     cfg = load_config()
@@ -305,11 +307,16 @@ def list_imported_files() -> list[dict]:
     files = []
     for f in uploads_dir.iterdir():
         if f.is_file() and f.suffix.lower() in (".xlsx", ".xls", ".csv"):
+            try:
+                from datetime import datetime, timezone
+                mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat()
+            except Exception:
+                mtime = _utcnow()
             files.append({
                 "file_id": f.name,
                 "name": f.name,
                 "size": f.stat().st_size,
-                "modified": _utcnow(),
+                "modified": mtime,
             })
     return files
 
@@ -323,7 +330,16 @@ def save_uploaded_file(file_content: bytes, filename: str) -> str:
     
     uploads_dir.mkdir(parents=True, exist_ok=True)
     
-    file_id = f"{uuid.uuid4().hex[:12]}_{filename}"
+    # Sanitize filename: strip path traversal
+    safe_name = Path(filename).name.strip()
+    if not safe_name:
+        safe_name = "upload.dat"
+    # block hidden traversal attempts
+    safe_name = safe_name.replace("..", "_")
+    if len(file_content) > MAX_UPLOAD_BYTES:
+        raise ValueError(f"File too large ({len(file_content)} bytes). Max {MAX_UPLOAD_BYTES} bytes (50 MB).")
+    
+    file_id = f"{uuid.uuid4().hex[:12]}_{safe_name}"
     file_path = uploads_dir / file_id
     file_path.write_bytes(file_content)
     

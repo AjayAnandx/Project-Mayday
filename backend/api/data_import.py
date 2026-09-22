@@ -20,7 +20,10 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Only .xlsx, .xls, .csv files allowed")
     
     content = await file.read()
-    file_id = save_uploaded_file(content, file.filename)
+    try:
+        file_id = save_uploaded_file(content, file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e))
     
     return {"file_id": file_id, "filename": file.filename, "size": len(content)}
 

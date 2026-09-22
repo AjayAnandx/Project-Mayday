@@ -72,10 +72,87 @@ class ResearchPromote(BaseModel):
     name: Optional[str] = None
 
 
+class AcademicSearchRequest(BaseModel):
+    query: str
+    max_sources: int = 20
+    difficulty: int = 5
+
+
+class FanOutRequest(BaseModel):
+    topic: str
+    parent_task_id: Optional[str] = None
+    hypotheses: list[str]
+
+
 @router.get("")
-def list_research(status: str = None):
+def list_research(status: str = None, q: str = None):
     store = get_research_store()
+    if q and q.strip():
+        from backend.core.research_index import get_research_index
+        return get_research_index().search(q.strip(), limit=20)
     return store.list_projects(status)
+
+
+@router.post("/academic-search")
+def academic_search(body: AcademicSearchRequest):
+    from backend.core.academic_search import academic_search as _academic_search
+    if not body.query or not body.query.strip():
+        raise HTTPException(status_code=400, detail="Missing query")
+    results = _academic_search(body.query.strip(), max_sources=body.max_sources, difficulty=body.difficulty)
+    return {"query": body.query, "count": len(results), "results": results}
+
+
+@router.post("/fan-out", status_code=201)
+def fan_out(body: FanOutRequest):
+    store = get_research_store()
+    result = store.fan_hypothesis(body.topic, body.parent_task_id, body.hypotheses)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+class TaskStatusUpdate(BaseModel):
+    task_id: str
+    status: str
+    result: Optional[str] = None
+
+
+@router.get("/{topic}/tasks")
+def list_tasks(topic: str, status: str = None):
+    store = get_research_store()
+    result = store.list_tasks(topic, status)
+    if isinstance(result, dict) and "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.put("/{topic}/tasks/{task_id}/status")
+def update_task_status(topic: str, task_id: str, body: TaskStatusUpdate):
+    # allow body.task_id to override URL if provided differently
+    tid = body.task_id or task_id
+    store = get_research_store()
+    result = store.update_task_status(topic, tid, body.status, body.result or "")
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.post("/{topic}/tasks/{task_id}/freeze")
+def freeze_task(topic: str, task_id: str):
+    store = get_research_store()
+    result = store.freeze_task(topic, task_id)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.get("/{topic}/artifacts")
+def list_artifacts(topic: str):
+    store = get_research_store()
+    result = store.list_outputs(topic)
+    if isinstance(result, dict) and "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
 
 @router.post("", status_code=201)

@@ -49,9 +49,9 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
         conv = store.get_conversation(c["id"])
         if not conv:
             continue
-        text = conv.get("title", "")
+        text = conv.get("title", "") or ""
         for m in conv.get("messages", []):
-            text += " " + m.get("content", "")
+            text += " " + (m.get("content") or "")
         snippet = _snippet(text, q)
         conversations.append({
             "id": conv["id"],

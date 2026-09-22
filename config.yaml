@@ -21,6 +21,34 @@ models:
   tiering_enabled: false  # SINGLE-LLM mode: one cloud model handles everything (no slow local interactive tier)
   humanize_enabled: false  # skip the redundant humanize pass (was a slow CPU-bound local call)
 
+# Unified LLM gateway: Ollama Local + Ollama Cloud + OpenRouter behind one
+# OpenAI-compatible interface (backend/assistant/providers/). The worker tier
+# defaults to OpenRouter and fails over automatically on 401/402/429/5xx,
+# timeouts and connect errors. Interactive tier stays local (fast, free).
+# Without this `providers:` block the gateway preserves the old
+# single-provider behavior (everything from the `ollama:` block).
+providers:
+  default: openrouter                    # worker primary: openrouter | ollama_cloud | ollama_local
+  interactive: ollama_local              # interactive tier: always local (never uses tools)
+  fallback_order: [openrouter, ollama_cloud, ollama_local]
+  max_tools: 0                            # 0 = off: send the full set like Ollama (raise if a provider 400s on size)
+  free_max_iterations: 20                 # parity with local loop budget (lower to save free-tier quota)
+
+ollama_cloud:
+  endpoint: https://api.ollama.com/v1/chat/completions
+  model: gemma4:31b-cloud
+  api_key: ""  # Set via OLLAMA_API_KEY env var or .env
+
+openrouter:
+  endpoint: https://openrouter.ai/api/v1/chat/completions
+  model: nvidia/nemotron-3-super-120b-a12b:free
+  api_key: ""  # Set via OPENROUTER_API_KEY env var or .env
+  title: "Mayday"                        # X-OpenRouter-Title attribution header
+  referer: ""                            # optional HTTP-Referer (rankings)
+  provider:                              # OpenRouter routing prefs
+    require_parameters: true             # only tool-capable endpoints for tool turns
+    allow_fallbacks: true
+
 # MAGMA multi-graph memory substrate (R2+). Additive; retrieval stays on the
 # flat graph until R3 wires it into the engine. Local embedder is a stand-in
 # for an Ollama embedding model (swap _LocalEmbedder._embed later).
@@ -188,6 +216,9 @@ telegram:
   search_dirs: []           # optional; defaults to pdfs/ + projects_dir + research_outputs_dir + uploads/
   chart_png_dir: uploads    # temp PNG output
   verbose_tools: false      # when true, every tool_call (list_*, search_*) is echoed as 🛠 message; false = silent (only files/charts/errors)
+
+openalex:
+  api_key: ""  # Set via OPENALEX_API_KEY env var or .env (get from https://openalex.org/api)
 
 phf:
   enabled: true

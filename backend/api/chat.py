@@ -13,6 +13,7 @@ from backend.core.config import load_config
 from backend.core.data_store import get_store
 from backend.core.operation_log import get_operation_log
 from backend.assistant.llm_client import LLMClient
+from backend.assistant.providers.base import ProviderError
 from backend.assistant.function_registry import (
     dispatch_call, get_tool_definitions,
     DESIGN_TOOL_NAMES,
@@ -770,6 +771,49 @@ async def _send_json(sender, data: dict):
         logger.warning("_send_json failed for type=%s: %s", data.get("type", "?"), e)
 
 
+def _http_error_detail(e) -> str:
+    """Extract the provider's real error body (truncated) for user-facing errors."""
+    try:
+        text = (e.response.text or "").strip()
+    except Exception:
+        return ""
+    if len(text) > 300:
+        text = text[:300] + "…"
+    return f" {text}" if text else ""
+
+
+def _provider_error_message(e) -> str:
+    """Legacy-grade user message for gateway ProviderErrors (all hops failed)."""
+    kind = getattr(e, "error_type", "") or ""
+    provider = getattr(e, "provider", "") or "LLM provider"
+    status = getattr(e, "status_code", None)
+    if kind == "timeout":
+        return (f"The model took too long and timed out ({provider}). "
+                "Large prompts on cloud models can exceed the timeout — retry, "
+                "or set `ollama.timeout` in config.yaml higher.")
+    if kind == "connect":
+        return f"Cannot reach {provider}. {CONNECTION_HINT}"
+    if status is not None:
+        return f"LLM returned HTTP {status} ({provider}). {e} Check your model and API key."
+    return f"LLM error: {e}"
+
+
+async def _flush_fallback_notice(sender, llm) -> None:
+    """Surface LLM gateway provider failover (if any) as a tool_call card."""
+    try:
+        notice = llm.fallback_notice() if hasattr(llm, "fallback_notice") else ""
+    except Exception:
+        return
+    if notice:
+        logger.warning("LLM provider fallback: %s", notice)
+        await _send_json(sender, {"type": "tool_call", "name": "provider_fallback",
+                                  "result": notice})
+        try:
+            llm.last_fallbacks = []
+        except Exception:
+            pass
+
+
 def _make_voice_text(text: str) -> str:
     stripped = text
     stripped = re.sub(r'```[\s\S]*?```', '', stripped)
@@ -1114,6 +1158,17 @@ async def _run_engine(
             if sd not in filtered_tools:
                 filtered_tools.append(sd)
 
+    # Tool cap for capped (cloud) primaries only (0 = off, Ollama parity).
+    # Local Ollama keeps the full set exactly as before (no provider limit).
+    try:
+        if getattr(llm, "provider_name", "ollama_local") != "ollama_local":
+            from backend.core.tool_selector import apply_tool_cap, max_tools_limit
+            _cap = max_tools_limit(load_config())
+            if _cap > 0 and llm_tool_choice != "none" and len(filtered_tools) > _cap:
+                filtered_tools = apply_tool_cap(filtered_tools, selected_group_names, _cap)
+    except Exception as e:
+        logger.warning("Tool cap skipped: %s", e)
+
     send_tools = filtered_tools if llm_tool_choice != "none" else []
 
     try:
@@ -1126,6 +1181,7 @@ async def _run_engine(
             return llm.extract_response(resp)
 
         content, tool_calls = await loop.run_in_executor(None, first_call, messages)
+        await _flush_fallback_notice(sender, llm)
     except asyncio.CancelledError:
         logger.info("WebSocket client disconnected during first LLM call")
         return
@@ -1145,11 +1201,19 @@ async def _run_engine(
             logger.warning("Failed to send done after ConnectError — client may have disconnected")
         return
     except httpx.HTTPStatusError as e:
-        await _send_json(sender, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}. Check your model and API key."})
+        await _send_json(sender, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}.{_http_error_detail(e)} Check your model and API key."})
         try:
             await _send_json(sender, {"type": "done"})
         except Exception:
             logger.warning("Failed to send done after HTTPStatusError — client may have disconnected")
+        return
+    except ProviderError as e:
+        # Gateway failure after the full chain: loud, tailored, legacy-grade.
+        await _send_json(sender, {"type": "error", "content": _provider_error_message(e)})
+        try:
+            await _send_json(sender, {"type": "done"})
+        except Exception:
+            logger.warning("Failed to send done after ProviderError — client may have disconnected")
         return
     except Exception as e:
         logger.exception("LLM error in first_call: %s", e)
@@ -1162,6 +1226,15 @@ async def _run_engine(
 
     MAX_ITERATIONS = 20
     DUPLICATE_LIMIT = 3
+    # Free-tier quota guard (opt-in): fewer loop turns when the primary is a
+    # `:free` model. Default 20 = parity with the local loop budget.
+    try:
+        from backend.assistant.providers.router import free_max_iterations as _free_max
+        _model_id = getattr(llm, "model", "") or ""
+        if _model_id.endswith(":free"):
+            MAX_ITERATIONS = min(MAX_ITERATIONS, _free_max(load_config()))
+    except Exception as e:
+        logger.warning("Free-iteration budget skipped: %s", e)
     seen_calls: list[tuple] = []
     # v2: split success/error + per-project same-tool + hash cache
     _success_seen: dict[tuple, int] = {}
@@ -1234,6 +1307,7 @@ async def _run_engine(
                     resp.raise_for_status()
                     return llm.extract_response(resp)
                 content, tool_calls = await loop.run_in_executor(None, llm_call, messages)
+                await _flush_fallback_notice(sender, llm)
                 logger.info("LLM iter %d returned %s tool_calls: %s", iteration, len(tool_calls) if tool_calls else 0, [c.get("function", {}).get("name") for c in (tool_calls or [])])
             except asyncio.CancelledError:
                 logger.info("WebSocket client disconnected during iterative tool loop")
@@ -1246,7 +1320,10 @@ async def _run_engine(
                 await _send_json(sender, {"type": "error", "content": f"Cannot reach Ollama. {CONNECTION_HINT}"})
                 break
             except httpx.HTTPStatusError as e:
-                await _send_json(sender, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}. Check your model and API key."})
+                await _send_json(sender, {"type": "error", "content": f"LLM returned HTTP {e.response.status_code}.{_http_error_detail(e)} Check your model and API key."})
+                break
+            except ProviderError as e:
+                await _send_json(sender, {"type": "error", "content": _provider_error_message(e)})
                 break
             except Exception as e:
                 logger.exception("LLM error in iterative call: %s", e)
@@ -1256,7 +1333,7 @@ async def _run_engine(
         if not tool_calls:
             break
 
-        conv.add_message("assistant", content, tool_calls=tool_calls)
+        conv.add_message("assistant", content or "", tool_calls=tool_calls)
 
         if content and content.strip() and not humanize_output:
             await _send_json(sender, {"type": "token", "content": content})
@@ -1688,6 +1765,7 @@ async def _run_engine(
                             resp.raise_for_status()
                             return llm.extract_response(resp)
                         summary2, _ = await loop.run_in_executor(None, final_call2, messages_fb)
+                        await _flush_fallback_notice(sender, llm)
                         if summary2:
                             content = summary2
                     except Exception:
@@ -1705,6 +1783,7 @@ async def _run_engine(
                     resp.raise_for_status()
                     return llm.extract_response(resp)
                 summary, _ = await loop.run_in_executor(None, final_call, messages)
+                await _flush_fallback_notice(sender, llm)
                 if summary:
                     content = summary
             except asyncio.CancelledError:

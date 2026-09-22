@@ -35,7 +35,7 @@ from backend.functions.data_import import (
     import_data, import_data_to_store, list_imported_files,
 )
 from backend.functions.web_research import (
-    web_search_and_fetch, extract_data_from_sources, batch_add_data_points,
+    web_search_and_fetch, extract_data_from_sources, batch_add_data_points, search_academic,
 )
 from backend.functions.scaffold_functions import (
     store_component, list_stored_components, get_stored_component, scaffold_ui_project,
@@ -48,6 +48,7 @@ from backend.functions.research_functions import (
     add_research_note, list_research_notes,
     promote_research_to_project, search_research,
     list_research_outputs, research_agent,
+    fan_hypothesis, update_research_task_status, freeze_research_task, list_research_tasks,
 )
 from backend.functions.data_export import export_research_dataset, export_dataset_pdf
 from backend.functions.visual_testing import (
@@ -1351,6 +1352,22 @@ LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "search_academic",
+            "description": "Academic paper search: arXiv → DOI → OpenAlex 3-corpus fan with citation rerank & difficulty follow-ups. Use for literature survey, papers, citation network, academic/technical topics. Returns sources with DOI, citationCount, published_date for authenticity.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Academic query (e.g. 'CRISPR off-target detection', 'transformer efficiency 2024')"},
+                    "max_sources": {"type": "integer", "description": "Max sources (default 20, max 50)"},
+                    "difficulty": {"type": "integer", "description": "Depth 1-10: 1-3 no follow-ups, 4-7 one follow-up round, 8-10 two rounds chasing referenced_works (default 5)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "capture_page_screenshot",
             "description": "Navigate to URL and take a screenshot",
             "parameters": {
@@ -1937,6 +1954,69 @@ LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "fan_hypothesis",
+            "description": "Branch a research task into 2-5 sibling hypothesis tasks (stacked-bushes fan). Use for comparative analysis: fan a little within a round (siblings), then descend onto winner. Parent frozen-once-answered, cap 2 failing runs then ask user. Use after literature survey.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "hypotheses": {"type": "array", "items": {"type": "string"}, "description": "List of 2-5 hypothesis titles (e.g. ['Transformer vs Mamba efficiency', 'Quantization impact']) — each becomes a sibling task under parent"},
+                    "parent_task_id": {"type": "string", "description": "Parent task ID or title to branch from (optional — defaults to active task)"},
+                },
+                "required": ["topic", "hypotheses"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_research_task_status",
+            "description": "Update a research task status: pending->in_progress->completed/blocked/failed/frozen. Use to advance hypothesis branches; respects frozen + run_count cap 2 (failed twice → blocked, ask user).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "task_id": {"type": "string", "description": "Task ID or exact title"},
+                    "status": {"type": "string", "enum": ["in_progress", "completed", "blocked", "failed", "frozen"], "description": "New status"},
+                    "result": {"type": "string", "description": "Optional result summary (saved to task)"},
+                },
+                "required": ["topic", "task_id", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "freeze_research_task",
+            "description": "Freeze a research task (winner answered, immutable forever). Prevents further edits to that node. Use after a hypothesis is answered to lock it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "task_id": {"type": "string", "description": "Task ID or exact title to freeze"},
+                },
+                "required": ["topic", "task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_research_tasks",
+            "description": "List all tasks (with branching: parent_task_id, hypothesis, frozen, run_count) for a research topic, optionally filtered by status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Research topic"},
+                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked", "failed", "frozen"], "description": "Optional status filter"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "research_agent",
             "description": "DSPy RL multi-hop research agent (Mode A). Runs a bounded, self-contained loop over an existing research topic: plan → search → extract → store → verify gaps → finish, then auto-generates the report. Requires dspy.enabled and dspy.research_agent flags. No-op message if disabled. Use for 'fully research X' / 'run the agent on Y'.",
             "parameters": {
@@ -2357,6 +2437,10 @@ FUNCTION_MAP = {
     "search_research": search_research,
     "promote_research_to_project": promote_research_to_project,
     "list_research_outputs": list_research_outputs,
+    "fan_hypothesis": fan_hypothesis,
+    "update_research_task_status": update_research_task_status,
+    "freeze_research_task": freeze_research_task,
+    "list_research_tasks": list_research_tasks,
     "export_research_dataset": export_research_dataset,
     "research_agent": research_agent,
     "create_project": create_project,
@@ -2422,6 +2506,7 @@ FUNCTION_MAP = {
     "import_data_to_store": import_data_to_store,
     "list_imported_files": list_imported_files,
     "web_search_and_fetch": web_search_and_fetch,
+    "search_academic": search_academic,
     "extract_data_from_sources": extract_data_from_sources,
     "batch_add_data_points": batch_add_data_points,
     "store_component": store_component,
@@ -2501,7 +2586,40 @@ def get_tool_definitions(mcp_tools: list[dict] | None = None) -> list[dict]:
         })
     if mcp_tools:
         tools.extend(mcp_tools)
-    return tools
+    return _validate_tool_definitions(tools)
+
+
+def _validate_tool_definitions(tools: list[dict]) -> list[dict]:
+    """Drop provider-rejected tool shapes (warn, don't crash).
+
+    OpenAI-spec providers 400 entire requests on a single malformed tool def
+    (missing name, non-object parameters, etc.). Invalid defs are logged with
+    names so they can be fixed, and the request proceeds with the valid set.
+    """
+    valid = []
+    for t in tools:
+        try:
+            fn = t.get("function", {}) if isinstance(t, dict) else {}
+            params = fn.get("parameters", {"type": "object", "properties": {}})
+            ok = (isinstance(t, dict) and t.get("type") == "function"
+                  and isinstance(fn.get("name"), str) and fn.get("name")
+                  and isinstance(params, dict) and params.get("type", "object") == "object"
+                  and isinstance(params.get("properties", {}), dict))
+        except Exception:
+            ok = False
+        if ok:
+            valid.append(t)
+        else:
+            try:
+                label = (t.get("function", {}) or {}).get("name", "?") if isinstance(t, dict) else type(t).__name__
+            except Exception:
+                label = "?"
+            logging.getLogger(__name__).warning(
+                "Dropping malformed tool definition: %s", label)
+    if len(valid) != len(tools):
+        logging.getLogger(__name__).warning(
+            "Tool validation: %d of %d definitions kept", len(valid), len(tools))
+    return valid
 
 
 # Argument repair for sloppy LLM tool calls: alias names, fill defaults,
@@ -2534,6 +2652,10 @@ _PARAM_ALIASES: dict[str, dict[str, str]] = {
     "list_project_tasks": {"project": "name", "project_name": "name"},
     "get_task_result": {"project": "name", "project_name": "name"},
     "add_research_note": {"project": "topic", "topic_name": "topic", "file_name": "filename", "title": "filename"},
+    "fan_hypothesis": {"project": "topic", "topic_name": "topic", "hypothesis": "hypotheses", "parent": "parent_task_id", "parent_id": "parent_task_id"},
+    "update_research_task_status": {"project": "topic", "topic_name": "topic", "id": "task_id", "title": "task_id", "name": "task_id"},
+    "freeze_research_task": {"project": "topic", "topic_name": "topic", "id": "task_id", "title": "task_id", "name": "task_id"},
+    "list_research_tasks": {"project": "topic", "topic_name": "topic"},
     "create_research": {"project": "topic", "topic_name": "topic"},
     "resume_research": {"project": "topic", "topic_name": "topic"},
     "update_research_status": {"project": "topic", "topic_name": "topic"},
@@ -2552,6 +2674,7 @@ _PARAM_ALIASES: dict[str, dict[str, str]] = {
     "web_search_advanced_exa": {"q": "query", "search": "query", "search_query": "query", "question": "query", "topic": "query", "terms": "query"},
     "web_fetch_exa": {"url": "urls", "link": "urls", "links": "urls", "page": "urls", "pages": "urls"},
     "web_search_and_fetch": {"q": "query", "search": "query", "search_query": "query", "question": "query", "topic": "query", "terms": "query", "limit": "max_sources", "count": "max_sources"},
+    "search_academic": {"q": "query", "search": "query", "search_query": "query", "question": "query", "topic": "query", "terms": "query", "limit": "max_sources", "count": "max_sources", "max": "max_sources"},
     "batch_add_data_points": {"topic_name": "topic", "store": "store_type", "name": "topic", "rows": "data_points", "extracted_data": "data_points"},
     "locate_and_prepare_file": {"keyword": "name", "query": "name", "q": "name", "filename": "name", "file": "name"},
     "export_dataset_pdf": {"name": "topic", "project": "topic", "project_name": "topic", "topic_name": "topic", "research_topic": "topic", "store": "store_type", "type": "store_type"},

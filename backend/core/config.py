@@ -13,7 +13,10 @@ ENV_OVERRIDES = {
         }
     },
     "ollama": {"endpoint": "OLLAMA_ENDPOINT"},
+    "ollama_cloud": {"api_key": "OLLAMA_API_KEY", "model": "OLLAMA_CLOUD_MODEL"},
+    "openrouter": {"api_key": "OPENROUTER_API_KEY", "model": "OPENROUTER_MODEL"},
     "telegram": {"token": "TELEGRAM_BOT_TOKEN"},
+    "openalex": {"api_key": "OPENALEX_API_KEY"},
 }
 
 
