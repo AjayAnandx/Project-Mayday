@@ -36,3 +36,9 @@ backend/dspy/artifacts/
 # PHF user model runtime artifacts
 habitus.json
 practices.jsonl
+# Gmail OAuth — never commit secrets/tokens
+client_secret_*.json
+backend/credentials/*.json
+!backend/credentials/.gitkeep
+tokens/*.json
+gmail_state.json

@@ -7,6 +7,7 @@ import type { DocumentMeta } from '../types/document'
 import type { DataImportFile, DataImportParseResult, ChartOutput } from '../types/data-import'
 import type { ResearchProject, ResearchDataPoint } from '../types/research'
 import type { Project, ProjectDataPoint } from '../types/project'
+import type { GmailMessages, GmailStatus } from '../types/gmail'
 
 const BASE = '/api'
 
@@ -197,5 +198,16 @@ export const api = {
 
   getAiNews: () =>
     request<AiNewsResponse>('/dashboard/ai-news'),
+
+  // Gmail (dedicated consumer mailbox, local-only)
+  getGmailStatus: () =>
+    request<GmailStatus>('/gmail/status'),
+
+  listGmailMessages: (q = 'is:unread', limit = 5) =>
+    request<GmailMessages>(`/gmail/messages?q=${encodeURIComponent(q)}&limit=${limit}`),
+
+  startGmailAuth: (account = 'agent') => {
+    window.open(`/api/auth/gmail/start?account=${encodeURIComponent(account)}`, '_blank', 'noopener')
+  },
 
 }

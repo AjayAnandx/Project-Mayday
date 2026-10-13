@@ -29,6 +29,7 @@ from backend.assistant.memory.conversation_manager import ConversationManager
 from backend.memory.knowledge_graph import get_graph, extract_keywords, KnowledgeGraph
 from backend.api.screenshots import get_screenshot_store
 from backend.core.tool_selector import ToolSelector
+from backend.core.tool_router import ToolRouter, DEFAULT_ROUTER_CAP
 from backend.core.query_classifier import QueryClassifier, QueryIntent
 from backend.core.evolution import run_post_mortem
 from backend.core.user_awareness import get_awareness_store
@@ -187,15 +188,20 @@ You also have PDF document tools: list_pdfs, search_pdfs, read_pdf, upload_pdf, 
 For ANY existing file by keyword (pdf/md/csv across pdfs/, projects/, research/, uploads/), use locate_and_prepare_file(name="keyword") — it finds the file, auto-converts .md to PDF, and returns a path that Telegram will auto-send as a document. Use for "send me the X pdf", "find my notes", "export the X file".
 For datasets: export_research_dataset(topic) → CSV, export_dataset_pdf(topic, store_type="research"|"project") → bare-table PDF. Both return an artifact/file path that is auto-sent to Telegram/web as a downloadable file. Charts: generate_chart(topic) → interactive HTML + PNG (auto-sent as photo on Telegram, auto-opened in new tab on web).
 Relevant PDF content is automatically injected into your context when appropriate — use search_pdfs() only when you need to find something specific in uploaded documents.
-You also have music tools via YouTube Music (ytmusicapi + yt-dlp):
-- play_song, queue_song, play_radio, play_mood, discover_trending, my_top_songs (basic playback/history)
-- open_video_popup: open current or given video in separate window — each call opens a NEW TAB (multi-tab). Use when user says "open video", "pop out video", "show in new window", "open on youtube", "open tutorial A and tutorial B"
-- search_youtube_videos: advanced search with sort_by (relevance/view_count/rating/upload_date) + time_filter (today/week/month/year) + trusted_only flag for trusted channels
-- recommend_best_video: compare top 3 videos for a query and autoplay the best for balanced understanding — use for "LLM evaluation tutorial", "which video is best", "recommend a tutorial" (always explain why #1 wins)
-- add_favorite / remove_favorite / list_favorites / toggle_favorite / play_favorites: favorites saved in memory graph (when user says "add to favorites", "my favorites", "play my favorites")
-- add_trusted_channel / remove_trusted_channel / list_trusted_channels: trusted YouTube channels saved in memory (when user says "add @TamilBeats to trusted", "save this channel", "trusted channels")
-- list_popout_tabs / close_popout_tab / focus_popout_tab / toggle_popout_tab: multi-tab control — each tab is an independent YouTube window with its own pause/play. Use list_popout_tabs to see open tabs, then toggle/close/focus by tab_id. You can open multiple tabs by calling open_video_popup multiple times in one turn (e.g. two tutorials).
-Use play_song for "play X" (supports "play my favorites" shorthand via play_favorites). For mood use play_mood, radio play_radio, discovery discover_trending, history my_top_songs. For video popup use open_video_popup (each call = new tab). For topic search with views/likes/newest/trusted use search_youtube_videos. For "which is best / recommend" use recommend_best_video — it compares 3 and autoplays #1. If a song title is ambiguous (could be song vs tutorial video), ASK "Did you mean the song 'X' or the tutorial video 'X'?" and wait for choice. Music language auto-detected (Tamil/Hindi/English) and biases trending.
+You also have music tools via YouTube Music (ytmusicapi + yt-dlp) — each takes an action:
+- music_play (play/queue/radio/mood/favorites): play a song now ('play X'), queue without interrupting, 20-track radio mix from a seed, mood/genre playlist (chill, focus, party), or saved favorites ('play my favorites')
+- video_popup (open/list_tabs/close/focus/toggle): open current or given video in a separate window — each open call is a NEW TAB (multi-tab). Use for 'open video', 'pop out video', 'open tutorial A and tutorial B'
+- music_discover (trending/top/search/recommend): trending charts ('what's trending in Tamil'), most-played history, advanced search with sort_by (relevance/view_count/rating/upload_date) + time_filter (today/week/month/year) + trusted_only, or compare-and-autoplay-best ('which video is best', always explain why #1 wins)
+- music_library (add/remove/list/toggle): favorites saved in memory ('add to favorites', 'my Tamil favorites')
+- music_channels (add/remove/list): trusted YouTube channels in memory ('add @TamilBeats to trusted')
+- For popups: video_popup(action=list_tabs) to see open tabs, then close/focus/toggle by tab_id (each tab independent; 'pause that tutorial').
+Use music_play(action=play) for "play X" — call it IMMEDIATELY, never call web search first to identify the song (music_play searches YouTube itself, including Tamil/Hindi/English titles). If a song title is ambiguous (could be song vs tutorial video), ASK "Did you mean the song 'X' or the tutorial video 'X'?" and wait for choice. Music language auto-detected (Tamil/Hindi/English) and biases trending.
+You have a dedicated consumer inbox (maydayishereatwork@gmail.com) via Gmail API tools:
+- gmail_list/gmail_search/gmail_read/gmail_thread: read mail. Inbound mail also arrives as notifications.
+- gmail_draft(to, subject, text): create a draft for user review.
+- gmail_send / gmail_reply: transmit. APPROVAL-GATED — NEVER call these to send new content on your own. Flow: draft first with gmail_draft, show the user the exact content, and call send/reply ONLY after the user explicitly says approve/send/reply/go-ahead. No silent auto-send, ever.
+- gmail_modify (mark read via remove_labels=['UNREAD']), gmail_create_label.
+If Gmail is not connected, tell the user to click 'Connect Gmail for Mayday' on the Dashboard.
 Current date and time (your local timezone): {date}"""
 
 PERSONALITY_INSTRUCTIONS = """
@@ -584,8 +590,8 @@ CORE_TOOL_NAMES = {
     # Design tools
     *DESIGN_TOOL_NAMES,
     *DESIGN_MCP_TOOL_NAMES,
-    # Music — playback, vibe engine, history & trending (ytmusicapi + yt-dlp)
-    "play_song", "play_radio", "play_mood", "queue_song", "discover_trending", "my_top_songs",
+    # Music — playback, discovery, library, channels, popup tabs (ytmusicapi + yt-dlp)
+    "music_play", "music_discover", "music_library", "music_channels", "video_popup",
 }
 
 BASIC_TOOL_NAMES = {
@@ -663,11 +669,12 @@ DATA_TOOL_NAMES = {
 }
 
 MUSIC_TOOL_NAMES = {
-    "play_song", "play_radio", "play_mood", "queue_song", "discover_trending", "my_top_songs",
-    "open_video_popup", "search_youtube_videos", "recommend_best_video",
-    "add_favorite", "remove_favorite", "list_favorites", "toggle_favorite", "play_favorites",
-    "add_trusted_channel", "remove_trusted_channel", "list_trusted_channels",
-    "list_popout_tabs", "close_popout_tab", "focus_popout_tab", "toggle_popout_tab",
+    "music_play", "music_discover", "music_library", "music_channels", "video_popup",
+}
+
+GMAIL_TOOL_NAMES = {
+    "gmail_send", "gmail_reply", "gmail_draft", "gmail_list", "gmail_search",
+    "gmail_read", "gmail_thread", "gmail_modify", "gmail_create_label",
 }
 
 SCREENSHOT_TOOL_NAMES = {
@@ -729,6 +736,7 @@ GROUP_SETS = {
     "data": DATA_TOOL_NAMES,
     "design_mcp": DESIGN_MCP_TOOL_NAMES,
     "music": MUSIC_TOOL_NAMES,
+    "gmail": GMAIL_TOOL_NAMES,
 }
 
 
@@ -919,6 +927,7 @@ async def _run_engine(
     mcp: MCPManager | None,
     kg: KnowledgeGraph | None = None,
     selector: ToolSelector | None = None,
+    router: ToolRouter | None = None,
     skill_manager: SkillManager | None = None,
     pending_suggestion: list | None = None,
     active_skill: list | None = None,
@@ -1131,25 +1140,46 @@ async def _run_engine(
 
     loop = asyncio.get_running_loop()
 
-    selected_group_names: set[str] = set()
-    for group_name in intent.active_groups:
-        if group_name in GROUP_SETS:
-            selected_group_names.update(GROUP_SETS[group_name])
-
-    filtered_tools = [t for t in tools if t.get("function", t).get("name", "") in selected_group_names]
-
-    if intent.intent == "general" or intent.confidence < 0.5:
-        if selector is not None:
-            selector_names = selector.select_tool_names(user_text)
-            for t in tools:
-                name = t.get("function", t).get("name", "")
-                if name in selector_names and name not in selected_group_names:
-                    filtered_tools.append(t)
-
-    if len(filtered_tools) == 0:
-        filtered_tools = tools
-
+    # Deterministic tool routing (no LLM call): intent groups + TF-IDF
+    # selector hits + essentials, hard-capped for EVERY provider so OpenAI's
+    # 128-tool limit is never hit (previously: general -> all ~150 -> 400).
     llm_tool_choice = intent.tool_choice if intent.tool_choice in ("none", "auto") else None
+    try:
+        from backend.core.tool_selector import max_tools_limit
+        _cap = max_tools_limit(load_config(), default=DEFAULT_ROUTER_CAP)
+    except Exception:
+        _cap = DEFAULT_ROUTER_CAP
+    if not _cap or _cap <= 0:
+        _cap = DEFAULT_ROUTER_CAP
+
+    selector_names: set[str] = set()
+    if selector is not None and llm_tool_choice != "none":
+        try:
+            selector_names = selector.select_tool_names(user_text)
+        except Exception as e:
+            logger.warning("ToolSelector failed, continuing with intent groups: %s", e)
+
+    if router is not None:
+        ordered_names = router.route_names(intent.active_groups, selector_names,
+                                           intent.intent, intent.confidence)
+        filtered_tools = router.route_tools(tools, ordered_names, cap=_cap)
+        selected_group_names = set(ordered_names)
+    else:
+        # Fallback when no router (tests): intent groups + selector, essentials floor.
+        selected_group_names = set()
+        for group_name in intent.active_groups:
+            if group_name in GROUP_SETS and group_name != "core":
+                selected_group_names.update(GROUP_SETS[group_name])
+        selected_group_names.update(selector_names)
+        filtered_tools = [t for t in tools
+                          if t.get("function", t).get("name", "") in selected_group_names]
+        if len(filtered_tools) == 0:
+            from backend.core.tool_router import ESSENTIAL_TOOL_NAMES
+            filtered_tools = [t for t in tools
+                              if t.get("function", t).get("name", "") in ESSENTIAL_TOOL_NAMES]
+        if len(filtered_tools) > _cap:
+            from backend.core.tool_selector import apply_tool_cap
+            filtered_tools = apply_tool_cap(filtered_tools, selected_group_names, _cap)
 
     if active_skill and skill_manager:
         skill = active_skill[0]
@@ -1157,17 +1187,9 @@ async def _run_engine(
         for sd in skill_tool_defs:
             if sd not in filtered_tools:
                 filtered_tools.append(sd)
-
-    # Tool cap for capped (cloud) primaries only (0 = off, Ollama parity).
-    # Local Ollama keeps the full set exactly as before (no provider limit).
-    try:
-        if getattr(llm, "provider_name", "ollama_local") != "ollama_local":
-            from backend.core.tool_selector import apply_tool_cap, max_tools_limit
-            _cap = max_tools_limit(load_config())
-            if _cap > 0 and llm_tool_choice != "none" and len(filtered_tools) > _cap:
-                filtered_tools = apply_tool_cap(filtered_tools, selected_group_names, _cap)
-    except Exception as e:
-        logger.warning("Tool cap skipped: %s", e)
+        if len(filtered_tools) > _cap:
+            from backend.core.tool_selector import apply_tool_cap
+            filtered_tools = apply_tool_cap(filtered_tools, selected_group_names, _cap)
 
     send_tools = filtered_tools if llm_tool_choice != "none" else []
 
@@ -1349,7 +1371,7 @@ async def _run_engine(
                         fn_args = json.loads(fn_args)
                     except (json.JSONDecodeError, TypeError):
                         result = f"Invalid JSON arguments from LLM for {fn_name}: {str(fn_args)[:200]}"
-                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
+                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result, "args": fn_args if isinstance(fn_args, dict) else {}})
                         conv.add_message("tool", result, tool_call_id=tool_call_id)
                         continue
 
@@ -1374,7 +1396,7 @@ async def _run_engine(
                         avail = skill_manager.list_skills() if skill_manager else []
                         result = f"Skill '{skill_name}' not found. Available: {', '.join(avail)}"
                     conv.add_message("tool", result, tool_call_id=tool_call_id)
-                    await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
+                    await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result, "args": fn_args if isinstance(fn_args, dict) else {}})
 
                 if fn_name in ("capture_page_screenshot", "visual_diff", "check_element",
                                "Playwright_navigate", "Playwright_screenshot", "Playwright_click",
@@ -1412,7 +1434,7 @@ async def _run_engine(
                     _same_tool_project_key_pre = (fn_name, _proj_scope_pre) if _proj_scope_pre else (fn_name, "")
                     _same_tool_project[_same_tool_project_key_pre] = _same_tool_project.get(_same_tool_project_key_pre, 0) + 1
                     conv.add_message("tool", result, tool_call_id=tool_call_id)
-                    await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
+                    await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result, "args": fn_args if isinstance(fn_args, dict) else {}})
                     # skip dispatch and jump to next tc; continue loop handles KG sync etc? Keep KG skip for cached.
                     continue
 
@@ -1535,7 +1557,7 @@ async def _run_engine(
                         tool_calls = None
                         conv.add_message("tool", result, tool_call_id=tool_call_id)
                         tool_calls_log.append({"function": {"name": fn_name}, "result": result, "args": fn_args, "is_error": True, "retryable": False})
-                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
+                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result, "args": fn_args if isinstance(fn_args, dict) else {}})
                         break
                     if same_tool_count >= 6:
                         logger.warning("Stuck guard (same_tool): %s same_tool=%d — breaking", fn_name, same_tool_count)
@@ -1547,7 +1569,7 @@ async def _run_engine(
                         tool_calls = None
                         conv.add_message("tool", result, tool_call_id=tool_call_id)
                         tool_calls_log.append({"function": {"name": fn_name}, "result": result, "args": fn_args, "is_error": True, "retryable": False})
-                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
+                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result, "args": fn_args if isinstance(fn_args, dict) else {}})
                         break
                 else:
                     # success path — retain: if same success seen before, mark cached
@@ -1568,7 +1590,7 @@ async def _run_engine(
                         tool_calls = None
                         conv.add_message("tool", result, tool_call_id=tool_call_id)
                         tool_calls_log.append({"function": {"name": fn_name}, "result": result, "args": fn_args, "is_error": False, "retryable": False})
-                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result})
+                        await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result, "args": fn_args if isinstance(fn_args, dict) else {}})
                         break
                     # normal error same_tool check still applies for mixed runs
 
@@ -1666,7 +1688,8 @@ async def _run_engine(
                     if _music_payload is not None:
                         result = _music_summary
 
-                tool_msg = {"type": "tool_call", "name": fn_name, "result": result}
+                tool_msg = {"type": "tool_call", "name": fn_name, "result": result,
+                            "args": fn_args if isinstance(fn_args, dict) else {}}
 
                 try:
                     _data = json.loads(result)
@@ -1722,7 +1745,7 @@ async def _run_engine(
                         logger.warning("Failed to emit music WS: %s", _me)
             except Exception as e:
                 logger.exception("Tool '%s' crashed: %s", fn_name, e)
-                await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": f"Internal error: {e}"})
+                await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": f"Internal error: {e}", "args": fn_args if isinstance(fn_args, dict) else {}})
                 conv.add_message("tool", f"Error: {e}", tool_call_id=tool_call_id)
                 tool_calls_log.append({"function": {"name": fn_name}, "result": f"Error: {e}", "error": True})
 
@@ -1756,7 +1779,7 @@ async def _run_engine(
                     fb = await dispatch_call("web_search_exa", {"query": query, "numResults": 5, "type": "auto"}, mcp_manager=mcp)
                     conv.add_message("tool", fb, tool_call_id=f"auto_web_search_fallback_{iteration}")
                     tool_calls_log.append({"function": {"name": "web_search_exa"}, "result": fb, "args": {"query": query}, "is_error": False, "auto_injected": True})
-                    await _send_json(sender, {"type": "tool_call", "name": "web_search_exa", "result": fb})
+                    await _send_json(sender, {"type": "tool_call", "name": "web_search_exa", "result": fb, "args": {"query": query}})
                     # re-run final synthesis with enriched context
                     try:
                         messages_fb = [{"role": "system", "content": system}] + conv.get_context()
@@ -1923,10 +1946,17 @@ async def chat_websocket(websocket: WebSocket):
             logger.error("MCP tool discovery error: %s", e)
     tools = get_tool_definitions(mcp_tools)
 
+    router = ToolRouter(GROUP_SETS)
+    extended_groups = router.extended_groups(tools)
     selector = ToolSelector()
-    selector.build_index(tools, GROUP_SETS)
-    logger.info("ToolSelector built index for %d tools in %d groups",
-                len(tools), len(GROUP_SETS))
+    selector.build_index(tools, extended_groups)
+    try:
+        from backend.core.tool_selector import max_tools_limit as _max_cap
+        _log_cap = _max_cap(load_config(), default=DEFAULT_ROUTER_CAP)
+    except Exception:
+        _log_cap = DEFAULT_ROUTER_CAP
+    logger.info("ToolRouter+Selector built index for %d tools in %d groups (cap %d)",
+                len(tools), len(extended_groups), _log_cap)
 
     skill_manager = None
     skills_cfg = config.get("skills", {})
@@ -2007,7 +2037,7 @@ async def chat_websocket(websocket: WebSocket):
                     await _run_interactive_only(sender, user_text, conv)
                     continue
                 await _run_engine(sender, user_text, conv, llm, tools, mcp, kg,
-                                  selector=selector, skill_manager=skill_manager,
+                                  selector=selector, router=router, skill_manager=skill_manager,
                                   pending_suggestion=pending_suggestion,
                                   active_skill=active_skill,
                                   query_classifier=query_classifier,
@@ -2027,7 +2057,7 @@ async def chat_websocket(websocket: WebSocket):
                             "name": skill_name,
                         })
                         await _run_engine(sender, f"Activate skill: {skill_name}", conv, llm, tools, mcp, kg,
-                                          selector=selector, skill_manager=skill_manager,
+                                          selector=selector, router=router, skill_manager=skill_manager,
                                           pending_suggestion=pending_suggestion,
                                           active_skill=active_skill,
                                           query_classifier=query_classifier,
