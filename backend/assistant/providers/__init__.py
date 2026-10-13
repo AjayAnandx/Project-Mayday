@@ -1,9 +1,11 @@
 """Unified LLM provider gateway for Mayday.
 
-Three OpenAI-compatible providers behind one interface:
+Four OpenAI-compatible providers behind one interface:
 
 - ``ollama_local`` — http://localhost:11434/v1/chat/completions, no auth.
   Request bodies are byte-identical to the pre-gateway client.
+- ``openai`` — https://api.openai.com/v1/chat/completions, Bearer
+  ``OPENAI_API_KEY``. Stock OpenAI function calling, no concurrency limit.
 - ``ollama_cloud`` — https://api.ollama.com/v1/chat/completions, Bearer
   ``OLLAMA_API_KEY``, 1 concurrent request (serialized in router).
 - ``openrouter`` — https://openrouter.ai/api/v1/chat/completions, Bearer

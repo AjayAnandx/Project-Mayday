@@ -14,6 +14,10 @@ export default defineConfig({
         target: 'ws://localhost:8772',
         ws: true,
       },
+      '/api/realtime/voice': {
+        target: 'ws://localhost:8772',
+        ws: true,
+      },
       '/api': 'http://localhost:8772',
       '/ws': {
         target: 'ws://localhost:8772',

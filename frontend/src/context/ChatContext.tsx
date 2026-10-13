@@ -1,5 +1,6 @@
 import { createContext, useContext, ReactNode } from 'react'
 import { useChat, ChatMessage, PendingSkill } from '../hooks/useChat'
+import type { WsResponse } from '../types/chat'
 
 interface ChatContextValue {
   messages: ChatMessage[]
@@ -14,6 +15,8 @@ interface ChatContextValue {
   dismissSkill: () => void
   addSystemMessage: (content: string) => void
   sendMusicCommand: (payload: { action: string; video_id?: string; title?: string; artist?: string; thumb?: string; language?: string }) => void
+  ingestEvent: (data: WsResponse) => void
+  addUserMessage: (text: string) => void
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null)

@@ -1,16 +1,17 @@
-# LLM Gateway — Ollama Local + Ollama Cloud + OpenRouter
+# LLM Gateway — OpenAI + Ollama Local + Ollama Cloud + OpenRouter
 
 One OpenAI-compatible interface (`backend/assistant/llm_client.py`) routed
-through `backend/assistant/providers/` across three providers:
+through `backend/assistant/providers/` across four providers:
 
 | Provider | Endpoint | Auth | Notes |
 |---|---|---|---|
+| `openai` | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` | Stock function calling; no concurrency limit |
 | `ollama_local` | `http://localhost:11434/v1/chat/completions` | none | Bodies byte-identical to pre-gateway client; no tool cap |
 | `ollama_cloud` | `https://api.ollama.com/v1/chat/completions` | `OLLAMA_API_KEY` | No `keep_alive`; **1 concurrent request** (gateway serializes) |
 | `openrouter` | `https://openrouter.ai/api/v1/chat/completions` | `OPENROUTER_API_KEY` | `tool_choice` + `provider.require_parameters` supported |
 
-Default routing (`config.yaml → providers:`): **worker = `openrouter`
-(`nvidia/nemotron-3-super-120b-a12b:free`)**, interactive tier stays on
+Default routing (`config.yaml → providers:`): **worker = `openai`
+(`gpt-4o-mini`)**, interactive tier stays on
 `ollama_local`. One attempt per provider, then the next link — every failure
 is announced loudly with the real provider message (no silent model swaps,
 no same-provider retries by default; opt in with `providers.retry_same: true`).
@@ -25,6 +26,8 @@ exactly as before the gateway (covered by wire-parity tests).
 ```bash
 cp .env.example .env
 # .env:
+OPENAI_API_KEY=sk-...              # https://platform.openai.com/api-keys (default worker)
+# OPENAI_MODEL=gpt-4o-mini         # optional override
 OPENROUTER_API_KEY=sk-or-...     # https://openrouter.ai/keys
 OLLAMA_API_KEY=...               # ollama.com → Settings → API Keys (fallback)
 # OPENROUTER_MODEL=openai/gpt-5-mini   # optional override
@@ -53,13 +56,14 @@ or `openai/gpt-5-mini`, and restart.
 
 ```yaml
 providers:
-  default: ollama_cloud      # or ollama_local — no code changes needed
-  fallback_order: [ollama_cloud, openrouter, ollama_local]
+  default: openrouter   # or openai / ollama_local — no code changes needed
+  fallback_order: [openrouter, openai, ollama_cloud, ollama_local]
 ```
 
 ## Troubleshooting
 
-- `401` card → key missing/wrong; check `.env` names.
+- `401` card → key missing/wrong; check `.env` names (`OPENAI_API_KEY`,
+  `OPENROUTER_API_KEY`, `OLLAMA_API_KEY`).
 - `402` card → top up credits or switch model; chat already failed over.
 - Model replies in text but never calls tools → backend log line
   `LLM <provider> model=… tools_sent=… finish=… tool_calls=…` tells why;

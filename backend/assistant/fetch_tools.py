@@ -1,7 +1,7 @@
 FETCH_TOOL_DEFINITIONS = [
     {
         "name": "fetch",
-        "description": "Fetch a URL and extract contents as markdown.",
+        "description": "Fetch a single URL and extract contents as markdown. Simple fast fetch only — for rich/article extraction use web_fetch_exa instead. Do NOT use for web searching (use web_search_exa) or songs/music (use music_play).",
         "parameters": {
             "type": "object",
             "properties": {

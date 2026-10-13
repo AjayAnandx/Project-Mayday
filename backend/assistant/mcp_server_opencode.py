@@ -53,7 +53,7 @@ BLOCKED_PATTERNS = [
 STATIC_TOOL_DEFINITIONS = [
     {
         "name": "opencode_bash",
-        "description": "Run a shell command in projects dir. background=True starts a dev server (auto port-rewrite if vite --port in use). Whitelisted cmds: npm, npx, pip, python, git.",
+        "description": "Run a shell command in projects dir. background=True starts a dev server (auto port-rewrite if vite --port in use). Whitelisted cmds: npm, npx, pip, python, git. For the isolated sandbox environment use sandbox_exec instead.",
         "parameters": {
             "type": "object",
             "properties": {

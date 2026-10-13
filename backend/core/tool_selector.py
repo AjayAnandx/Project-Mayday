@@ -14,6 +14,11 @@ STOPWORDS = frozenset({
     "both", "few", "more", "most", "other", "some", "such", "only",
     "own", "same", "new", "now", "just", "also", "very", "too",
     "please", "go",
+    # Question/object pronouns: pure noise in queries ("play ME the song",
+    # "list MY todos", "WHAT is trending") that spuriously matched tool
+    # descriptions ("my favorites", "what's trending"). Seen live: "list my
+    # todos" selected document+music on top of todo.
+    "me", "my", "what",
 })
 
 _ALIASES = {
@@ -38,6 +43,25 @@ _ALIASES = {
     "logs": "log",
     "statuses": "status",
 }
+
+
+# Disambiguation disclaimers ("Do NOT use X...", "NEVER ...", "ONLY ...")
+# are written for the LLM, not for retrieval: they name OTHER tools' terms
+# ("songs", "web search", "projects") which would pollute this group's index
+# and make unrelated groups match (seen live: adding "for songs use
+# music_play" to search descriptions made the data group match song queries).
+# The index uses only the capability sentence; the LLM still sees the full text.
+_INDEX_STRIP_RE = None  # compiled lazily to keep import cost zero
+
+
+def _index_text(desc: str) -> str:
+    global _INDEX_STRIP_RE
+    if _INDEX_STRIP_RE is None:
+        import re as _re
+        _INDEX_STRIP_RE = _re.compile(
+            r"\s+(Do NOT use|NEVER|ONLY|Only use|Use instead)\b", _re.IGNORECASE)
+    parts = _INDEX_STRIP_RE.split(desc or "", maxsplit=1)
+    return parts[0]
 
 
 def _stem(word: str) -> str:
@@ -111,7 +135,7 @@ class ToolSelector:
                 if tool is None:
                     continue
                 desc = tool["function"].get("description", "") or ""
-                text = f"{tool_name} {desc}"
+                text = f"{tool_name} {_index_text(desc)}"
                 group_corpus[group_name].append(text)
 
         group_term_counts: dict[str, dict[str, int]] = {}
@@ -158,8 +182,16 @@ class ToolSelector:
                 for group_name, score in self._index[token].items():
                     scores[group_name] += score
 
-        active = {"core"}
+        # No always-on group: ToolRouter supplies ESSENTIALS explicitly.
+        # (Previously {"core"} forced ~100+ tools on every query.)
+        # The legacy 'core' monolith (~110 tools incl. music/search/project)
+        # is NEVER returned: it matches almost any query and would defeat
+        # routing by dumping the full set into selector hits (seen live:
+        # "play me the radhima song" selected core -> 118 routed -> cap 100).
+        active: set[str] = set()
         for group_name, total_score in scores.items():
+            if group_name == "core":
+                continue
             if total_score >= self._threshold:
                 active.add(group_name)
 
@@ -220,7 +252,7 @@ def apply_tool_cap(tools: list[dict], preferred_names: set[str], limit: int) -> 
     return capped
 
 
-def max_tools_limit(cfg: dict, default: int = 64) -> int:
+def max_tools_limit(cfg: dict, default: int = 100) -> int:
     try:
         return int((cfg.get("providers", {}) or {}).get("max_tools", default))
     except Exception:
