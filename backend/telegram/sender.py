@@ -19,8 +19,11 @@ SILENT_TOOLS = {
     "search_pdfs", "list_pdfs", "recall", "recall_entity", "query_operations",
     "get_conversations", "get_conversation_history", "get_weather",
     "get_system_info", "get_active_window", "get_volume", "list_screenshots",
-    "list_imported_files", "list_stored_components", "list_favorites", "list_trusted_channels",
-    "my_top_songs", "discover_trending", "list_popout_tabs",
+    "list_imported_files", "list_stored_components",
+    # Merged music tools: "name:action" entries (action from tool_call args).
+    # List/read actions are already summarized by the final token; loud actions still show.
+    "music_discover:trending", "music_discover:top",
+    "music_library:list", "music_channels:list", "video_popup:list_tabs",
 }
 
 # ── Markdown escaping (Telegram MarkdownV2) ──────────────────────────
@@ -414,8 +417,12 @@ class TelegramSender:
             return
 
         # 4) Generic tool_call text (including candidate list case)
-        # Silent tools are already summarized by the final token — don't spam Telegram unless verbose
-        if not self._verbose and name in SILENT_TOOLS:
+        # Silent tools are already summarized by the final token — don't spam Telegram unless verbose.
+        # Merged tools (music_play, ...) match on "name:action" so loud actions still show.
+        _args = data.get("args") or {}
+        _act = _args.get("action") if isinstance(_args, dict) else None
+        _keys = {name, f"{name}:{_act}"} if _act else {name}
+        if not self._verbose and _keys & SILENT_TOOLS:
             logger.debug("Suppressing silent tool %s on Telegram", name)
             return
         # Truncate if very long

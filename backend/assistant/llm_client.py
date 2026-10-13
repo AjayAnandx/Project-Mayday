@@ -4,7 +4,6 @@ import re
 import httpx
 
 from backend.core.config import load_config
-from backend.assistant.function_registry import get_tool_definitions
 from backend.assistant.providers.base import ProviderError
 from backend.assistant.providers.router import (
     fallback_order,
@@ -188,7 +187,9 @@ class LLMClient:
     def chat(self, messages: list[dict], stream: bool = False, tools: list[dict] | None = None,
              tool_choice: str | None = None, max_tokens: int | None = None,
              temperature: float | None = None, provider: str | None = None):
-        body_tools = tools if tools is not None else get_tool_definitions()
+        # Default to NO tools (never the full ~150 set — that 400s on
+        # OpenAI/OpenRouter). Callers must pass an explicit routed list.
+        body_tools = tools if tools is not None else []
         primary, chain = self._chain(provider)
         resp, fallbacks = post_with_fallback(
             self._http, chain, messages, body_tools, tool_choice,

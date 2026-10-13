@@ -299,7 +299,7 @@ def queue_song(artist: str = "", track: str = "", song: str = "", query: str = "
 
 
 def discover_trending(language: str = "", count: int = 10) -> str:
-    """List trending picks (charts → filter/rank by history language + artists). 'play #3' → call play_song."""
+    """List trending picks (charts → filter/rank by history language + artists). 'play #3' → call music_play(action="play")."""
     cnt = max(1, min(int(count or 10), 20))
     lang = (language or "").strip()
     # use trending logic via music api (reuse chart + history bias)
@@ -346,7 +346,7 @@ def discover_trending(language: str = "", count: int = 10) -> str:
     for i, t in enumerate(picks, 1):
         lines.append(f"{i}. {t.get('title','Unknown')} — {t.get('artist','Unknown')} [{t.get('language','other')}] (id: {t.get('video_id','')})")
     header = f"Trending in {lang or 'India'} (biased by your taste{f' [{target}]' if target else ''}):" if (lang or target) else "Trending in India:"
-    footer = "Say 'play #3' or call play_song with the track to play it."
+    footer = "Say 'play #3' or call music_play(action=\"play\") with the song to play it."
     return header + "\n" + "\n".join(lines) + f"\n{footer}"
 
 
@@ -586,7 +586,7 @@ def search_youtube_videos(query: str = "", sort_by: str = "relevance", time_filt
         graph = _get_graph()
         trusted = graph.get_nodes_by_type("trusted_channel")
         if not trusted:
-            return "trusted_only is set but you have no trusted channels saved. Add one with add_trusted_channel first."
+            return "trusted_only is set but you have no trusted channels saved. Add one with music_channels(action=\"add\") first."
         trusted_handles = []
         for n in trusted:
             p = n.get("properties", {}) or {}
@@ -795,7 +795,7 @@ def recommend_best_video(query: str = "", trusted_only: bool = False, max_result
         graph = _get_graph()
         trusted = graph.get_nodes_by_type("trusted_channel")
         if not trusted:
-            return "trusted_only is set but you have no trusted channels saved. Add one with add_trusted_channel first."
+            return "trusted_only is set but you have no trusted channels saved. Add one with music_channels(action=\"add\") first."
         for n in trusted:
             p = n.get("properties", {}) or {}
             h = (p.get("channel_handle") or p.get("channel_id") or n.get("label") or "").lower().lstrip("@")
@@ -893,19 +893,19 @@ def list_popout_tabs() -> str:
     except Exception:
         return "No popout registry available"
     if not _popout_registry:
-        return "No popout tabs open — open one with open_video_popup (each call opens a new tab)"
+        return "No popout tabs open — open one with video_popup(action=\"open\") (each call opens a new tab)"
     lines = []
     for i, (tid, entry) in enumerate(_popout_registry.items(), 1):
         state = "▶ playing" if entry.get("is_playing") else "⏸ paused"
         lines.append(f"{i}. tab_id={tid} — '{entry.get('title','Unknown')}' — {entry.get('artist','')} [{entry.get('video_id','')}] {state}")
-    return f"Open popout tabs ({len(_popout_registry)}):\n" + "\n".join(lines) + "\nUse toggle_popout_tab / close_popout_tab / focus_popout_tab with tab_id"
+    return f"Open popout tabs ({len(_popout_registry)}):\n" + "\n".join(lines) + "\nUse video_popup(action=toggle|close|focus) with tab_id"
 
 
 def close_popout_tab(tab_id: str = "") -> str:
     """Close a specific popout video tab by tab_id (from list_popout_tabs)."""
     tid = (tab_id or "").strip()
     if not tid:
-        return "Missing tab_id — call list_popout_tabs to see open tab_ids"
+        return "Missing tab_id — call video_popup(action=\"list_tabs\") to see open tab_ids"
     try:
         from backend.api.music import _popout_registry
     except Exception:
@@ -922,7 +922,7 @@ def focus_popout_tab(tab_id: str = "") -> str:
     """Bring a popout tab window to front (focus)."""
     tid = (tab_id or "").strip()
     if not tid:
-        return "Missing tab_id — call list_popout_tabs first"
+        return "Missing tab_id — call video_popup(action=\"list_tabs\") first"
     try:
         from backend.api.music import _popout_registry
     except Exception:
@@ -937,7 +937,7 @@ def toggle_popout_tab(tab_id: str = "") -> str:
     """Toggle play/pause for a specific popout tab (each tab independent)."""
     tid = (tab_id or "").strip()
     if not tid:
-        return "Missing tab_id — call list_popout_tabs to see ids"
+        return "Missing tab_id — call video_popup(action=\"list_tabs\") to see ids"
     try:
         from backend.api.music import _popout_registry
     except Exception:

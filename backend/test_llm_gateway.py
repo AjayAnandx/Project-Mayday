@@ -44,11 +44,16 @@ def _cfg():
             },
         },
         "providers": {
-            "default": "openrouter",
+            "default": "openai",
             "interactive": "ollama_local",
-            "fallback_order": ["openrouter", "ollama_cloud", "ollama_local"],
+            "fallback_order": ["openai", "openrouter", "ollama_cloud", "ollama_local"],
             "max_tools": 64,
             "free_max_iterations": 8,
+        },
+        "openai": {
+            "endpoint": "https://api.openai.com/v1/chat/completions",
+            "model": "gpt-4o-mini",
+            "api_key": "oai-test",
         },
         "ollama_cloud": {
             "endpoint": "https://api.ollama.com/v1/chat/completions",
@@ -135,6 +140,53 @@ def test_legacy_local_body_parity():
 
 
 # ---- provider request shapes ----
+
+def test_openai_headers_and_body(cfg):
+    client, calls = _client("openai", cfg, lambda req, body, n: _ok())
+    resp = client.chat([{"role": "user", "content": "hi"}], tools=[_tdef("list_todos")],
+                       tool_choice="auto", max_tokens=10, temperature=0.2)
+    content, tc = client.extract_response(resp)
+    assert content == "hi" and tc is None
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["url"] == "https://api.openai.com/v1/chat/completions"
+    assert call["headers"]["authorization"] == "Bearer oai-test"
+    body = call["body"]
+    assert body["model"] == "gpt-4o-mini"
+    assert body["tool_choice"] == "auto"
+    assert body["max_tokens"] == 10
+    assert body["temperature"] == 0.2
+    assert "keep_alive" not in body
+    assert "provider" not in body
+    assert client.last_provider == "openai"
+    assert client.last_fallbacks == []
+
+
+def test_openai_missing_key_mentions_env_var():
+    from backend.assistant.providers.router import resolve_spec
+    spec = resolve_spec("openai", {"openai": {"api_key": ""}})
+    try:
+        spec.check_ready()
+    except ProviderError as e:
+        assert "OPENAI_API_KEY" in str(e)
+    else:
+        raise AssertionError("expected ProviderError for missing OpenAI key")
+
+
+def test_openai_429_fails_over_to_openrouter(cfg):
+    def handler(req, body, n):
+        if "api.openai.com" in str(req.url):
+            return httpx.Response(429, json={"error": {"message": "rate limited"}})
+        return _ok("via-openrouter")
+
+    client, calls = _client("openai", cfg, handler)
+    resp = client.chat([{"role": "user", "content": "hi"}], tools=[])
+    content, _ = client.extract_response(resp)
+    assert content == "via-openrouter"
+    assert len([c for c in calls if "api.openai.com" in c["url"]]) == 1
+    assert client.last_provider == "openrouter"
+    assert any("openai" in f for f in client.last_fallbacks)
+
 
 def test_openrouter_headers_and_body(cfg):
     client, calls = _client("openrouter", cfg, lambda req, body, n: _ok())
@@ -223,7 +275,7 @@ def test_429_default_single_attempt_then_failover(cfg):
     content, _ = client.extract_response(resp)
     assert content == "via-cloud"
     assert len([c for c in calls if "openrouter.ai" in c["url"]]) == 1  # no same-provider retry
-    assert client.last_provider == "ollama_cloud"
+    assert client.last_provider == "openai"
 
 
 def test_402_fails_over_without_retry(cfg):
@@ -237,22 +289,23 @@ def test_402_fails_over_without_retry(cfg):
     content, _ = client.extract_response(resp)
     assert content == "via-cloud"
     assert len([c for c in calls if "openrouter.ai" in c["url"]]) == 1  # no retry on 402
-    assert client.last_provider == "ollama_cloud"
+    assert client.last_provider == "openai"
     assert any("openrouter" in f and "402" in f for f in client.last_fallbacks)
     assert "402" in client.fallback_notice()
 
 
 def test_missing_keys_skipped_without_network(cfg):
+    cfg["openai"]["api_key"] = ""
     cfg["openrouter"]["api_key"] = ""
     cfg["ollama_cloud"]["api_key"] = ""
-    client, calls = _client("openrouter", cfg, lambda req, body, n: _ok("local"))
+    client, calls = _client("openai", cfg, lambda req, body, n: _ok("local"))
     resp = client.chat([{"role": "user", "content": "hi"}], tools=[])
     content, _ = client.extract_response(resp)
     assert content == "local"
     assert len(calls) == 1
     assert "localhost" in calls[0]["url"]
     assert client.last_provider == "ollama_local"
-    assert len(client.last_fallbacks) == 2  # both cloud specs skipped
+    assert len(client.last_fallbacks) == 3  # all three cloud specs skipped
 
 
 def test_all_providers_fail_raises(cfg):
@@ -299,10 +352,10 @@ def test_client_for_roles(cfg):
     assert inter.provider_name == "ollama_local"
     assert inter.model == "llama3.2:3b"
     worker = _client_for("worker")
-    assert worker.provider_name == "openrouter"
-    # legacy models.worker endpoint (localhost) must NOT override OpenRouter
-    assert worker.endpoint == "https://openrouter.ai/api/v1/chat/completions"
-    assert worker.model == "nvidia/nemotron-3-super-120b-a12b:free"
+    assert worker.provider_name == "openai"
+    # legacy models.worker endpoint (localhost) must NOT override OpenAI
+    assert worker.endpoint == "https://api.openai.com/v1/chat/completions"
+    assert worker.model == "gpt-4o-mini"
 
 
 def test_legacy_config_preserves_single_provider(monkeypatch):
@@ -317,7 +370,7 @@ def test_legacy_config_preserves_single_provider(monkeypatch):
         assert c.endpoint == "http://localhost:11434/v1/chat/completions"
         assert fallback_order(legacy)[-1] == "ollama_local"
         chain = resolve_chain("ollama_local", legacy)
-        assert [s.name for s in chain] == ["ollama_local", "openrouter", "ollama_cloud"]
+        assert [s.name for s in chain] == ["ollama_local", "openai", "openrouter", "ollama_cloud"]
     finally:
         reset_llm_clients()
 
@@ -345,9 +398,9 @@ def test_apply_tool_cap_noop_under_limit():
 
 def test_max_tools_and_free_budget_defaults():
     from backend.core.tool_selector import max_tools_limit
-    assert max_tools_limit({}) == 64
+    assert max_tools_limit({}) == 100
     assert max_tools_limit({"providers": {"max_tools": 32}}) == 32
-    assert max_tools_limit({"providers": {"max_tools": "bad"}}) == 64
+    assert max_tools_limit({"providers": {"max_tools": "bad"}}) == 100
     assert free_max_iterations({}) == 20  # parity default (opt-in lower)
     assert free_max_iterations({"providers": {"free_max_iterations": 5}}) == 5
     from backend.assistant.providers.router import retry_same_default
@@ -473,7 +526,7 @@ def test_empty_choices_twice_fails_over_with_message(cfg):
     resp = client.chat([{"role": "user", "content": "hi"}], tools=[])
     content, _ = client.extract_response(resp)
     assert content == "via-cloud"
-    assert client.last_provider == "ollama_cloud"
+    assert client.last_provider == "openai"
     assert any("empty choices" in f and "overloaded" in f for f in client.last_fallbacks)
 
 

@@ -4,9 +4,9 @@ Role routing (config ``providers:`` block, all optional — sane defaults apply)
 - ``interactive`` role -> ``providers.interactive`` (default ``ollama_local``).
   Always local: fast, free, and the interactive tier never uses tools.
 - ``worker`` role (default ``LLMClient()``) -> ``providers.default``
-  (default ``openrouter`` per the gateway plan).
+  (default ``openai`` per the gateway plan).
 
-``providers.fallback_order`` (default ``[openrouter, ollama_cloud,
+``providers.fallback_order`` (default ``[openai, openrouter, ollama_cloud,
 ollama_local]``) is tried in order after the primary. Missing credentials do
 not hard-fail: the spec raises ``missing_key`` and the router moves on, so a
 fresh checkout with no keys still runs on local Ollama.
@@ -26,16 +26,18 @@ from backend.core.config import load_config
 from .base import ProviderError, ProviderSpec
 from . import ollama_cloud as _ollama_cloud
 from . import ollama_local as _ollama_local
+from . import openai as _openai
 from . import openrouter as _openrouter
 
 logger = logging.getLogger(__name__)
 
-KNOWN_PROVIDERS = ("openrouter", "ollama_cloud", "ollama_local")
-DEFAULT_FALLBACK_ORDER = ["openrouter", "ollama_cloud", "ollama_local"]
+KNOWN_PROVIDERS = ("openai", "openrouter", "ollama_cloud", "ollama_local")
+DEFAULT_FALLBACK_ORDER = ["openai", "openrouter", "ollama_cloud", "ollama_local"]
 
 _LOADERS = {
     "ollama_local": _ollama_local.load_spec,
     "ollama_cloud": _ollama_cloud.load_spec,
+    "openai": _openai.load_spec,
     "openrouter": _openrouter.load_spec,
 }
 
@@ -55,7 +57,7 @@ def primary_for_role(cfg: dict, role: str) -> str:
         return "ollama_local"
     if role == "interactive":
         return pcfg.get("interactive", "ollama_local")
-    return pcfg.get("default", "openrouter")
+    return pcfg.get("default", "openai")
 
 
 def fallback_order(cfg: dict) -> list[str]:
@@ -183,6 +185,18 @@ def post_with_fallback(http: httpx.Client, chain: list[ProviderSpec], messages,
     """
     fallbacks: list[str] = []
     last_error: Exception | None = None
+
+    # Last-resort guard: no OpenAI-spec provider accepts >128 tools.
+    # ToolRouter should already cap to ~100; this prevents a raw 400 if a
+    # caller ever passes the full set by mistake.
+    try:
+        if isinstance(tools, list) and len(tools) > 128:
+            dropped = len(tools) - 128
+            logger.warning("Provider guard: truncating %d tools to 128 (dropping %d)",
+                           len(tools), dropped)
+            tools = tools[:128]
+    except Exception:
+        pass
 
     for spec in chain:
         try:

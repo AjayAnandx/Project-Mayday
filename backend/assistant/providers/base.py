@@ -96,10 +96,15 @@ class ProviderSpec:
     def check_ready(self) -> None:
         """Raise ProviderError when a required credential is missing."""
         if self.requires_api_key and not self.api_key:
+            key_names = {
+                "openrouter": "OPENROUTER_API_KEY",
+                "ollama_cloud": "OLLAMA_API_KEY",
+                "openai": "OPENAI_API_KEY",
+            }
             raise ProviderError(
                 self.name,
                 f"{self.name} needs an API key "
-                f"({'OPENROUTER_API_KEY' if self.name == 'openrouter' else 'OLLAMA_API_KEY'} "
+                f"({key_names.get(self.name, 'API_KEY')} "
                 "env var or config block) — skipping to next provider",
                 status_code=401,
                 error_type="missing_key",

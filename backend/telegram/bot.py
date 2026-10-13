@@ -84,7 +84,7 @@ async def _handle_free_text(update, context):
 
     # Ensure engine components are ready
     await sess.ensure_tools()
-    llm, tools, mcp, kg, selector, skill_manager, query_classifier = sess.get_engine_components()
+    llm, tools, mcp, kg, selector, router, skill_manager, query_classifier = sess.get_engine_components()
 
     sender = TelegramSender(context.bot, chat_id)
 
@@ -136,6 +136,7 @@ async def _handle_free_text(update, context):
             mcp,
             kg,
             selector=selector,
+            router=router,
             skill_manager=skill_manager,
             pending_suggestion=sess._pending_suggestion,
             active_skill=sess._active_skill,

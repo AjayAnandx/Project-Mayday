@@ -27,6 +27,7 @@ class TelegramSession:
         self._mcp = None
         self._kg = None
         self._selector = None
+        self._router = None
         self._skill_manager = None
         self._query_classifier = None
         self._active_skill: list = []
@@ -36,14 +37,15 @@ class TelegramSession:
         self.last_used = time.time()
 
     def get_engine_components(self):
-        """Lazily build engine components (LLMClient, tools, MCP, KG, selector, etc.) — cached per session but share singletons where possible."""
+        """Lazily build engine components (LLMClient, tools, MCP, KG, selector, router, etc.) — cached per session but share singletons where possible."""
         if self._llm is not None:
-            return (self._llm, self._tools, self._mcp, self._kg, self._selector, self._skill_manager, self._query_classifier)
+            return (self._llm, self._tools, self._mcp, self._kg, self._selector, self._router, self._skill_manager, self._query_classifier)
 
         from backend.assistant.llm_client import LLMClient
         from backend.assistant.function_registry import get_tool_definitions
         from backend.memory.knowledge_graph import get_graph
         from backend.core.tool_selector import ToolSelector
+        from backend.core.tool_router import ToolRouter
         from backend.assistant.skill_manager import get_skill_manager
         from backend.core.query_classifier import QueryClassifier
         from backend.core.config import load_config
@@ -70,6 +72,8 @@ class TelegramSession:
         self._tools = []  # filled by _ensure_tools
 
         self._selector = ToolSelector()
+        from backend.api.chat import GROUP_SETS
+        self._router = ToolRouter(GROUP_SETS)
         self._query_classifier = QueryClassifier()
 
         skills_cfg = config.get("skills", {})
@@ -82,7 +86,7 @@ class TelegramSession:
         else:
             self._skill_manager = None
 
-        return (self._llm, self._tools, self._mcp, self._kg, self._selector, self._skill_manager, self._query_classifier)
+        return (self._llm, self._tools, self._mcp, self._kg, self._selector, self._router, self._skill_manager, self._query_classifier)
 
     async def ensure_tools(self):
         """Ensure tool list is populated (including MCP discovery). Called once per session."""
@@ -146,11 +150,15 @@ class TelegramSession:
             from backend.assistant.function_registry import get_tool_definitions as _gtd
             self._tools = _gtd(mcp_tools)
 
-        # Build selector index
+        # Build router + selector index (extended groups cover dynamic MCP tools)
         if self._selector and self._tools:
             try:
                 from backend.api.chat import GROUP_SETS
-                self._selector.build_index(self._tools, GROUP_SETS)
+                if self._router is None:
+                    from backend.core.tool_router import ToolRouter
+                    self._router = ToolRouter(GROUP_SETS)
+                extended = self._router.extended_groups(self._tools)
+                self._selector.build_index(self._tools, extended)
             except Exception as e:
                 logger.warning("TelegramSession selector build failed: %s", e)
         return self._tools

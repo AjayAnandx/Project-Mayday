@@ -1,7 +1,7 @@
 EXA_TOOL_DEFINITIONS = [
     {
         "name": "web_search_exa",
-        "description": "Search the web for any topic, returns structured results with citations.",
+        "description": "Search the web for general questions, news, docs, and research. Returns structured results with citations. Do NOT use for playing songs/music (use music_play), fetching known URLs (use web_fetch_exa), or collecting dataset numbers (use web_search_and_fetch).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -26,7 +26,7 @@ EXA_TOOL_DEFINITIONS = [
     },
     {
         "name": "web_fetch_exa",
-        "description": "Fetch full content of one or more webpages from known URLs.",
+        "description": "Fetch full content of one or more webpages from known URLs. Use instead of web_search_exa whenever you already have the URL. Do NOT use for playing songs/music (use music_play).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -52,7 +52,7 @@ EXA_TOOL_DEFINITIONS = [
     },
     {
         "name": "web_search_advanced_exa",
-        "description": "Advanced web search with domain/date/category filters and highlight control.",
+        "description": "Advanced web search with domain/date/category filters and highlight control. Only use when you need filters — otherwise use web_search_exa. Do NOT use for playing songs/music (use music_play) or dataset numbers (use web_search_and_fetch).",
         "parameters": {
             "type": "object",
             "properties": {

@@ -64,68 +64,82 @@ export function useChat() {
     })
   }, [])
 
+  // Shared server-message handler: used by /ws/chat AND by realtime worker
+  // progress events forwarded over the realtime socket (ingestEvent).
+  const handleServerMessage = useCallback((data: WsResponse) => {
+    switch (data.type) {
+      case 'token':
+        setStreaming(true)
+        appendToAssistant(data.content || '', data.voice_content)
+        break
+      case 'tool_call':
+        addMessage({
+          id: nextId(),
+          role: 'tool',
+          content: data.result || '',
+          tool_name: data.name,
+          image_url: data.image_url,
+          artifact_url: data.artifact_url,
+          artifact_title: data.artifact_title,
+          open_in_new_tab: data.open_in_new_tab,
+        })
+        setToolCallCount((c) => c + 1)
+        if (data.artifact_url) {
+          window.dispatchEvent(new CustomEvent('open-artifact', {
+            detail: { url: data.artifact_url, title: data.artifact_title || 'Artifact' },
+          }))
+        }
+        if (data.open_in_new_tab && data.artifact_url) {
+          window.open(data.artifact_url, '_blank')
+        }
+        break
+      case 'done':
+        setStreaming(false)
+        currentAssistantId.current = null
+        break
+      case 'error':
+        addMessage({ id: nextId(), role: 'assistant', content: `Error: ${data.content}` })
+        setStreaming(false)
+        break
+      case 'skill_suggested':
+        setPendingSkill({ name: data.name || '', context: data.content || '' })
+        break
+      case 'skill_activated':
+        setPendingSkill(null)
+        setActiveSkill(data.name || '')
+        break
+      case 'skill_deactivated':
+        setActiveSkill(null)
+        break
+      case 'conversation_loaded':
+        if (data.conversation) {
+          const msgs = data.conversation.messages.map((m) => ({
+            id: nextId(),
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+          }))
+          setMessages(msgs)
+        }
+        break
+      case 'music':
+        window.dispatchEvent(new CustomEvent('mayday-music', { detail: data }))
+        break
+    }
+  }, [addMessage, appendToAssistant])
+
+  // Ingest engine events arriving over another socket (realtime worker progress).
+  const ingestEvent = useCallback((data: WsResponse) => {
+    handleServerMessage(data)
+  }, [handleServerMessage])
+
+  const addUserMessage = useCallback((text: string) => {
+    if (!text.trim()) return
+    addMessage({ id: nextId(), role: 'user', content: text })
+  }, [addMessage])
+
   useEffect(() => {
     const ws = new ChatWebSocket('/ws/chat', {
-      onMessage: (data: WsResponse) => {
-        switch (data.type) {
-          case 'token':
-            setStreaming(true)
-            appendToAssistant(data.content || '', data.voice_content)
-            break
-          case 'tool_call':
-            addMessage({
-              id: nextId(),
-              role: 'tool',
-              content: data.result || '',
-              tool_name: data.name,
-              image_url: data.image_url,
-              artifact_url: data.artifact_url,
-              artifact_title: data.artifact_title,
-              open_in_new_tab: data.open_in_new_tab,
-            })
-            setToolCallCount((c) => c + 1)
-            if (data.artifact_url) {
-              window.dispatchEvent(new CustomEvent('open-artifact', {
-                detail: { url: data.artifact_url, title: data.artifact_title || 'Artifact' },
-              }))
-            }
-            if (data.open_in_new_tab && data.artifact_url) {
-              window.open(data.artifact_url, '_blank')
-            }
-            break
-          case 'done':
-            setStreaming(false)
-            currentAssistantId.current = null
-            break
-          case 'error':
-            addMessage({ id: nextId(), role: 'assistant', content: `Error: ${data.content}` })
-            setStreaming(false)
-            break
-          case 'skill_suggested':
-            setPendingSkill({ name: data.name || '', context: data.content || '' })
-            break
-          case 'skill_activated':
-            setPendingSkill(null)
-            setActiveSkill(data.name || '')
-            break
-          case 'skill_deactivated':
-            setActiveSkill(null)
-            break
-          case 'conversation_loaded':
-            if (data.conversation) {
-              const msgs = data.conversation.messages.map((m) => ({
-                id: nextId(),
-                role: m.role as 'user' | 'assistant',
-                content: m.content,
-              }))
-              setMessages(msgs)
-            }
-            break
-          case 'music':
-            window.dispatchEvent(new CustomEvent('mayday-music', { detail: data }))
-            break
-        }
-      },
+      onMessage: (data: WsResponse) => handleServerMessage(data),
       onOpen: () => {
         setConnected(true)
         setStreaming(false)
@@ -138,7 +152,7 @@ export function useChat() {
     return () => {
       ws.disconnect()
     }
-  }, [addMessage, appendToAssistant])
+  }, [handleServerMessage])
 
   const sendMessage = useCallback(
     (text: string) => {
@@ -189,5 +203,7 @@ export function useChat() {
     dismissSkill,
     addSystemMessage,
     sendMusicCommand,
+    ingestEvent,
+    addUserMessage,
   }
 }
