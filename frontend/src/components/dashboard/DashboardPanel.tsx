@@ -7,6 +7,7 @@ import { RecentActivity } from './RecentActivity'
 import { WeatherWidget } from './WeatherWidget'
 import { AINewsWidget } from './AINewsWidget'
 import { MusicWidget } from './MusicWidget'
+import { GmailBadge } from './GmailBadge'
 
 export function DashboardPanel() {
   const { toolCallCount, sendMusicCommand } = useChatContext()
@@ -25,14 +26,17 @@ export function DashboardPanel() {
               <p className="text-[10px] sm:text-xs text-overlay0 hidden sm:block">Overview at a glance</p>
             </div>
           </div>
-          <button
-            onClick={refresh}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-overlay0 hover:text-text bg-surface0/50 hover:bg-surface1/50 rounded-full transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <GmailBadge />
+            <button
+              onClick={refresh}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-overlay0 hover:text-text bg-surface0/50 hover:bg-surface1/50 rounded-full transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          </div>
         </div>
       </div>
 

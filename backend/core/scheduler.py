@@ -25,6 +25,7 @@ class Scheduler:
         self._reminders: dict[str, dict] = {}
         self._seen_events: set[str] = set()
         self._seen_todos: set[str] = set()
+        self._seen_gmail: set[str] = set()
         self._queue: asyncio.Queue[dict] = asyncio.Queue()
         self._lock = threading.Lock()
         self._fired_notifications: list[dict] = []
@@ -122,6 +123,7 @@ class Scheduler:
             await self._check_events()
             await self._check_todos()
             await self._check_reminders()
+            await self._check_gmail()
             await asyncio.sleep(60)
 
     async def _check_events(self):
@@ -210,6 +212,103 @@ class Scheduler:
                     self._fired_notifications.append(n)
         except Exception as e:
             logger.exception("Scheduler _check_reminders error: %s", e)
+
+    async def _check_gmail(self):
+        """Poll the dedicated Mayday mailbox (60s, history.list incremental sync).
+
+        Skips silently when gmail is disabled or not connected (no token).
+        Survives historyId expiry via unread-list fallback. Leaves UNREAD set
+        until the user reads via gmail_read + gmail_modify.
+        """
+        try:
+            from backend.core.config import load_config
+            cfg = load_config().get("gmail", {}) or {}
+        except Exception:
+            return
+        if not cfg.get("enabled", True):
+            return
+        account = (cfg.get("account") or "agent").strip() or "agent"
+        accounts = ["agent", "user"] if account == "both" else ["agent"]
+        try:
+            from backend.core import gmail_store
+            from backend.core.gmail_service import NeedsOAuth
+        except Exception as e:
+            logger.warning("Scheduler _check_gmail import failed: %s", e)
+            return
+        loop = asyncio.get_running_loop()
+        for acct in accounts:
+            try:
+                await loop.run_in_executor(None, self._sync_gmail_account, acct)
+            except Exception as e:
+                logger.warning("Scheduler _check_gmail(%s) error: %s", acct, e)
+
+    def _sync_gmail_account(self, account: str) -> None:
+        from backend.core import gmail_store
+        from backend.core.gmail_service import (
+            NeedsOAuth, get_history, get_message, get_profile, list_messages,
+        )
+        try:
+            last = gmail_store.get_history_id(account)
+            if last is None:
+                prof = get_profile(account)
+                if prof.get("historyId"):
+                    gmail_store.set_history_id(account, str(prof["historyId"]))
+                if prof.get("emailAddress"):
+                    gmail_store.set_agent_email(prof["emailAddress"])
+                return
+            try:
+                hist = get_history(last, account=account)
+            except Exception as e:
+                if "404" not in str(e):
+                    raise
+                # historyId expired — fallback to unread scan
+                data = list_messages(query="is:unread", max_results=20, account=account)
+                for m in data.get("messages", []) or []:
+                    self._notify_gmail_message(account, m["id"],
+                                               lambda mid: get_message(mid, fmt="metadata", account=account))
+                return
+            for rec in hist.get("history", []) or []:
+                for added in rec.get("messagesAdded", []) or []:
+                    mid = (added.get("message", {}) or {}).get("id", "")
+                    if not mid:
+                        continue
+                    self._notify_gmail_message(account, mid,
+                                               lambda m, _a=account: get_message(m, fmt="metadata", account=_a))
+            if hist.get("historyId"):
+                gmail_store.set_history_id(account, str(hist["historyId"]))
+        except NeedsOAuth:
+            pass  # not connected — stay silent until user connects
+        except Exception as e:
+            logger.warning("Gmail sync(%s) failed: %s", account, e)
+
+    def _notify_gmail_message(self, account: str, message_id: str, fetch) -> None:
+        key = f"gmail:{account}:{message_id}"
+        if key in self._seen_gmail:
+            return
+        self._seen_gmail.add(key)
+        try:
+            meta = fetch(message_id)
+        except Exception as e:
+            logger.warning("Gmail metadata fetch failed for %s: %s", message_id, e)
+            return
+        hdrs = {h.get("name", ""): h.get("value", "")
+                for h in ((meta.get("payload", {}) or {}).get("headers", []) or [])}
+        frm, subject = hdrs.get("From", "?"), hdrs.get("Subject", "(no subject)")
+        tid = meta.get("threadId", "")
+        self.fire_notification("New Email", f"{frm}: {subject}",
+                               category="email", action_page="chat")
+        try:
+            from backend.memory.knowledge_graph import get_graph
+            get_graph().add_node("email", f"email:{message_id}",
+                                 {"subject": subject, "from": frm,
+                                  "thread_id": tid, "account": account})
+        except Exception:
+            pass
+        try:
+            from backend.core.operation_log import get_operation_log
+            get_operation_log().record("create", "email", message_id, subject)
+        except Exception:
+            pass
 
 
 _scheduler: Scheduler | None = None

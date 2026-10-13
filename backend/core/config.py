@@ -13,10 +13,18 @@ ENV_OVERRIDES = {
         }
     },
     "ollama": {"endpoint": "OLLAMA_ENDPOINT"},
+    "openai": {"api_key": "OPENAI_API_KEY", "model": "OPENAI_MODEL"},
+    "realtime": {"api_key": "OPENAI_API_KEY", "model": "OPENAI_REALTIME_MODEL"},
     "ollama_cloud": {"api_key": "OLLAMA_API_KEY", "model": "OLLAMA_CLOUD_MODEL"},
     "openrouter": {"api_key": "OPENROUTER_API_KEY", "model": "OPENROUTER_MODEL"},
     "telegram": {"token": "TELEGRAM_BOT_TOKEN"},
     "openalex": {"api_key": "OPENALEX_API_KEY"},
+    "gmail": {
+        "credentials_path": "GOOGLE_CREDENTIALS_PATH",
+        "token_path_agent": "GMAIL_TOKEN_PATH_AGENT",
+        "token_path_user": "GMAIL_TOKEN_PATH_USER",
+        "agent_email": "GMAIL_AGENT_EMAIL",
+    },
 }
 
 

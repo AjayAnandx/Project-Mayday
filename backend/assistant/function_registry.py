@@ -51,6 +51,10 @@ from backend.functions.research_functions import (
     fan_hypothesis, update_research_task_status, freeze_research_task, list_research_tasks,
 )
 from backend.functions.data_export import export_research_dataset, export_dataset_pdf
+from backend.functions.gmail_functions import (
+    gmail_send, gmail_reply, gmail_draft, gmail_list, gmail_search,
+    gmail_read, gmail_thread, gmail_modify, gmail_create_label,
+)
 from backend.functions.visual_testing import (
     update_baseline,
 )
@@ -529,7 +533,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "remember",
-            "description": "Store a fact in long-term memory (entity->relation->value)",
+            "description": "Store a personal fact about the user (preferences, people, goals) in long-term memory (entity->relation->value). For research conclusions use add_finding instead",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -870,7 +874,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read a file (Documents, Desktop, project dirs only)",
+            "description": "Read a user file (Documents, Desktop, project root only). For code inside a tracked project use opencode_read; for running commands use sandbox_exec or opencode_bash",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1007,7 +1011,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "add_project_note",
-            "description": "Write a .md research note to the project folder",
+            "description": "Write a .md note to a PROJECT folder only. For RESEARCH topics use add_research_note instead",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1305,7 +1309,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "web_search_and_fetch",
-            "description": "Search the web (Exa) and fetch page contents, returning an ordered source list with titles, URLs and text snippets. First step of the data analysis pipeline — use before extracting structured rows.",
+            "description": "Search the web (Exa) and fetch page contents, returning an ordered source list with titles, URLs and text snippets. First step of the data analysis pipeline — use before extracting structured rows. ONLY for dataset/chart pipelines — for general Q&A use web_search_exa, for songs use music_play.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1321,7 +1325,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "extract_data_from_sources",
-            "description": "Extract structured tabular rows (JSON) from fetched web sources using the LLM. Returns rows like [{'year': 2020, 'role': 'ML Engineer', 'postings': 12500}]. Second step of the data analysis pipeline.",
+            "description": "Extract structured tabular rows (JSON) from fetched web sources using the LLM. Returns rows like [{'year': 2020, 'role': 'ML Engineer', 'postings': 12500}]. Second step of the data analysis pipeline — ONLY call with the sources list from web_search_and_fetch; it never searches the web itself.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1337,7 +1341,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "batch_add_data_points",
-            "description": "Bulk-store extracted rows as data points in a research topic (auto-creates the research if missing) or project. Returns stored count and the suggested chart type. Third step of the data analysis pipeline — call generate_chart next.",
+            "description": "Bulk-store MANY extracted rows at once as data points in a research topic (auto-creates the research if missing) or project. Returns stored count and the suggested chart type. Third step of the data analysis pipeline — call generate_chart next. For ONE single metric use add_data_point instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1510,7 +1514,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "sandbox_exec",
-            "description": "Run a shell command in project directory",
+            "description": "Run a shell command inside the isolated sandbox environment for a project. For plain project shell commands use opencode_bash instead",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1765,7 +1769,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "add_data_point",
-            "description": "Add a structured data point (metric/KPI) to a research project",
+            "description": "Add ONE single structured data point (metric/KPI) to a research project. For many rows at once use batch_add_data_points instead",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1803,7 +1807,7 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "add_finding",
-            "description": "Add a research finding with optional source URLs",
+            "description": "Add a research conclusion with optional source URLs to a research topic. For personal facts about the user use remember instead",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2093,254 +2097,175 @@ LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "play_song",
-            "description": "Play a song immediately (searches YouTube Music, resolves stream, starts playback in PlayerBar). Use for 'play X', 'play virtual insanity by jamiroquai'.",
+            "name": "music_play",
+            "description": "Music playback via YouTube Music (PlayerBar). play: play a song now ('play X'). queue: add a song without interrupting. radio: 20-track mix seeded by a track. mood: mood/genre playlist (chill, focus, party, workout). favorites: play saved favorites ('play my favorites', optional language/shuffle). It searches YouTube itself — for ANY 'play <song>' request call this immediately with action='play' and NEVER call web search first to identify the song.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "artist": {"type": "string", "description": "Artist name (e.g. 'jamiroquai')"},
-                    "track": {"type": "string", "description": "Song title (e.g. 'virtual insanity')"},
-                    "song": {"type": "string", "description": "Alias for track — free-form song title"},
-                    "query": {"type": "string", "description": "Alias — free-form search query (artist + track)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "play_radio",
-            "description": "Play a radio mix seeded by a track (finds seed → generates 20-track radio queue and starts it). Use for 'radio like jamiroquai', 'make a radio from X'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "seed_track": {"type": "string", "description": "Seed song title (e.g. 'virtual insanity')"},
-                    "seed": {"type": "string", "description": "Alias for seed_track"},
-                    "query": {"type": "string", "description": "Alias — free-form seed query"},
-                    "artist": {"type": "string", "description": "Optional artist to narrow seed search"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "play_mood",
-            "description": "Play a mood/genre playlist (chill, focus, party, workout, romantic, etc.). Maps to YouTube Music mood catalog, queues playlist and starts it. Use for 'something chill', 'play focus music'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "mood": {"type": "string", "description": "Mood/genre (chill, focus, party, workout, romantic, energetic, sleep, etc.). Defaults to chill."},
-                    "count": {"type": "integer", "description": "Number of tracks to queue (default 15)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "queue_song",
-            "description": "Add a song to the queue without interrupting current playback. Use for 'queue X', 'add X to queue'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
+                    "action": {"type": "string", "enum": ["play", "queue", "radio", "mood", "favorites"], "description": "play: play now. queue: add to queue. radio: mix from seed_track. mood: playlist from mood. favorites: play saved favorites."},
                     "artist": {"type": "string", "description": "Artist name"},
-                    "track": {"type": "string", "description": "Song title"},
-                    "song": {"type": "string", "description": "Alias for track"},
-                    "query": {"type": "string", "description": "Alias — free-form query"},
+                    "song": {"type": "string", "description": "Song title (play/queue)"},
+                    "seed_track": {"type": "string", "description": "Seed song title (radio)"},
+                    "mood": {"type": "string", "description": "Mood/genre: chill, focus, party, workout, romantic, energetic, sleep (mood)"},
+                    "count": {"type": "integer", "description": "Tracks to queue (mood default 15, favorites default 15)"},
+                    "shuffle": {"type": "boolean", "description": "Shuffle favorites (default true)"},
+                    "language": {"type": "string", "description": "Language filter ta/hi/en/other (favorites)"},
                 },
+                "required": ["action"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "discover_trending",
-            "description": "Show trending / new songs from YouTube Music charts, biased by your listening history language and top artists. Use for 'what's trending', 'what's trending in Tamil', 'discover new songs'. Say 'play #N' to play a pick.",
+            "name": "music_discover",
+            "description": "Music discovery via YouTube/YouTube Music. trending: trending songs from charts, biased by history language ('what's trending'). top: your most-played songs, optional language. search: search videos by topic with sort (relevance/view_count/rating/upload_date), recency and trusted-channel filters. recommend: compare top videos for a query and autoplay the best ('which video is best').",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "language": {"type": "string", "description": "Optional language filter (ta, hi, en). Defaults to your dominant history language."},
-                    "count": {"type": "integer", "description": "Number of picks (default 10)"},
+                    "action": {"type": "string", "enum": ["trending", "top", "search", "recommend"], "description": "trending: chart picks. top: most-played history. search: filtered video search. recommend: compare + autoplay best."},
+                    "query": {"type": "string", "description": "Search topic, e.g. 'Tamil melody 2024' (search/recommend)"},
+                    "language": {"type": "string", "description": "Language filter ta/hi/en/other (trending/top)"},
+                    "count": {"type": "integer", "description": "Number of picks (trending/top default 10)"},
+                    "sort_by": {"type": "string", "enum": ["relevance", "view_count", "rating", "upload_date"], "description": "Sort order (search)"},
+                    "time_filter": {"type": "string", "enum": ["any", "today", "week", "month", "year"], "description": "Upload recency (search)"},
+                    "trusted_only": {"type": "boolean", "description": "Only trusted channels (search/recommend)"},
+                    "max_results": {"type": "integer", "description": "Max results (search default 15, recommend default 8)"},
                 },
+                "required": ["action"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "my_top_songs",
-            "description": "Show your most-played songs from play history, optionally filtered by language. Use for 'my top songs', 'what do I listen to most', 'top Tamil songs'.",
+            "name": "music_library",
+            "description": "Your saved favorite songs (memory). add: save a song ('add to favorites'). remove: remove by video_id or title. list: show favorites, optional language ('my Tamil favorites'). toggle: heart-button toggle for current or given song.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "n": {"type": "integer", "description": "Number of songs to list (default 10)"},
-                    "language": {"type": "string", "description": "Optional language filter (ta, hi, en, other)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "open_video_popup",
-            "description": "Open the currently playing video (or given video_id) in a separate popup window. Use when user says 'open video', 'pop out video', 'show video in new window', 'open on youtube'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "video_id": {"type": "string", "description": "Optional YouTube video_id to open. Omit to pop the current track."},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_youtube_videos",
-            "description": "Search YouTube videos by topic with rich filters: top views/likes, newest, trusted channels. Use for 'search Tamil melody 2024', 'find most viewed Tamil songs', 'new songs from my trusted channel', 'top rated viewed video on AI'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search topic, e.g. 'Tamil melody 2024', 'A R Rahman hits'"},
-                    "sort_by": {"type": "string", "enum": ["relevance", "view_count", "rating", "upload_date"], "description": "Sort order: relevance (default), view_count (most viewed), rating (most liked), upload_date (newest first)"},
-                    "time_filter": {"type": "string", "enum": ["any", "today", "week", "month", "year"], "description": "Filter by upload recency (default any)"},
-                    "trusted_only": {"type": "boolean", "description": "If true, only results from your saved trusted channels"},
-                    "max_results": {"type": "integer", "description": "Max results (default 15, max 30)"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_favorite",
-            "description": "Add a song to your favorites (saved in memory). Use when user says 'add to favorites', 'save this song', 'favorite this track'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
+                    "action": {"type": "string", "enum": ["add", "remove", "list", "toggle"], "description": "add: save song. remove: unsave. list: show saved. toggle: add-or-remove."},
                     "video_id": {"type": "string", "description": "YouTube video_id (if known)"},
                     "title": {"type": "string", "description": "Song title fallback if video_id missing"},
                     "artist": {"type": "string", "description": "Artist name"},
                     "thumb": {"type": "string", "description": "Thumbnail URL (optional)"},
                     "language": {"type": "string", "description": "Language tag ta/hi/en/other"},
                     "duration": {"type": "string", "description": "Duration e.g. 3:45"},
+                    "limit": {"type": "integer", "description": "Max results for list (default 20)"},
                 },
+                "required": ["action"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "remove_favorite",
-            "description": "Remove a song from favorites by video_id or title.",
+            "name": "music_channels",
+            "description": "Trusted YouTube channels saved in memory for filtered searches. add: save a channel ('trust Sony Music South'). remove: forget a channel. list: show all saved channels.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "video_id": {"type": "string", "description": "YouTube video_id"},
-                    "title": {"type": "string", "description": "Song title to match (if video_id missing)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_favorites",
-            "description": "List your favorite songs, optionally filtered by language. Use for 'show my favorites', 'list favorites', 'my Tamil favorites'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "language": {"type": "string", "description": "Language filter ta/hi/en/other (optional)"},
-                    "limit": {"type": "integer", "description": "Max results (default 20)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "toggle_favorite",
-            "description": "Toggle favorite for current or given song (add if not fav, remove if fav). Used by PlayerBar heart button and 'favorite this' voice commands.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "video_id": {"type": "string", "description": "YouTube video_id"},
-                    "title": {"type": "string", "description": "Song title fallback"},
-                    "artist": {"type": "string", "description": "Artist"},
-                    "thumb": {"type": "string", "description": "Thumb url"},
-                    "language": {"type": "string", "description": "Language"},
-                    "duration": {"type": "string", "description": "Duration"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "play_favorites",
-            "description": "Play/queue songs from your favorites. Use for 'play my favorites', 'play favorites shuffle', 'play my Tamil favorites'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "count": {"type": "integer", "description": "Number of tracks to queue (default 15)"},
-                    "shuffle": {"type": "boolean", "description": "Shuffle favorites (default true)"},
-                    "language": {"type": "string", "description": "Language filter ta/hi/en/other (optional)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_trusted_channel",
-            "description": "Save a trusted YouTube channel/handle to memory for filtered searches. Use when user says 'add @TamilBeats to trusted', 'trust channel Sony Music South', 'save channel ...'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
+                    "action": {"type": "string", "enum": ["add", "remove", "list"], "description": "add: save channel. remove: forget channel. list: show saved."},
                     "channel": {"type": "string", "description": "YouTube handle (@name), URL, or channel name"},
-                    "notes": {"type": "string", "description": "Optional notes about this channel"},
+                    "notes": {"type": "string", "description": "Optional notes (add)"},
                 },
-                "required": ["channel"],
+                "required": ["action"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "remove_trusted_channel",
-            "description": "Remove a trusted YouTube channel from memory.",
+            "name": "video_popup",
+            "description": "Separate YouTube popup windows (each call opens an independent tab). open: pop the current track or a video_id ('open video', can open two tutorials in one turn). list_tabs: show open tabs. close/focus/toggle: control a tab by tab_id ('pause that tutorial').",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "channel": {"type": "string", "description": "Channel handle or name to remove"},
+                    "action": {"type": "string", "enum": ["open", "list_tabs", "close", "focus", "toggle"], "description": "open: new popup tab. list_tabs: show open tabs. close/focus/toggle: control tab by tab_id."},
+                    "video_id": {"type": "string", "description": "YouTube video_id to open (open). Omit to pop the current track."},
+                    "tab_id": {"type": "string", "description": "Tab ID from list_tabs (close/focus/toggle)"},
                 },
-                "required": ["channel"],
+                "required": ["action"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "list_trusted_channels",
-            "description": "List all saved trusted YouTube channels.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "recommend_best_video",
-            "description": "Compare top 3 YouTube videos for a query and autoplay the best for balanced understanding (relevance+clarity+depth+recency+trust). Use for 'LLM evaluation tutorial', 'which video is best', 'recommend a tutorial'.",
+            "name": "gmail_send",
+            "description": "Send an email from the Mayday mailbox. APPROVAL-GATED: draft with gmail_draft first, show the user, and call this ONLY after the user explicitly says approve/send. Never auto-send.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search topic, e.g. 'LLM evaluation tutorial'"},
-                    "trusted_only": {"type": "boolean", "description": "If true, only videos from your trusted channels"},
-                    "max_results": {"type": "integer", "description": "Max candidates to consider (default 8)"},
+                    "to": {"type": "string", "description": "Recipient email address"},
+                    "subject": {"type": "string", "description": "Email subject"},
+                    "text": {"type": "string", "description": "Plain-text body"},
+                    "html": {"type": "string", "description": "Optional HTML body"},
+                    "cc": {"type": "array", "items": {"type": "string"}},
+                    "bcc": {"type": "array", "items": {"type": "string"}},
+                    "idempotency_key": {"type": "string", "description": "Optional dedup key (auto-generated if omitted)"},
+                },
+                "required": ["to", "subject", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gmail_reply",
+            "description": "Reply to a Gmail message in-thread. APPROVAL-GATED: show the reply text to the user first and call ONLY after they approve.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "description": "Gmail message ID to reply to"},
+                    "text": {"type": "string", "description": "Plain-text reply body"},
+                    "html": {"type": "string", "description": "Optional HTML body"},
+                },
+                "required": ["message_id", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gmail_draft",
+            "description": "Create a Gmail draft for user review (approval-gate step 1). Always use before gmail_send/gmail_reply so the user sees the content first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string", "description": "Recipient email address"},
+                    "subject": {"type": "string", "description": "Email subject"},
+                    "text": {"type": "string", "description": "Plain-text body"},
+                    "html": {"type": "string", "description": "Optional HTML body"},
+                },
+                "required": ["to", "subject", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gmail_list",
+            "description": "List Gmail messages (From | Subject | snippet | id). Default query is unread inbox.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Gmail query (default 'is:unread')"},
+                    "limit": {"type": "integer", "description": "Max messages (default 10, max 50)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gmail_search",
+            "description": "Search Gmail with UI syntax (from:, subject:, has:attachment, after:, filename:pdf).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Gmail search query"},
+                    "limit": {"type": "integer", "description": "Max messages (default 10, max 50)"},
                 },
                 "required": ["query"],
             },
@@ -2349,53 +2274,58 @@ LOCAL_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "list_popout_tabs",
-            "description": "List all open popout video tabs (each is a separate YouTube window). Use to see open tutorial/video windows before toggling or closing. Each call to open_video_popup creates a new tab.",
+            "name": "gmail_read",
+            "description": "Read a full Gmail message (headers + text body + attachment list) by message ID.",
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "message_id": {"type": "string", "description": "Gmail message ID"},
+                },
+                "required": ["message_id"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "close_popout_tab",
-            "description": "Close a specific popout tab by tab_id (from list_popout_tabs).",
+            "name": "gmail_thread",
+            "description": "Read an ordered Gmail thread by thread ID.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "tab_id": {"type": "string", "description": "Tab ID (tab_...) from list_popout_tabs"},
+                    "thread_id": {"type": "string", "description": "Gmail thread ID"},
                 },
-                "required": ["tab_id"],
+                "required": ["thread_id"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "focus_popout_tab",
-            "description": "Bring a popout tab window to front (focus).",
+            "name": "gmail_modify",
+            "description": "Add/remove Gmail labels (e.g. remove UNREAD to mark read).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "tab_id": {"type": "string", "description": "Tab ID"},
+                    "message_id": {"type": "string", "description": "Gmail message ID"},
+                    "add_labels": {"type": "array", "items": {"type": "string"}},
+                    "remove_labels": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["tab_id"],
+                "required": ["message_id"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "toggle_popout_tab",
-            "description": "Toggle play/pause for a specific popout tab (each tab independent). Use when user says 'pause that tutorial', 'play the second tab', 'pause tab ...'.",
+            "name": "gmail_create_label",
+            "description": "Create a Gmail label (e.g. 'Mayday/Processed').",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "tab_id": {"type": "string", "description": "Tab ID"},
+                    "name": {"type": "string", "description": "Label name"},
                 },
-                "required": ["tab_id"],
+                "required": ["name"],
             },
         },
     },
@@ -2419,6 +2349,178 @@ def mark_conversation_important(conversation_id: str, important: bool = True) ->
     ok = store.set_conversation_important(conversation_id, bool(important))
     state = "important" if important else "not important"
     return f"Conversation {conversation_id} marked {state}." if ok else f"Conversation {conversation_id} not found."
+
+
+# ---- Consolidated (merged) tools: one def + action routing ----
+# Merged tools keep every implementation in backend/functions/*.py untouched;
+# the dispatchers below route (tool, action) to the original function.
+# Retired fine-grained names keep working via _TOOL_ALIASES (zero extra defs sent).
+
+_TOOL_ALIASES: dict[str, tuple[str, str]] = {
+    # old name -> (merged tool, action)
+    "play_song": ("music_play", "play"),
+    "queue_song": ("music_play", "queue"),
+    "play_radio": ("music_play", "radio"),
+    "play_mood": ("music_play", "mood"),
+    "play_favorites": ("music_play", "favorites"),
+    "discover_trending": ("music_discover", "trending"),
+    "my_top_songs": ("music_discover", "top"),
+    "search_youtube_videos": ("music_discover", "search"),
+    "recommend_best_video": ("music_discover", "recommend"),
+    "add_favorite": ("music_library", "add"),
+    "remove_favorite": ("music_library", "remove"),
+    "list_favorites": ("music_library", "list"),
+    "toggle_favorite": ("music_library", "toggle"),
+    "add_trusted_channel": ("music_channels", "add"),
+    "remove_trusted_channel": ("music_channels", "remove"),
+    "list_trusted_channels": ("music_channels", "list"),
+    "open_video_popup": ("video_popup", "open"),
+    "list_popout_tabs": ("video_popup", "list_tabs"),
+    "close_popout_tab": ("video_popup", "close"),
+    "focus_popout_tab": ("video_popup", "focus"),
+    "toggle_popout_tab": ("video_popup", "toggle"),
+}
+
+# Common model mistakes for action values, normalized before validation.
+_ACTION_ALIASES: dict[str, dict[str, str]] = {
+    "music_play": {"start": "play", "add": "queue", "enqueue": "queue",
+                   "shuffle_play": "favorites", "fav": "favorites", "favourites": "favorites"},
+    "music_discover": {"charts": "trending", "history": "top", "find": "search",
+                       "lookup": "search", "best": "recommend"},
+    "music_library": {"save": "add", "heart": "toggle", "show": "list", "unsave": "remove"},
+    "music_channels": {"save": "add", "trust": "add", "untrust": "remove", "show": "list"},
+    "video_popup": {"pop": "open", "new_tab": "open", "list": "list_tabs",
+                    "tabs": "list_tabs", "pause": "toggle", "resume": "toggle",
+                    "bring_to_front": "focus"},
+}
+
+_MERGED_ACTIONS: dict[str, dict[str, object]] = {
+    "music_play": {"play": play_song, "queue": queue_song, "radio": play_radio,
+                   "mood": play_mood, "favorites": play_favorites},
+    "music_discover": {"trending": discover_trending, "top": my_top_songs,
+                       "search": search_youtube_videos, "recommend": recommend_best_video},
+    "music_library": {"add": add_favorite, "remove": remove_favorite,
+                      "list": list_favorites, "toggle": toggle_favorite},
+    "music_channels": {"add": add_trusted_channel, "remove": remove_trusted_channel,
+                       "list": list_trusted_channels},
+    "video_popup": {"open": open_video_popup, "list_tabs": list_popout_tabs,
+                    "close": close_popout_tab, "focus": focus_popout_tab,
+                    "toggle": toggle_popout_tab},
+}
+
+# Ambiguous params folded per action when the canonical target is empty.
+_ACTION_FOLDS: dict[tuple[str, str], dict[str, str]] = {
+    ("music_play", "play"): {"track": "song", "query": "song"},
+    ("music_play", "queue"): {"track": "song", "query": "song"},
+    ("music_play", "radio"): {"track": "seed_track", "query": "seed_track", "song": "seed_track"},
+    ("music_discover", "top"): {"max_results": "count"},
+    ("music_discover", "trending"): {"max_results": "count"},
+    ("video_popup", "open"): {"tab_id": "video_id"},
+}
+
+# Per-action required params beyond `action` itself.
+_ACTION_REQUIRED: dict[tuple[str, str], list[str]] = {
+    ("music_discover", "search"): ["query"],
+    ("music_discover", "recommend"): ["query"],
+    ("video_popup", "close"): ["tab_id"],
+    ("video_popup", "focus"): ["tab_id"],
+    ("video_popup", "toggle"): ["tab_id"],
+}
+
+# Per-action defaults applied when the model omits the param (None or "").
+_ACTION_DEFAULTS: dict[tuple[str, str], dict[str, object]] = {
+    ("music_play", "mood"): {"mood": "chill", "count": 15},
+    ("music_play", "favorites"): {"count": 15, "shuffle": True},
+    ("music_discover", "trending"): {"count": 10},
+    ("music_discover", "top"): {"count": 10},
+    ("music_discover", "search"): {"sort_by": "relevance", "time_filter": "any", "max_results": 15},
+    ("music_discover", "recommend"): {"max_results": 8},
+    ("music_library", "list"): {"limit": 20},
+}
+
+
+def _dispatch_merged(tool: str, action, args: dict) -> str:
+    """Route (tool, action) to the original implementation.
+
+    Returns an actionable error string (listing valid actions / missing params)
+    instead of raising, so the iterative loop self-corrects on the next turn.
+    """
+    actions = _MERGED_ACTIONS.get(tool, {})
+    norm = _ACTION_ALIASES.get(tool, {}).get(action, action) if isinstance(action, str) else ""
+    norm = norm.strip().lower() if isinstance(norm, str) else ""
+    if not norm:
+        valid = ", ".join(sorted(actions))
+        return (f"Missing required parameter: 'action' for {tool}. Valid actions: {valid}. "
+                f"Call {tool} again with one of these actions.")
+    if norm not in actions:
+        valid = ", ".join(sorted(actions))
+        return (f"Unknown action '{action}' for {tool}. Valid actions: {valid}. "
+                f"Call {tool} again with a valid action.")
+    for src, dst in _ACTION_FOLDS.get((tool, norm), {}).items():
+        if args.get(src) and not args.get(dst):
+            args[dst] = args.pop(src)
+    for req in _ACTION_REQUIRED.get((tool, norm), []):
+        if not args.get(req):
+            return (f"Missing required parameter: '{req}' for {tool} action '{norm}'. "
+                    f"Call {tool} again with '{req}' included.")
+    for k, v in _ACTION_DEFAULTS.get((tool, norm), {}).items():
+        if args.get(k) is None or args.get(k) == "":
+            args[k] = v
+    impl = actions[norm]
+    try:
+        _params = inspect.signature(impl).parameters.values()
+        _takes_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in _params)
+    except (ValueError, TypeError):
+        _takes_kwargs = True
+    if _takes_kwargs:
+        call_kwargs = {k: v for k, v in args.items() if v is not None}
+    else:
+        want = {p.name for p in _params}
+        call_kwargs = {k: v for k, v in args.items() if k in want and v is not None}
+    return impl(**call_kwargs)
+
+
+def music_play(action="", artist="", song="", seed_track="", mood="", count=None,
+               shuffle=None, language="", track="", query=""):
+    """Play/queue/radio/mood/favorites playback (routes to media_functions)."""
+    return _dispatch_merged("music_play", action, {
+        "artist": artist, "song": song, "seed_track": seed_track, "mood": mood,
+        "count": count, "shuffle": shuffle, "language": language,
+        "track": track, "query": query,
+    })
+
+
+def music_discover(action="", query="", language="", count=None, sort_by=None,
+                   time_filter=None, trusted_only=False, max_results=None):
+    """Trending/top/search/recommend discovery (routes to media_functions)."""
+    return _dispatch_merged("music_discover", action, {
+        "query": query, "language": language, "count": count, "sort_by": sort_by,
+        "time_filter": time_filter, "trusted_only": trusted_only,
+        "max_results": max_results,
+    })
+
+
+def music_library(action="", video_id="", title="", artist="", thumb="",
+                  language="", duration="", limit=None):
+    """Add/remove/list/toggle favorites (routes to media_functions)."""
+    return _dispatch_merged("music_library", action, {
+        "video_id": video_id, "title": title, "artist": artist, "thumb": thumb,
+        "language": language, "duration": duration, "limit": limit,
+    })
+
+
+def music_channels(action="", channel="", notes=""):
+    """Add/remove/list trusted channels (routes to media_functions)."""
+    return _dispatch_merged("music_channels", action, {
+        "channel": channel, "notes": notes,
+    })
+
+
+def video_popup(action="", video_id="", tab_id=""):
+    """Open/list/close/focus/toggle popup video tabs (routes to media_functions)."""
+    return _dispatch_merged("video_popup", action, {
+        "video_id": video_id, "tab_id": tab_id,
+    })
 
 
 FUNCTION_MAP = {
@@ -2547,27 +2649,20 @@ FUNCTION_MAP = {
     "record_answer": record_answer,
     "person_brief": person_brief,
     "mark_conversation_important": mark_conversation_important,
-    "play_song": play_song,
-    "play_radio": play_radio,
-    "play_mood": play_mood,
-    "queue_song": queue_song,
-    "discover_trending": discover_trending,
-    "my_top_songs": my_top_songs,
-    "open_video_popup": open_video_popup,
-    "search_youtube_videos": search_youtube_videos,
-    "list_popout_tabs": list_popout_tabs,
-    "close_popout_tab": close_popout_tab,
-    "focus_popout_tab": focus_popout_tab,
-    "toggle_popout_tab": toggle_popout_tab,
-    "add_favorite": add_favorite,
-    "remove_favorite": remove_favorite,
-    "list_favorites": list_favorites,
-    "toggle_favorite": toggle_favorite,
-    "play_favorites": play_favorites,
-    "add_trusted_channel": add_trusted_channel,
-    "remove_trusted_channel": remove_trusted_channel,
-    "list_trusted_channels": list_trusted_channels,
-    "recommend_best_video": recommend_best_video,
+    "music_play": music_play,
+    "music_discover": music_discover,
+    "music_library": music_library,
+    "music_channels": music_channels,
+    "video_popup": video_popup,
+    "gmail_send": gmail_send,
+    "gmail_reply": gmail_reply,
+    "gmail_draft": gmail_draft,
+    "gmail_list": gmail_list,
+    "gmail_search": gmail_search,
+    "gmail_read": gmail_read,
+    "gmail_thread": gmail_thread,
+    "gmail_modify": gmail_modify,
+    "gmail_create_label": gmail_create_label,
 }
 
 
@@ -2625,24 +2720,11 @@ def _validate_tool_definitions(tools: list[dict]) -> list[dict]:
 # Argument repair for sloppy LLM tool calls: alias names, fill defaults,
 # drop unknown kwargs. Kept in one place so every local tool benefits.
 _PARAM_ALIASES: dict[str, dict[str, str]] = {
-    "play_song": {"track": "song", "query": "song", "song_name": "song", "title": "song", "name": "song"},
-    "play_radio": {"track": "seed_track", "song": "seed_track", "query": "seed_track", "title": "seed_track", "seed_song": "seed_track"},
-    "play_mood": {"genre": "mood", "vibe": "mood", "style": "mood"},
-    "queue_song": {"track": "song", "query": "song", "song_name": "song", "title": "song", "name": "song"},
-    "discover_trending": {"lang": "language", "count": "count", "limit": "count", "n": "count"},
-    "my_top_songs": {"count": "n", "limit": "n", "lang": "language"},
-    "open_video_popup": {"video": "video_id", "id": "video_id", "song_id": "video_id"},
-    "search_youtube_videos": {"q": "query", "topic": "query", "sort": "sort_by", "order": "sort_by", "views": "sort_by", "time": "time_filter", "trusted": "trusted_only", "limit": "max_results", "count": "max_results", "n": "max_results"},
-    "add_favorite": {"song": "title", "name": "title", "track": "title", "video": "video_id", "id": "video_id"},
-    "remove_favorite": {"song": "title", "name": "title", "video": "video_id", "id": "video_id"},
-    "toggle_favorite": {"song": "title", "name": "title", "video": "video_id", "id": "video_id"},
-    "play_favorites": {"count": "count", "n": "count", "limit": "count", "lang": "language"},
-    "add_trusted_channel": {"channel_name": "channel", "name": "channel", "handle": "channel", "url": "channel"},
-    "remove_trusted_channel": {"channel_name": "channel", "name": "channel", "handle": "channel", "url": "channel"},
-    "recommend_best_video": {"q": "query", "topic": "query", "limit": "max_results", "count": "max_results"},
-    "close_popout_tab": {"id": "tab_id", "tab": "tab_id"},
-    "focus_popout_tab": {"id": "tab_id", "tab": "tab_id"},
-    "toggle_popout_tab": {"id": "tab_id", "tab": "tab_id"},
+    "music_play": {"song_name": "song", "title": "song", "name": "song", "seed": "seed_track", "seed_song": "seed_track", "genre": "mood", "vibe": "mood", "style": "mood", "lang": "language", "limit": "count", "n": "count"},
+    "music_discover": {"lang": "language", "limit": "max_results", "n": "count", "topic": "query", "q": "query", "sort": "sort_by", "order": "sort_by", "views": "sort_by", "time": "time_filter", "trusted": "trusted_only"},
+    "music_library": {"song": "title", "name": "title", "track": "title", "video": "video_id", "id": "video_id"},
+    "music_channels": {"channel_name": "channel", "name": "channel", "handle": "channel", "url": "channel"},
+    "video_popup": {"video": "video_id", "song_id": "video_id", "id": "tab_id", "tab": "tab_id"},
     "create_project": {"project": "name", "project_name": "name", "desc": "description"},
     "resume_project": {"project": "name", "project_name": "name"},
     "update_project_status": {"project": "name", "project_name": "name"},
@@ -2680,20 +2762,23 @@ _PARAM_ALIASES: dict[str, dict[str, str]] = {
     "export_dataset_pdf": {"name": "topic", "project": "topic", "project_name": "topic", "topic_name": "topic", "research_topic": "topic", "store": "store_type", "type": "store_type"},
     "export_research_dataset": {"name": "topic", "project": "topic", "topic_name": "topic"},
     "convert_md_to_pdf": {"path": "md_path", "file": "md_path", "md_file": "md_path", "name": "output_path"},
+    "gmail_send": {"recipient": "to", "email": "to", "address": "to", "body": "text", "message": "text", "content": "text", "title": "subject"},
+    "gmail_reply": {"id": "message_id", "msg_id": "message_id", "body": "text", "message": "text", "content": "text"},
+    "gmail_draft": {"recipient": "to", "email": "to", "body": "text", "message": "text", "title": "subject"},
+    "gmail_list": {"q": "query", "filter": "query", "n": "limit", "count": "limit", "max": "limit"},
+    "gmail_search": {"q": "query", "n": "limit", "count": "limit"},
+    "gmail_read": {"id": "message_id", "msg_id": "message_id"},
+    "gmail_thread": {"id": "thread_id"},
+    "gmail_modify": {"id": "message_id"},
 }
 
 _TOOL_DEFAULTS: dict[str, dict[str, object]] = {
     "add_project_note": {"filename": "notes.md"},
     "add_research_note": {"filename": "notes.md"},
     "create_research": {"type": "market"},
-    "play_mood": {"mood": "chill"},
-    "discover_trending": {"count": 10},
-    "my_top_songs": {"n": 10},
-    "search_youtube_videos": {"sort_by": "relevance", "time_filter": "any", "max_results": 15},
-    "play_favorites": {"count": 15, "shuffle": True},
-    "list_favorites": {"limit": 20},
-    "recommend_best_video": {"max_results": 8},
     "export_dataset_pdf": {"store_type": "research"},
+    "gmail_list": {"query": "is:unread"},
+    "gmail_search": {"limit": 10},
 }
 
 
@@ -2761,6 +2846,14 @@ def _is_playwright_transient_json(result: str) -> bool:
 
 
 async def dispatch_call(name: str, arguments: dict, mcp_manager=None) -> str:
+    if name in _TOOL_ALIASES:
+        # Retired fine-grained name (e.g. from stale history): map to merged tool + action.
+        new_name, aliased_action = _TOOL_ALIASES[name]
+        arguments = dict(arguments or {})
+        if not arguments.get("action"):
+            arguments["action"] = aliased_action
+        logger.info("Tool alias %s → %s (action=%s)", name, new_name, arguments.get("action"))
+        name = new_name
     if name in FUNCTION_MAP:
         fn = FUNCTION_MAP[name]
         args, notes = _repair_arguments(name, fn, arguments or {})

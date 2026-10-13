@@ -21,18 +21,41 @@ models:
   tiering_enabled: false  # SINGLE-LLM mode: one cloud model handles everything (no slow local interactive tier)
   humanize_enabled: false  # skip the redundant humanize pass (was a slow CPU-bound local call)
 
-# Unified LLM gateway: Ollama Local + Ollama Cloud + OpenRouter behind one
+# Unified LLM gateway: OpenAI + Ollama Local + Ollama Cloud + OpenRouter behind one
 # OpenAI-compatible interface (backend/assistant/providers/). The worker tier
-# defaults to OpenRouter and fails over automatically on 401/402/429/5xx,
+# defaults to OpenAI and fails over automatically on 401/402/429/5xx,
 # timeouts and connect errors. Interactive tier stays local (fast, free).
 # Without this `providers:` block the gateway preserves the old
 # single-provider behavior (everything from the `ollama:` block).
 providers:
-  default: openrouter                    # worker primary: openrouter | ollama_cloud | ollama_local
+  default: openai                    # worker primary: openai | openrouter | ollama_cloud | ollama_local
   interactive: ollama_local              # interactive tier: always local (never uses tools)
-  fallback_order: [openrouter, ollama_cloud, ollama_local]
-  max_tools: 0                            # 0 = off: send the full set like Ollama (raise if a provider 400s on size)
+  fallback_order: [openai, openrouter, ollama_cloud, ollama_local]
+  max_tools: 100                          # hard cap per LLM call (OpenAI/OpenRouter reject >128; 100 leaves headroom for skill tools)
   free_max_iterations: 20                 # parity with local loop budget (lower to save free-tier quota)
+
+openai:
+  endpoint: https://api.openai.com/v1/chat/completions
+  model: gpt-4o-mini
+  api_key: ""  # Set via OPENAI_API_KEY env var or .env
+
+# OpenAI Realtime API — interactive voice agent (low-latency speech-to-speech).
+# Stage 1 (Hybrid): browser ↔ FastAPI WS relay (/api/realtime/voice) ↔ OpenAI.
+#   The long-lived OPENAI_API_KEY never leaves the server; the browser only
+#   speaks to our relay. Stage 2 (later): WebRTC direct + sideband ?call_id=.
+#   Interactive handles simple single-tool turns; heavy multi-step work is
+#   escalated to the background worker (existing _run_engine tool loop).
+#   Fallback when unreachable/key missing: text-only chat (no Deepgram path).
+realtime:
+  enabled: true
+  model: gpt-realtime-2.1
+  voice: marin
+  relay_only: true  # true = WS relay only; false = also allow WebRTC direct
+  max_minutes_per_session: 15
+  vad_threshold: 0.65
+  vad_silence_duration_ms: 600
+  vad_prefix_padding_ms: 200
+  api_key: ""  # Set via OPENAI_API_KEY env var or .env (shares openai key)
 
 ollama_cloud:
   endpoint: https://api.ollama.com/v1/chat/completions
@@ -219,6 +242,19 @@ telegram:
 
 openalex:
   api_key: ""  # Set via OPENALEX_API_KEY env var or .env (get from https://openalex.org/api)
+
+gmail:
+  enabled: true
+  account: agent                 # agent | user | both
+  agent_email: "maydayishereatwork@gmail.com"
+  credentials_path: backend/credentials/gmail_credentials.json
+  token_path_agent: tokens/agent_token.json
+  token_path_user: tokens/user_token.json
+  polling_interval: 60
+  redirect_uri: http://localhost:8772/api/auth/gmail/callback  # local-only (no Tailscale)
+  watch_enabled: false           # v2 only (Pub/Sub)
+  auto_reply: false              # approval-gated: draft only until user says approve/send
+  ui_mode: minimal
 
 phf:
   enabled: true
