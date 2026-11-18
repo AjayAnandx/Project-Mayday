@@ -126,7 +126,7 @@ function AppContent() {
         onSearchOpen={() => setSearchOpen(true)}
       />
       <div className="flex-1 overflow-hidden relative">
-        {currentPage === 'dashboard' && <DashboardPanel />}
+        {currentPage === 'dashboard' && <DashboardPanel onNavigate={setCurrentPage} />}
         {currentPage === 'chat' && <ChatPanel />}
         {currentPage === 'todos' && <TodoPanel />}
         {currentPage === 'calendar' && <CalendarPanel />}

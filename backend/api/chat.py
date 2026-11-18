@@ -198,10 +198,22 @@ You also have music tools via YouTube Music (ytmusicapi + yt-dlp) — each takes
 Use music_play(action=play) for "play X" — call it IMMEDIATELY, never call web search first to identify the song (music_play searches YouTube itself, including Tamil/Hindi/English titles). If a song title is ambiguous (could be song vs tutorial video), ASK "Did you mean the song 'X' or the tutorial video 'X'?" and wait for choice. Music language auto-detected (Tamil/Hindi/English) and biases trending.
 You have a dedicated consumer inbox (maydayishereatwork@gmail.com) via Gmail API tools:
 - gmail_list/gmail_search/gmail_read/gmail_thread: read mail. Inbound mail also arrives as notifications.
+- Mailbox routing: TWO mailboxes exist. `account="agent"` (default) = Mayday's own mailbox. `account="user"` = the human's PERSONAL inbox (read-only). When the user says "my email", "my inbox", "my mail", "personal email" → pass account="user". When they say "Mayday's email", "agent inbox", or don't specify → default agent. Message/thread IDs belong to one mailbox — pass the same account when reading them.
 - gmail_draft(to, subject, text): create a draft for user review.
-- gmail_send / gmail_reply: transmit. APPROVAL-GATED — NEVER call these to send new content on your own. Flow: draft first with gmail_draft, show the user the exact content, and call send/reply ONLY after the user explicitly says approve/send/reply/go-ahead. No silent auto-send, ever.
+- gmail_send / gmail_reply: transmit. APPROVAL-GATED — NEVER call these to send new content on your own. Flow: draft first with gmail_draft, show the user the exact content, and call send/reply ONLY after the user explicitly says approve/send/reply/go-ahead. No silent auto-send, ever. Sends always go from the agent mailbox — never personal.
 - gmail_modify (mark read via remove_labels=['UNREAD']), gmail_create_label.
-If Gmail is not connected, tell the user to click 'Connect Gmail for Mayday' on the Dashboard.
+If Gmail is not connected, tell the user to click 'Connect Gmail for Mayday' on the Dashboard. If the personal inbox is not connected, tell them to click 'Watch personal inbox'.
+You have Google Maps tools (server-side key, traffic-aware):
+- maps_search_places(query, near): find places by name/kind with rating + open-now. ALWAYS resolve a name to place_id before routing. If 2+ strong matches, ask one quick question (name the top 2 with rating/distance).
+- maps_place_details(place_id): hours, summary, reviews — use for "about this place".
+- maps_route(origin, destination, mode): ETA per mode (defaults: drive + two-wheeler). Origins: names, 'home' (Nesapakkam), 'me', lat,lng.
+- maps_traffic(origin, destination): current drive-time vs free-flow ("should I leave now").
+- maps_eta_matrix(places, origin): which of several destinations is quickest now.
+- maps_optimize_trip(stops, origin): best visiting order for multi-stop days.
+- maps_geocode(address): text → lat,lng.
+- maps_save_place(place_id, note): remember liked spots (ask first: "save this as a liked spot?").
+- maps_autocomplete(text): type-ahead for partial names.
+Answer with rating + drive time + one line on traffic; never expose raw tool JSON. If Maps key is missing, tell the user to add GOOGLE_MAPS_API_KEY to .env (billing enabled on the GCP project).
 Current date and time (your local timezone): {date}"""
 
 PERSONALITY_INSTRUCTIONS = """
@@ -677,6 +689,12 @@ GMAIL_TOOL_NAMES = {
     "gmail_read", "gmail_thread", "gmail_modify", "gmail_create_label",
 }
 
+MAPS_TOOL_NAMES = {
+    "maps_search_places", "maps_place_details", "maps_autocomplete",
+    "maps_route", "maps_traffic", "maps_eta_matrix", "maps_optimize_trip",
+    "maps_geocode", "maps_save_place",
+}
+
 SCREENSHOT_TOOL_NAMES = {
     "list_screenshots", "get_screenshot", "delete_screenshot",
 }
@@ -737,6 +755,7 @@ GROUP_SETS = {
     "design_mcp": DESIGN_MCP_TOOL_NAMES,
     "music": MUSIC_TOOL_NAMES,
     "gmail": GMAIL_TOOL_NAMES,
+    "maps": MAPS_TOOL_NAMES,
 }
 
 

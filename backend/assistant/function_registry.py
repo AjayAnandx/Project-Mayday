@@ -55,6 +55,11 @@ from backend.functions.gmail_functions import (
     gmail_send, gmail_reply, gmail_draft, gmail_list, gmail_search,
     gmail_read, gmail_thread, gmail_modify, gmail_create_label,
 )
+from backend.functions.maps_functions import (
+    maps_search_places, maps_place_details, maps_autocomplete, maps_route,
+    maps_traffic, maps_eta_matrix, maps_optimize_trip, maps_geocode,
+    maps_save_place,
+)
 from backend.functions.visual_testing import (
     update_baseline,
 )
@@ -2246,12 +2251,13 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "gmail_list",
-            "description": "List Gmail messages (From | Subject | snippet | id). Default query is unread inbox.",
+            "description": "List Gmail messages (From | Subject | snippet | id). Default query is unread inbox. account: 'agent' = Mayday's own mailbox (default), 'user' = the human's personal inbox (use when they say my/personal email).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Gmail query (default 'is:unread')"},
                     "limit": {"type": "integer", "description": "Max messages (default 10, max 50)"},
+                    "account": {"type": "string", "enum": ["agent", "user"], "description": "'agent' Mayday mailbox, 'user' personal inbox"},
                 },
             },
         },
@@ -2260,12 +2266,13 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "gmail_search",
-            "description": "Search Gmail with UI syntax (from:, subject:, has:attachment, after:, filename:pdf).",
+            "description": "Search Gmail with UI syntax (from:, subject:, has:attachment, after:, filename:pdf). account: 'agent' = Mayday mailbox (default), 'user' = personal inbox (my/personal email).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Gmail search query"},
                     "limit": {"type": "integer", "description": "Max messages (default 10, max 50)"},
+                    "account": {"type": "string", "enum": ["agent", "user"]},
                 },
                 "required": ["query"],
             },
@@ -2275,11 +2282,12 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "gmail_read",
-            "description": "Read a full Gmail message (headers + text body + attachment list) by message ID.",
+            "description": "Read a full Gmail message (headers + text body + attachment list) by message ID. account: 'agent' (default) or 'user' — must match the mailbox the ID came from.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "message_id": {"type": "string", "description": "Gmail message ID"},
+                    "account": {"type": "string", "enum": ["agent", "user"]},
                 },
                 "required": ["message_id"],
             },
@@ -2289,11 +2297,12 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "gmail_thread",
-            "description": "Read an ordered Gmail thread by thread ID.",
+            "description": "Read an ordered Gmail thread by thread ID. account: 'agent' (default) or 'user' — must match the mailbox the ID came from.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "thread_id": {"type": "string", "description": "Gmail thread ID"},
+                    "account": {"type": "string", "enum": ["agent", "user"]},
                 },
                 "required": ["thread_id"],
             },
@@ -2326,6 +2335,143 @@ LOCAL_TOOL_DEFINITIONS = [
                     "name": {"type": "string", "description": "Label name"},
                 },
                 "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "maps_search_places",
+            "description": "Find places by name (cafe, hospital, 'Writes Cafe'). Returns rating, open-now, address, place_id. Use for 'find X near me' and to resolve a name before routing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Place name or kind"},
+                    "near": {"type": "string", "description": "Area/text, 'me', or lat,lng (default: current location)"},
+                    "radius_m": {"type": "integer", "description": "Search radius meters (default 5000)"},
+                    "limit": {"type": "integer", "description": "Max results (default 5)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "maps_place_details",
+            "description": "Hours, summary, top reviews for a place_id from maps_search_places. Use for 'about this place'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "place_id": {"type": "string", "description": "Place ID"},
+                },
+                "required": ["place_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "maps_autocomplete",
+            "description": "Type-ahead suggestions for a partial place name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Partial input"},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "maps_route",
+            "description": "Route origin → destination with distance + ETA per travel mode (drive/two-wheeler default). Origins accept names, 'home', 'me', lat,lng.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "origin": {"type": "string"},
+                    "destination": {"type": "string"},
+                    "mode": {"type": "string", "description": "drive | two-wheeler | transit | walk (default: configured modes)"},
+                },
+                "required": ["origin", "destination"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "maps_traffic",
+            "description": "Current drive-time traffic origin → destination (free-flow vs in-traffic). Use for 'traffic to X', 'should I leave now'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "origin": {"type": "string"},
+                    "destination": {"type": "string"},
+                },
+                "required": ["origin", "destination"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "maps_eta_matrix",
+            "description": "Which of several destinations is quickest from an origin right now. Use for 'nearest hospital/pharmacy' choices.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "places": {"type": "array", "items": {"type": "string"}, "description": "Destination names (max 10)"},
+                    "origin": {"type": "string", "description": "Default 'home'"},
+                    "mode": {"type": "string"},
+                },
+                "required": ["places"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "maps_optimize_trip",
+            "description": "Best visiting order for 2+ stops from an origin. Use for 'plan my rounds', multi-stop days.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stops": {"type": "array", "items": {"type": "string"}, "description": "Stop names (2-8)"},
+                    "origin": {"type": "string", "description": "Default 'home'"},
+                    "mode": {"type": "string"},
+                },
+                "required": ["stops"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "maps_geocode",
+            "description": "Resolve any address/area text to lat,lng + formatted address.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "address": {"type": "string"},
+                },
+                "required": ["address"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "maps_save_place",
+            "description": "Remember a liked/visited spot (personalization). Future food/outing suggestions bias toward saved tastes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "place_id": {"type": "string"},
+                    "note": {"type": "string", "description": "Optional note (e.g. 'great filter coffee')"},
+                },
+                "required": ["place_id"],
             },
         },
     },
@@ -2663,6 +2809,15 @@ FUNCTION_MAP = {
     "gmail_thread": gmail_thread,
     "gmail_modify": gmail_modify,
     "gmail_create_label": gmail_create_label,
+    "maps_search_places": maps_search_places,
+    "maps_place_details": maps_place_details,
+    "maps_autocomplete": maps_autocomplete,
+    "maps_route": maps_route,
+    "maps_traffic": maps_traffic,
+    "maps_eta_matrix": maps_eta_matrix,
+    "maps_optimize_trip": maps_optimize_trip,
+    "maps_geocode": maps_geocode,
+    "maps_save_place": maps_save_place,
 }
 
 
@@ -2765,11 +2920,18 @@ _PARAM_ALIASES: dict[str, dict[str, str]] = {
     "gmail_send": {"recipient": "to", "email": "to", "address": "to", "body": "text", "message": "text", "content": "text", "title": "subject"},
     "gmail_reply": {"id": "message_id", "msg_id": "message_id", "body": "text", "message": "text", "content": "text"},
     "gmail_draft": {"recipient": "to", "email": "to", "body": "text", "message": "text", "title": "subject"},
-    "gmail_list": {"q": "query", "filter": "query", "n": "limit", "count": "limit", "max": "limit"},
-    "gmail_search": {"q": "query", "n": "limit", "count": "limit"},
-    "gmail_read": {"id": "message_id", "msg_id": "message_id"},
-    "gmail_thread": {"id": "thread_id"},
+    "gmail_list": {"q": "query", "filter": "query", "n": "limit", "count": "limit", "max": "limit", "mailbox": "account", "box": "account"},
+    "gmail_search": {"q": "query", "n": "limit", "count": "limit", "mailbox": "account"},
+    "gmail_read": {"id": "message_id", "msg_id": "message_id", "mailbox": "account"},
+    "gmail_thread": {"id": "thread_id", "mailbox": "account"},
     "gmail_modify": {"id": "message_id"},
+    "maps_search_places": {"q": "query", "place": "query", "name": "query", "location": "near", "area": "near"},
+    "maps_route": {"from": "origin", "to": "destination", "dest": "destination", "travel_mode": "mode", "by": "mode"},
+    "maps_traffic": {"from": "origin", "to": "destination"},
+    "maps_eta_matrix": {"destinations": "places", "from": "origin"},
+    "maps_optimize_trip": {"from": "origin"},
+    "maps_geocode": {"q": "address", "place": "address", "location": "address"},
+    "maps_save_place": {"id": "place_id"},
 }
 
 _TOOL_DEFAULTS: dict[str, dict[str, object]] = {

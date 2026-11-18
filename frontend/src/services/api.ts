@@ -203,10 +203,10 @@ export const api = {
   getGmailStatus: () =>
     request<GmailStatus>('/gmail/status'),
 
-  listGmailMessages: (q = 'is:unread', limit = 5) =>
-    request<GmailMessages>(`/gmail/messages?q=${encodeURIComponent(q)}&limit=${limit}`),
+  listGmailMessages: (q = 'is:unread', limit = 5, account: 'agent' | 'user' = 'agent') =>
+    request<GmailMessages>(`/gmail/messages?q=${encodeURIComponent(q)}&limit=${limit}&account=${account}`),
 
-  startGmailAuth: (account = 'agent') => {
+  startGmailAuth: (account: 'agent' | 'user' = 'agent') => {
     window.open(`/api/auth/gmail/start?account=${encodeURIComponent(account)}`, '_blank', 'noopener')
   },
 

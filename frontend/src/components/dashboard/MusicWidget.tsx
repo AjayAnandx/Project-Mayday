@@ -1,140 +1,142 @@
 import { useEffect, useState } from 'react'
-import { Music2, Play, TrendingUp, Disc3 } from 'lucide-react'
+import { Music2, Play, TrendingUp } from 'lucide-react'
+import { cn } from '../../lib/utils'
 import type { MusicTrack, HistoryStats, TrendingResponse } from '../../types/music'
+import { DashCard, CardHeader, compact } from './DashCard'
 
 interface Props {
   historyStats: HistoryStats | null
   onPlayTrack: (track: MusicTrack) => void
+  className?: string
 }
+
+const LANG_SHADES = ['bg-green', 'bg-green/55', 'bg-green/25', 'bg-surface2']
 
 function pct(part: number, total: number) {
-  if (total === 0) return 0
-  return Math.round((part / total) * 100)
+  return total ? Math.round((part / total) * 100) : 0
 }
 
-export function MusicWidget({ historyStats, onPlayTrack }: Props) {
+function Thumb({ src, className }: { src?: string; className?: string }) {
+  return (
+    <div className={cn('overflow-hidden bg-surface1 shrink-0', className)}>
+      {src
+        ? <img src={src} alt="" className="w-full h-full object-cover" loading="lazy" />
+        : <div className="w-full h-full flex items-center justify-center text-overlay0">♪</div>}
+    </div>
+  )
+}
+
+export function MusicWidget({ historyStats, onPlayTrack, className }: Props) {
   const [trending, setTrending] = useState<TrendingResponse | null>(null)
-  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/music/trending?count=5')
+    fetch('/api/music/trending?count=4')
       .then(r => r.json())
-      .then(data => { if (!cancelled) setTrending(data) })
+      .then(d => { if (!cancelled) setTrending(d) })
       .catch(() => { if (!cancelled) setTrending({ tracks: [], country: 'IN' }) })
-      .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [historyStats?.total_plays])
 
-  const topWeek = historyStats?.top_week || []
-  const topAll = historyStats?.top_all || []
-  const topDisplay = topWeek.length > 0 ? topWeek : topAll
-  const langStats = historyStats?.language_stats || {}
-  const total = historyStats?.total_plays || 0
-  const sortedLangs = Object.entries(langStats).sort((a, b) => b[1] - a[1]).slice(0, 4)
+  const topWeek = historyStats?.top_week ?? []
+  const top = (topWeek.length ? topWeek : historyStats?.top_all ?? []).slice(0, 4)
+  const total = historyStats?.total_plays ?? 0
+  const langs = Object.entries(historyStats?.language_stats ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 4)
+
+  const toTrack = (t: typeof top[number]): MusicTrack => ({
+    video_id: t.video_id, title: t.title, artist: t.artist, thumb: t.thumb, duration: '', language: t.language, stream_url: '',
+  })
 
   return (
-    <div className="rounded-2xl bg-surface0/60 border border-green/10 p-4 flex flex-col gap-4">
-      <div className="flex items-center gap-2">
-        <div className="w-8 h-8 rounded-xl bg-green/15 flex items-center justify-center">
-          <Music2 className="h-4 w-4 text-green" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <h3 className="text-sm font-semibold text-text">Music</h3>
-          <p className="text-[11px] text-overlay0">{total} plays · {sortedLangs.length ? sortedLangs.map(([k]) => k.toUpperCase()).join(' · ') : 'no history yet'}</p>
-        </div>
-        {trending?.biased_by && (
-          <span className="text-[10px] font-medium px-2 py-1 rounded-full bg-green/10 text-green border border-green/20">
-            {String(trending.biased_by).toUpperCase()} bias
+    <DashCard className={className}>
+      <CardHeader
+        title="Music"
+        icon={Music2}
+        right={trending?.biased_by && (
+          <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] text-subtext0">
+            {String(trending.biased_by).toUpperCase()} picks
           </span>
         )}
+      />
+
+      <div className="grid sm:grid-cols-[180px_1fr] gap-5">
+        {/* Plays + language split */}
+        <div>
+          <p className="text-[44px] leading-none font-medium tracking-tight text-text tabular-nums">{compact(total)}</p>
+          <p className="text-[11px] text-overlay1 mt-1.5">Total plays</p>
+          {langs.length > 0 && (
+            <>
+              <div className="flex h-1.5 rounded-full overflow-hidden gap-0.5 mt-5 bg-surface1">
+                {langs.map(([l, c], i) => (
+                  <div key={l} className={LANG_SHADES[i]} style={{ width: `${pct(c, total)}%` }} />
+                ))}
+              </div>
+              <ul className="mt-3 space-y-1.5">
+                {langs.map(([l, c], i) => (
+                  <li key={l} className="flex items-center gap-2 text-xs">
+                    <span className={cn('w-2 h-2 rounded-full', LANG_SHADES[i])} />
+                    <span className="flex-1 uppercase text-subtext0">{l}</span>
+                    <span className="text-text tabular-nums">{pct(c, total)}%</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+
+        {/* Top played tiles */}
+        <div className="min-w-0">
+          <p className="text-[11px] text-overlay1 mb-2">{topWeek.length ? 'Top this week' : 'Most played'}</p>
+          {top.length === 0 ? (
+            <div className="rounded-2xl bg-hatch border border-white/[0.04] py-8 text-center text-xs text-overlay1">
+              No plays yet — ask Mayday to play something.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              {top.map(t => (
+                <button
+                  key={`${t.video_id}-${t.title}`}
+                  onClick={() => onPlayTrack(toTrack(t))}
+                  className="group flex items-center gap-2.5 rounded-2xl bg-white/[0.03] border border-white/[0.05] p-2 text-left hover:bg-white/[0.06] transition-colors min-w-0"
+                >
+                  <div className="relative">
+                    <Thumb src={t.thumb} className="w-11 h-11 rounded-xl" />
+                    <span className="absolute inset-0 rounded-xl bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                      <Play className="h-4 w-4 text-green fill-green" />
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-text truncate">{t.title}</p>
+                    <p className="text-[10px] text-overlay1 truncate">{t.artist}</p>
+                    <p className="text-[10px] text-green tabular-nums mt-0.5">×{t.plays}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Language mix bars */}
-      {sortedLangs.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1 text-[11px] text-overlay1">
-            <Disc3 className="h-3 w-3" /> Language mix
-          </div>
-          <div className="space-y-1">
-            {sortedLangs.map(([lang, count]) => (
-              <div key={lang} className="flex items-center gap-2">
-                <span className="text-[11px] font-mono w-7 text-overlay1">{lang.toUpperCase()}</span>
-                <div className="flex-1 h-1.5 rounded-full bg-surface1 overflow-hidden">
-                  <div className="h-full bg-green rounded-full transition-all" style={{ width: `${pct(count, total)}%` }} />
-                </div>
-                <span className="text-[11px] font-mono text-overlay0 w-8 text-right">{pct(count, total)}%</span>
-              </div>
+      {/* Trending strip */}
+      {trending && trending.tracks.length > 0 && (
+        <div className="mt-5 pt-4 border-t border-white/[0.05]">
+          <p className="flex items-center gap-1.5 text-[11px] text-overlay1 mb-2">
+            <TrendingUp className="h-3 w-3" /> Trending{trending.country ? ` · ${trending.country}` : ''}
+          </p>
+          <div className="flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {trending.tracks.slice(0, 4).map(t => (
+              <button
+                key={t.video_id || t.title}
+                onClick={() => onPlayTrack(t)}
+                className="flex items-center gap-2 rounded-full bg-white/[0.03] border border-white/[0.05] pl-1 pr-3 py-1 shrink-0 max-w-[220px] hover:bg-white/[0.06] transition-colors"
+              >
+                <Thumb src={t.thumb} className="w-7 h-7 rounded-full" />
+                <span className="text-[11px] text-subtext1 truncate">{t.title}</span>
+              </button>
             ))}
           </div>
         </div>
       )}
-
-      {/* Top played */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-1 text-[11px] text-overlay1">
-          <Play className="h-3 w-3" /> {topWeek.length ? 'Top this week' : 'Top played'}
-        </div>
-        {topDisplay.length === 0 ? (
-          <p className="text-xs text-overlay0 py-2">No plays yet — ask Mayday to play something.</p>
-        ) : (
-          <div className="space-y-1.5">
-            {topDisplay.slice(0, 5).map(t => (
-              <button
-                key={`${t.video_id}-${t.title}`}
-                onClick={() => onPlayTrack({
-                  video_id: t.video_id, title: t.title, artist: t.artist, thumb: t.thumb, duration: '', language: t.language, stream_url: '',
-                })}
-                className="w-full flex items-center gap-2.5 p-1.5 rounded-xl hover:bg-white/5 text-left transition-colors"
-              >
-                <div className="w-9 h-9 rounded-lg overflow-hidden bg-surface1 shrink-0">
-                  {t.thumb ? <img src={t.thumb} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-[10px] text-overlay0">♪</div>}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-text truncate">{t.title}</p>
-                  <p className="text-[11px] text-overlay1 truncate">{t.artist} · ×{t.plays}</p>
-                </div>
-                <Play className="h-3.5 w-3.5 text-green shrink-0" />
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Trending picks */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-1 text-[11px] text-overlay1">
-          <TrendingUp className="h-3 w-3" /> Trending {trending?.country ? `· ${trending.country}` : ''}
-        </div>
-        {loading ? (
-          <div className="flex gap-1 py-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-green animate-bounce" />
-            <span className="w-1.5 h-1.5 rounded-full bg-green animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="w-1.5 h-1.5 rounded-full bg-green animate-bounce" style={{ animationDelay: '300ms' }} />
-          </div>
-        ) : !trending || trending.tracks.length === 0 ? (
-          <p className="text-xs text-overlay0 py-1">{trending?.error || 'No trending tracks right now.'}</p>
-        ) : (
-          <div className="space-y-1.5">
-            {trending.tracks.slice(0, 5).map(t => (
-              <button
-                key={t.video_id || t.title}
-                onClick={() => onPlayTrack(t)}
-                className="w-full flex items-center gap-2.5 p-1.5 rounded-xl hover:bg-white/5 text-left transition-colors"
-              >
-                <div className="w-9 h-9 rounded-lg overflow-hidden bg-surface1 shrink-0">
-                  {t.thumb ? <img src={t.thumb} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-[10px] text-overlay0">♪</div>}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-text truncate">{t.title}</p>
-                  <p className="text-[11px] text-overlay1 truncate">{t.artist}{t.language && t.language !== 'other' ? ` · ${t.language.toUpperCase()}` : ''}</p>
-                </div>
-                <Play className="h-3.5 w-3.5 text-green shrink-0" />
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+    </DashCard>
   )
 }

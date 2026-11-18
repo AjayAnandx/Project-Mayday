@@ -37,7 +37,7 @@ def _defs_by_name():
 
 def test_tool_budget_phase1():
     defs = get_tool_definitions()
-    assert len(defs) == 140, f"expected 140 defs (131 music-merge + 9 gmail), got {len(defs)}"
+    assert len(defs) == 149, f"expected 149 defs (131 music-merge + 9 gmail + 9 maps), got {len(defs)}"
 
 
 def test_retired_music_names_gone_from_defs():

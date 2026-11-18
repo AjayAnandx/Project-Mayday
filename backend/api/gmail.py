@@ -18,7 +18,7 @@ import urllib.parse
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from backend.core import gmail_store
@@ -54,9 +54,17 @@ def _gmail_cfg() -> dict:
         return {}
 
 
-def _redirect_uri() -> str:
+def _redirect_uri(request: Request | None = None) -> str:
+    """Callback URL. Follow the port the browser is actually using when
+    Mayday is opened on loopback, so the Windows service (8771) and the dev
+    server (8772) both complete OAuth against the right listener."""
     cfg = _gmail_cfg()
-    return (cfg.get("redirect_uri") or "http://localhost:8772/api/auth/gmail/callback").strip()
+    configured = (cfg.get("redirect_uri") or "").strip()
+    if request is not None:
+        host = (request.url.hostname or "").lower()
+        if host in ("localhost", "127.0.0.1") and request.url.port:
+            return f"http://localhost:{request.url.port}/api/auth/gmail/callback"
+    return configured or "http://localhost:8771/api/auth/gmail/callback"
 
 
 def _agent_email() -> str:
@@ -65,6 +73,37 @@ def _agent_email() -> str:
     if not email:
         email = gmail_store.get_agent_email()
     return email
+
+
+def _user_email() -> str:
+    cfg = _gmail_cfg()
+    email = (cfg.get("user_email") or "").strip()
+    if not email:
+        email = gmail_store.get_user_email()
+    return email
+
+
+_SCOPE_URLS = {
+    "gmail.modify": "https://www.googleapis.com/auth/gmail.modify",
+    "gmail.readonly": "https://www.googleapis.com/auth/gmail.readonly",
+    "userinfo.email": "https://www.googleapis.com/auth/userinfo.email",
+    "openid": "openid",
+}
+
+
+def _scopes_for(account: str) -> list[str]:
+    """Per-account OAuth scopes. Personal slot is ALWAYS readonly."""
+    cfg = _gmail_cfg()
+    if account == "user":
+        want = (cfg.get("scopes_user") or "gmail.readonly").strip()
+        if want != "gmail.readonly":
+            logger.warning("Refusing scopes_user=%r — personal slot is always readonly", want)
+            want = "gmail.readonly"
+    else:
+        want = (cfg.get("scopes_agent") or "gmail.modify").strip()
+        if want not in ("gmail.modify", "gmail.readonly"):
+            want = "gmail.modify"
+    return [_SCOPE_URLS[want], _SCOPE_URLS["userinfo.email"], _SCOPE_URLS["openid"]]
 
 
 def _client_pair() -> tuple[str, str]:
@@ -112,38 +151,49 @@ def gmail_status():
     account = (cfg.get("account") or "agent").strip() or "agent"
     email = _agent_email()
     authed = is_authenticated("agent")
+    user_email = _user_email()
     return {
         "enabled": bool(cfg.get("enabled", True)),
         "account": account,
         "agent_email": email,
         "authenticated": authed,
         "history_id": gmail_store.get_history_id("agent"),
+        "user": {
+            "email": user_email,
+            "authenticated": is_authenticated("user"),
+            "history_id": gmail_store.get_history_id("user"),
+        },
         "redirect_uri": _redirect_uri(),
         "ui_mode": cfg.get("ui_mode", "minimal"),
     }
 
 
 @router.get("/api/auth/gmail/start")
-def gmail_auth_start(account: str = Query("agent")):
+def gmail_auth_start(request: Request, account: str = Query("agent")):
     if account not in ("agent", "user"):
         raise HTTPException(400, "account must be agent|user")
     client_id, _ = _client_pair()
-    redirect_uri = _redirect_uri()
+    redirect_uri = _redirect_uri(request)
     state = secrets.token_urlsafe(32)
     _prune_states(time.time())
-    _OAUTH_STATES[state] = {"account": account, "expires_at": time.time() + _STATE_TTL_S}
+    _OAUTH_STATES[state] = {
+        "account": account,
+        "redirect_uri": redirect_uri,
+        "expires_at": time.time() + _STATE_TTL_S,
+    }
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": " ".join(SCOPES),
+        "scope": " ".join(_scopes_for(account)),
         "access_type": "offline",
         "prompt": "consent",
         "state": state,
         "include_granted_scopes": "true",
     }
-    # login_hint forces the account picker toward the Mayday mailbox
-    hint = _agent_email() if account == "agent" else ""
+    # login_hint steers the account picker: Mayday mailbox for agent,
+    # personal address for the read-only user slot.
+    hint = _agent_email() if account == "agent" else _user_email()
     if hint:
         params["login_hint"] = hint
         params["prompt"] = "select_account consent"
@@ -162,7 +212,7 @@ def gmail_auth_callback(code: str = Query(""), state: str = Query("")):
         raise HTTPException(400, "Google returned no code (consent denied?)")
 
     client_id, client_secret = _client_pair()
-    redirect_uri = _redirect_uri()
+    redirect_uri = saved.get("redirect_uri") or _redirect_uri()
     try:
         r = httpx.post(
             GOOGLE_TOKEN_URL,
@@ -202,18 +252,24 @@ def gmail_auth_callback(code: str = Query(""), state: str = Query("")):
     except Exception as e:
         raise HTTPException(502, f"Token saved but getProfile failed: {e}")
     email = (profile.get("emailAddress") or "").strip()
-    expected = _agent_email()
-    if account == "agent" and expected and email.lower() != expected.lower():
+    expected = _agent_email() if account == "agent" else _user_email()
+    if expected and email.lower() != expected.lower():
         try:
             token_path.unlink()
         except OSError:
             pass
+        which = "Mayday" if account == "agent" else "personal"
         raise HTTPException(
             400,
-            f"Wrong account: connected {email} but Mayday expects {expected}. "
-            "Re-click Connect and pick the Mayday account in the picker.",
+            f"Wrong account: connected {email} but Mayday expects {expected} ({which}). "
+            "Re-click Connect and pick the right account in the picker.",
         )
-    gmail_store.set_agent_email(email)
+    # Keep identities separate: the agent slot owns agent_email, the personal
+    # slot owns user_email. Never let a personal reconnect overwrite Mayday's.
+    if account == "agent":
+        gmail_store.set_agent_email(email)
+    else:
+        gmail_store.set_user_email(email)
     if profile.get("historyId"):
         gmail_store.set_history_id(account, str(profile["historyId"]))
     logger.info("Gmail connected: account=%s email=%s", account, email)
@@ -226,22 +282,31 @@ def gmail_auth_callback(code: str = Query(""), state: str = Query("")):
 
 
 @router.get("/api/gmail/messages")
-def gmail_messages(q: str = Query("is:unread"), limit: int = Query(10, ge=1, le=50)):
+def gmail_messages(q: str = Query("is:unread"), limit: int = Query(10, ge=1, le=50),
+                   account: str = Query("agent")):
+    if account not in ("agent", "user"):
+        raise HTTPException(400, "account must be agent|user")
     try:
-        data = list_messages(query=q, max_results=limit)
+        data = list_messages(query=q, max_results=limit, account=account)
     except NeedsOAuth as e:
         raise HTTPException(401, str(e))
     except Exception as e:
         msg = str(e)
+        if "invalid_grant" in msg or "expired or revoked" in msg:
+            raise HTTPException(
+                401,
+                f"Gmail token expired or revoked for {account} — reconnect to restore access.",
+            )
         # Token exists but Gmail scope was unchecked on the consent screen
         # (Google granted only userinfo.email/openid). Tell user how to fix.
         if ("insufficientPermissions" in msg or "accessNotConfigured" in msg
                 or "invalid_scope" in msg
                 or "insufficient authentication scopes" in msg.lower()):
+            want = "gmail.modify" if account == "agent" else "gmail.readonly"
             raise HTTPException(
                 403,
-                "Gmail token lacks the gmail.modify scope (only basic profile was granted). "
-                "Re-click 'Connect Gmail for Mayday' and CHECK the Gmail permission box on the consent screen.",
+                f"Gmail token lacks the {want} scope (only basic profile was granted). "
+                "Re-click Connect and CHECK the Gmail permission box on the consent screen.",
             )
         raise HTTPException(502, f"Gmail list failed: {e}")
     return {"q": q, "messages": data.get("messages", []),

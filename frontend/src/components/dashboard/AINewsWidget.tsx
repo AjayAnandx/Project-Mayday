@@ -1,91 +1,70 @@
-import { Newspaper, ExternalLink, Loader2 } from 'lucide-react'
+import { Newspaper, ArrowUpRight, Loader2 } from 'lucide-react'
 import type { AiNewsResponse } from '../../types/dashboard'
+import { DashCard, CardHeader } from './DashCard'
 
-interface AINewsWidgetProps {
-  aiNews: AiNewsResponse | null
+function domain(url: string) {
+  try { return new URL(url).hostname.replace(/^www\./, '') } catch { return '' }
 }
 
-export function AINewsWidget({ aiNews }: AINewsWidgetProps) {
+/** Exa returns page title + "| Site" suffix; keep the headline only. */
+function headline(title: string) {
+  return title.split(' | ')[0].trim()
+}
+
+export function AINewsWidget({ aiNews, className }: { aiNews: AiNewsResponse | null; className?: string }) {
+  const updated = aiNews?.cached_at
+    ? new Date(aiNews.cached_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : null
+
+  let body: React.ReactNode
   if (!aiNews) {
-    return (
-      <div className="rounded-xl bg-surface0/40 border border-surface1/50 p-4 sm:p-5">
-        <div className="flex items-center gap-2 mb-3">
-          <Newspaper className="h-4 w-4 text-green" />
-          <h3 className="text-sm font-semibold text-text">AI News</h3>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-overlay0">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          Loading...
-        </div>
+    body = (
+      <div className="flex items-center gap-2 text-xs text-overlay1 py-6 justify-center">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading headlines…
       </div>
     )
-  }
-
-  if (aiNews.error) {
-    return (
-      <div className="rounded-xl bg-surface0/40 border border-surface1/50 p-4 sm:p-5">
-        <div className="flex items-center gap-2 mb-3">
-          <Newspaper className="h-4 w-4 text-green" />
-          <h3 className="text-sm font-semibold text-text">AI News</h3>
-        </div>
-        <p className="text-xs text-overlay0">Unable to fetch AI news</p>
+  } else if (aiNews.error || aiNews.articles.length === 0) {
+    body = (
+      <div className="flex-1 rounded-2xl bg-hatch border border-white/[0.04] flex items-center justify-center py-8 px-4 text-center">
+        <p className="text-xs text-overlay1">{aiNews.error ? 'Unable to fetch AI news right now' : 'No articles available'}</p>
       </div>
     )
-  }
-
-  if (aiNews.articles.length === 0) {
-    return (
-      <div className="rounded-xl bg-surface0/40 border border-surface1/50 p-4 sm:p-5">
-        <div className="flex items-center gap-2 mb-3">
-          <Newspaper className="h-4 w-4 text-green" />
-          <h3 className="text-sm font-semibold text-text">AI News</h3>
-        </div>
-        <p className="text-xs text-overlay0">No articles available</p>
-      </div>
+  } else {
+    body = (
+      <ol className="divide-y divide-white/[0.05] -my-1">
+        {aiNews.articles.map((a, i) => (
+          <li key={a.url}>
+            <a
+              href={a.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group flex gap-3 py-2.5"
+            >
+              <span className="text-[11px] font-mono text-overlay0 pt-0.5 tabular-nums">{String(i + 1).padStart(2, '0')}</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] leading-snug text-text line-clamp-2 group-hover:text-green transition-colors">
+                  {headline(a.title)}
+                </p>
+                <p className="text-[10px] text-overlay1 mt-1">
+                  {domain(a.url)}{a.published_date ? ` · ${a.published_date}` : ''}
+                </p>
+              </div>
+              <ArrowUpRight className="h-3.5 w-3.5 text-overlay0 group-hover:text-green shrink-0 mt-0.5 transition-colors" />
+            </a>
+          </li>
+        ))}
+      </ol>
     )
   }
 
   return (
-    <div className="rounded-xl bg-surface0/40 border border-surface1/50 p-4 sm:p-5">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <Newspaper className="h-4 w-4 text-green" />
-          <h3 className="text-sm font-semibold text-text">AI News</h3>
-        </div>
-        {aiNews.cached_at && (
-          <span className="text-[10px] text-overlay0">
-            {new Date(aiNews.cached_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
-          </span>
-        )}
-      </div>
-      <div className="space-y-2">
-        {aiNews.articles.map((article, i) => (
-          <a
-            key={i}
-            href={article.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block p-2.5 rounded-lg hover:bg-surface1/30 transition-colors group"
-          >
-            <div className="flex items-start gap-2">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-text group-hover:text-green transition-colors leading-snug">
-                  {article.title}
-                </p>
-                {article.summary && (
-                  <p className="text-xs text-overlay0 mt-1 line-clamp-2">{article.summary}</p>
-                )}
-                <div className="flex items-center gap-2 mt-1.5">
-                  {article.published_date && (
-                    <span className="text-[10px] text-overlay0">{article.published_date}</span>
-                  )}
-                </div>
-              </div>
-              <ExternalLink className="h-3 w-3 text-overlay0 shrink-0 mt-1 opacity-0 group-hover:opacity-100 transition-opacity" />
-            </div>
-          </a>
-        ))}
-      </div>
-    </div>
+    <DashCard className={className}>
+      <CardHeader
+        title="AI News"
+        icon={Newspaper}
+        right={updated && <span className="text-[11px] text-overlay1">updated {updated}</span>}
+      />
+      {body}
+    </DashCard>
   )
 }

@@ -6296,4 +6296,121 @@ DEEP_QUERIES = {
 6. `play_song` single → onended auto-fetches `language=ta` next track; `play_mood chill` drains 15 → 16th same mood; `autoPlay off` stops correctly
 7. `pytest` suite green, `npx tsc --noEmit` clean
 
+---
+
+## Google Maps for Mayday — Spot / Traffic / Destination / About-the-Place — Plan
+
+### Status — PLANNED (no code yet, Oct 2026)
+
+### Mapping (user need → Google API)
+| Need | API | Returns |
+|------|-----|---------|
+| Spot (find places) | Places API — Text Search / Nearby Search | Name, rating, review count, price level, open-now, photo refs |
+| Traffic (how bad now) | Routes API `computeRoutes` (`travelMode: DRIVE`, traffic-aware) | Duration, `durationInTraffic`, polyline, distance |
+| Destination (A→B routing) | Routes API + Distance Matrix | Best route, ETA, alternatives, drive/transit/walk compare |
+| About the place | Place Details + existing Exa web search | Hours, editorial summary, reviews + richer web context |
+
+One Maps Platform key (Places API New + Routes API enabled) covers all four. Billing: ~$200/mo free credit; tens of calls/day stays inside free tier.
+
+### Reuse of Existing Mayday Patterns
+*   Secrets via `backend/core/config.py` `ENV_OVERRIDES` + `.env` (`GOOGLE_MAPS_API_KEY`) — same as Gmail/Ollama keys.
+*   Tool dispatch via `function_registry.py` `LOCAL_TOOL_DEFINITIONS` + `GROUP_SETS` + `ToolRouter` prefix fallback (add `("maps_", "maps")`, like `("gmail_", "gmail")`).
+*   Intent routing via `query_classifier.py` (new `places` intent, same shape as `email` intent).
+*   Home origin via existing `GET /api/location` (`resolve_location`) + `config.yaml location.default_location`.
+*   Notifications via existing `fire_notification(category=...)` for commute guard.
+
+### Phase 0 — Key Setup (manual, 10 min)
+1.  Cloud Console → project `mayday-509414` → enable **Places API (New)** + **Routes API**.
+2.  Credentials → Create **API key** → restrict: API restrictions = Places + Routes only; app restriction per deployment.
+3.  Put in `.env` as `GOOGLE_MAPS_API_KEY` (never chat/commits). `.env` already gitignored.
+
+### Phase 1 — Config + Core Service
+| File | Change |
+|------|--------|
+| `config.yaml` | Add `maps:` block (`enabled`, `default_mode: drive`, `home_location`, cache TTL) |
+| `backend/core/config.py` | Add `maps: {api_key: GOOGLE_MAPS_API_KEY}` to `ENV_OVERRIDES` |
+| `.env.example` | `GOOGLE_MAPS_API_KEY=` + restriction note |
+| `backend/core/maps_service.py` | **NEW** — `search_places(text, lat, lon)`, `place_details(place_id)`, `route(origin, destination, mode, depart_now)`, 24h geocode cache |
+
+### Phase 2 — LLM Tools (`maps` group, 5 tools)
+| Tool | Behavior |
+|------|----------|
+| `maps_search_places` | Text Search → name/rating/open-now/place_id list |
+| `maps_place_details` | Hours, summary, reviews, photos for a place_id |
+| `maps_route` | A→B route + ETA + alternatives, any travelMode |
+| `maps_traffic` | Drive route emphasizing `durationInTraffic` vs free-flow |
+| `maps_nearby` | Nearby Search around stored user location |
+
+Register in `function_registry.py` + `GROUP_SETS["maps"]` in `chat.py` + aliases (`q↔query`, `from→origin`) + `GMAIL`-style instructions block in `SYSTEM_PROMPT` (BASE, always active).
+
+### Phase 3 — Classifier + Frontend (minimal)
+*   `query_classifier.py`: `places` intent (`near me`, `how long to`, `traffic to`, `best route`, `about <place>`, `top rated`) → groups `["basic", "maps"]`; add `maps` to `_all_groups`.
+*   Frontend v1: chat answers carry data (no new page). Optional route card later.
+
+### Phase 4 — Tests + Verification
+*   **NEW** `backend/test_maps_service.py` — mocked `httpx` (zero quota burn): search/details/route parse, cache hit, missing-key error.
+*   Live: one `maps_search_places` + one `maps_route` to verify key; `pytest` green; `tsc --noEmit` clean.
+
+### Follow-ups (ordered by payoff, build on demand)
+1.  **Commute guard** — Scheduler checks traffic to next calendar event 30 min prior → *"leave now, 25 min with traffic"* (1–2 calls/day).
+2.  **Day-out planner** — search → details → Routes waypoint optimization → itinerary.
+3.  **Weekend discovery** — top-rated nearby spots (trends + Places ratings).
+4.  **ETA sharing** — live ETA via Gmail/Telegram bridge.
+5.  **Place memory** — visited/liked spots as KG nodes for personalized suggestions.
+6.  **Mode compare** — drive vs transit vs walk numbers for "should I drive or metro?".
+
+### Prerequisites (user action)
+1. Maps API key in `.env` as `GOOGLE_MAPS_API_KEY` (restricted to Places + Routes).
+2. Home/city default for `location.default_location` (or keep IP-based auto).
+3. Confirm scope: core four first, commute guard included or deferred.
+
+---
+
+## Personal Gmail Watch (Read-Only) — Plan
+
+### Status — PLANNED (no code yet, Oct 2026)
+
+### Decision
+| Decision | Choice | Why |
+|----------|--------|-----|
+| Scope for personal | `gmail.readonly` (not modify) | Least privilege — Mayday can never mark/delete/send personal mail |
+| Send from personal | Never — code-enforced | `gmail_send`/`gmail_reply` reject `account="user"`; outbound stays agent-only |
+| Auto-ingest | Sender + subject + snippet only | Bodies stay on Google until explicit `gmail_read` |
+| Kill switch | `gmail.account: both → agent` + delete `tokens/user_token.json` | One flip + file delete fully disconnects |
+
+Tradeoff (accepted design): personal senders/subjects land in notifications, KG, op log — LLM sees them. Optional sender/label exclusion list on request.
+
+### Architecture
+```
+OAuth (readonly scope, login_hint=personal) → tokens/user_token.json
+Scheduler._check_gmail: account=="both" → ["agent","user"] (ALREADY BUILDS THIS)
+  → history.list per account → toast (category=email, tagged account:user)
+  → KG email node + op log
+gmail_send/reply: raise on account="user"
+Frontend: second badge line or combined count + pause toggle
+```
+
+### File Change Checklist (ordered)
+| # | File | Action |
+|---|------|--------|
+| 1 | `config.yaml` | `gmail.account: "both"` + per-account scopes (`agent: modify`, `user: readonly`) |
+| 2 | `backend/api/gmail.py` | `start?account=user` requests readonly scope set + personal `login_hint` |
+| 3 | `backend/core/gmail_service.py` | `send_message`/`modify_labels` raise on `account="user"` |
+| 4 | `backend/core/scheduler.py` | No change (both-iteration already built) — verify |
+| 5 | `frontend/src/hooks/useGmail.ts` + `GmailBadge.tsx` | Personal badge row + pause toggle |
+| 6 | `backend/test_gmail_service.py` | Readonly start URL, user-send rejection, both-iteration (mocked) |
+
+### Verification Checklist
+1. Connect writes `tokens/user_token.json` with readonly scope.
+2. Personal inbound → toast within 60s, tagged personal.
+3. `gmail_send(..., account="user")` → refused; agent sends unaffected.
+4. Disconnect (delete token + flip to `agent`) → personal stops, agent continues.
+5. `pytest` green, `tsc --noEmit` clean, no tokens committed.
+
+### Prerequisites (user action)
+1. Personal Gmail address (for `login_hint` + Test users).
+2. Address on OAuth consent screen → Test users in `mayday-509414`.
+3. Confirm auto-ingest tradeoff + optional exclusion list.
+
+
 

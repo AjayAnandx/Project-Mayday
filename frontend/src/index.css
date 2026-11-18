@@ -107,3 +107,13 @@ body {
   background: #1c1c1c;
   border-radius: 3px;
 }
+
+/* Dashboard — hatched "empty" fill used by heatmap cells, donut remainder, bars */
+.bg-hatch {
+  background-color: rgba(255, 255, 255, 0.02);
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.09) 0 1.5px,
+    transparent 1.5px 5px
+  );
+}

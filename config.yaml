@@ -243,15 +243,29 @@ telegram:
 openalex:
   api_key: ""  # Set via OPENALEX_API_KEY env var or .env (get from https://openalex.org/api)
 
+maps:
+  enabled: true
+  api_key: ""  # Set via GOOGLE_MAPS_API_KEY env var or .env (restricted to Places New + Routes + Geocoding + Address Validation + Time Zone)
+  home: ""
+  home_latlng: ""  # filled by validate step, e.g. "13.0282,80.2102" — avoids a geocode call per route
+  work: ""
+  work_latlng: ""
+  default_modes: [drive, two-wheeler]  # travel modes Mayday compares (drive | two-wheeler | transit | walk)
+  avoid: []                            # e.g. [tolls, highways] passed to Routes
+  cache_ttl_hours: 24
+
 gmail:
   enabled: true
-  account: agent                 # agent | user | both
+  account: both                  # agent | user | both (both = watch personal inbox too)
   agent_email: "maydayishereatwork@gmail.com"
+  user_email: ""                 # your personal Gmail (login_hint + identity check for the user slot)
+  scopes_agent: gmail.modify     # modify | readonly
+  scopes_user: gmail.readonly    # personal slot is ALWAYS readonly — Mayday can never send/mark personal mail
   credentials_path: backend/credentials/gmail_credentials.json
   token_path_agent: tokens/agent_token.json
   token_path_user: tokens/user_token.json
   polling_interval: 60
-  redirect_uri: http://localhost:8772/api/auth/gmail/callback  # local-only (no Tailscale)
+  redirect_uri: http://localhost:8771/api/auth/gmail/callback  # service port; loopback port is followed automatically in dev (8772)
   watch_enabled: false           # v2 only (Pub/Sub)
   auto_reply: false              # approval-gated: draft only until user says approve/send
   ui_mode: minimal

@@ -1,9 +1,16 @@
+export interface GmailUserSlot {
+  email: string
+  authenticated: boolean
+  history_id: string | null
+}
+
 export interface GmailStatus {
   enabled: boolean
   account: string
   agent_email: string
   authenticated: boolean
   history_id: string | null
+  user: GmailUserSlot
   redirect_uri: string
   ui_mode: string
 }

@@ -1,69 +1,57 @@
-import { History, Plus, Pencil, Trash2, RefreshCw } from 'lucide-react'
+import { History } from 'lucide-react'
+import { cn } from '../../lib/utils'
 import type { DashboardOperation } from '../../types/dashboard'
+import { DashCard, CardHeader } from './DashCard'
 
-interface RecentActivityProps {
-  operations: DashboardOperation[]
-}
-
-const actionConfig: Record<string, { icon: typeof Plus; color: string; bg: string }> = {
-  create: { icon: Plus, color: 'text-green', bg: 'bg-green/15' },
-  update: { icon: Pencil, color: 'text-blue-400', bg: 'bg-blue-400/15' },
-  delete: { icon: Trash2, color: 'text-red', bg: 'bg-red/15' },
+const ACTION: Record<string, { label: string; pill: string; dot: string }> = {
+  create: { label: 'Created', pill: 'bg-green text-black', dot: 'bg-green' },
+  update: { label: 'Updated', pill: 'bg-white/10 text-subtext1', dot: 'bg-subtext0' },
+  delete: { label: 'Deleted', pill: 'bg-red text-white', dot: 'bg-red' },
 }
 
 function timeAgo(ts: string): string {
-  const diff = Date.now() - new Date(ts).getTime()
-  const mins = Math.floor(diff / 60000)
+  const mins = Math.floor((Date.now() - new Date(ts).getTime()) / 60000)
   if (mins < 1) return 'just now'
   if (mins < 60) return `${mins}m ago`
   const hours = Math.floor(mins / 60)
   if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
+  return `${Math.floor(hours / 24)}d ago`
 }
 
-export function RecentActivity({ operations }: RecentActivityProps) {
-  if (operations.length === 0) {
-    return (
-      <div className="rounded-xl bg-surface0/40 border border-surface1/50 p-4 sm:p-5">
-        <div className="flex items-center gap-2 mb-3">
-          <History className="h-4 w-4 text-green" />
-          <h3 className="text-sm font-semibold text-text">Recent Activity</h3>
-        </div>
-        <p className="text-xs text-overlay0">No recent activity</p>
-      </div>
-    )
-  }
-
+export function RecentActivity({ operations, onOpen, className }: {
+  operations: DashboardOperation[]
+  onOpen?: () => void
+  className?: string
+}) {
   return (
-    <div className="rounded-xl bg-surface0/40 border border-surface1/50 p-4 sm:p-5">
-      <div className="flex items-center gap-2 mb-3">
-        <History className="h-4 w-4 text-green" />
-        <h3 className="text-sm font-semibold text-text">Recent Activity</h3>
-      </div>
-      <div className="space-y-1">
-        {operations.map((op) => {
-          const cfg = actionConfig[op.action] || { icon: RefreshCw, color: 'text-overlay0', bg: 'bg-surface0/50' }
-          const Icon = cfg.icon
-          return (
-            <div key={op.id} className="flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-surface1/30 transition-colors">
-              <div className={`w-6 h-6 rounded-md ${cfg.bg} flex items-center justify-center shrink-0`}>
-                <Icon className={`h-3 w-3 ${cfg.color}`} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs text-text truncate">
-                  <span className="font-medium capitalize">{op.action}</span>
-                  {' '}
-                  <span className="text-overlay0">{op.entity_type}</span>
-                  {' '}
-                  &lsquo;{op.entity_name}&rsquo;
-                </p>
-              </div>
-              <span className="text-[10px] text-overlay0 shrink-0">{timeAgo(op.timestamp)}</span>
-            </div>
-          )
-        })}
-      </div>
-    </div>
+    <DashCard className={className}>
+      <CardHeader title="Recent Activity" icon={History} onOpen={onOpen} />
+      {operations.length === 0 ? (
+        <div className="flex-1 rounded-2xl bg-hatch border border-white/[0.04] flex items-center justify-center py-8 text-xs text-overlay1">
+          No recent activity
+        </div>
+      ) : (
+        <ol className="relative">
+          {/* timeline rail */}
+          <span className="absolute left-[5px] top-2 bottom-2 w-px bg-white/[0.08]" aria-hidden />
+          {operations.map(op => {
+            const a = ACTION[op.action] ?? { label: op.action, pill: 'bg-white/10 text-subtext1', dot: 'bg-overlay1' }
+            return (
+              <li key={op.id} className="relative flex items-start gap-3 py-2 pl-5">
+                <span className={cn('absolute left-0 top-[13px] w-[11px] h-[11px] rounded-full border-2 border-[#0b0b0b]', a.dot)} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] text-text truncate">{op.entity_name || "(untitled)"}</p>
+                  <p className="flex items-center gap-1.5 mt-1">
+                    <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold', a.pill)}>{a.label}</span>
+                    <span className="text-[10px] text-overlay1 capitalize">{op.entity_type}</span>
+                  </p>
+                </div>
+                <span className="text-[10px] text-overlay1 shrink-0 pt-0.5 tabular-nums">{timeAgo(op.timestamp)}</span>
+              </li>
+            )
+          })}
+        </ol>
+      )}
+    </DashCard>
   )
 }

@@ -150,10 +150,54 @@ def test_store_roundtrip(monkeypatch, tmp_path):
 
     monkeypatch.setattr(gst, "STATE_PATH", tmp_path / "gmail_state.json")
     gst.set_agent_email("maydayishereatwork@gmail.com")
+    gst.set_user_email("me@example.com")
     gst.set_history_id("agent", "12345")
     assert gst.get_agent_email() == "maydayishereatwork@gmail.com"
+    assert gst.get_user_email() == "me@example.com"
     assert gst.get_history_id("agent") == "12345"
     assert gst.get_history_id("user") is None
+
+
+def test_user_callback_keeps_agent_identity(monkeypatch, tmp_path):
+    """Reconnecting the personal inbox must not overwrite the agent email."""
+    import time
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import backend.api.gmail as gmail_api
+    import backend.core.gmail_store as gst
+
+    monkeypatch.setattr(gst, "STATE_PATH", tmp_path / "gmail_state.json")
+    gst.set_agent_email("maydayishereatwork@gmail.com")
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"access_token": "at", "refresh_token": "rt"}
+
+    monkeypatch.setattr(gmail_api.httpx, "post", lambda *a, **kw: _Resp())
+    monkeypatch.setattr(gmail_api, "_client_pair", lambda: ("cid", "csec"))
+    monkeypatch.setattr(gmail_api, "_gmail_cfg",
+                        lambda: {"user_email": "me@example.com"})
+    monkeypatch.setattr(gmail_api, "get_token_path",
+                        lambda account="agent": tmp_path / f"{account}.json")
+    monkeypatch.setattr(gmail_api, "get_profile",
+                        lambda account="agent": {"emailAddress": "me@example.com",
+                                                "historyId": "777"})
+    gmail_api._OAUTH_STATES["test-state"] = {
+        "account": "user",
+        "redirect_uri": "http://localhost:8771/api/auth/gmail/callback",
+        "expires_at": time.time() + 60,
+    }
+    app = FastAPI()
+    app.include_router(gmail_api.router)
+    c = TestClient(app, raise_server_exceptions=False)
+    r = c.get("/api/auth/gmail/callback?code=abc&state=test-state")
+    assert r.status_code == 200, r.text
+    assert gst.get_agent_email() == "maydayishereatwork@gmail.com"
+    assert gst.get_user_email() == "me@example.com"
+    assert (tmp_path / "user.json").exists()
 
 
 def test_client_pair_reads_installed_block(monkeypatch, tmp_path):
@@ -219,9 +263,9 @@ def test_gmail_list_formats_messages(monkeypatch):
 
     _patch_gmail_service(
         monkeypatch,
-        list_messages=lambda query, max_results: {
+        list_messages=lambda query, max_results, account="agent": {
             "messages": [{"id": "m1", "threadId": "t1"}], "resultSizeEstimate": 1},
-        get_message=lambda mid, fmt="full", **kw: {
+        get_message=lambda mid, fmt="full", account="agent", **kw: {
             "id": "m1", "threadId": "t1", "labelIds": ["UNREAD"],
             "snippet": "hello there",
             "payload": {"headers": [
@@ -365,3 +409,155 @@ def test_gmail_tools_registered():
     assert len(_validate_tool_definitions(defs)) == 9
     assert _TOOL_DEFAULTS["gmail_list"]["query"] == "is:unread"
     assert _PARAM_ALIASES["gmail_send"]["recipient"] == "to"
+
+
+def test_user_scopes_always_readonly(monkeypatch):
+    """Personal slot can never escalate: even scopes_user=modify is forced down."""
+    import backend.api.gmail as gmail_api
+
+    monkeypatch.setattr(gmail_api, "_gmail_cfg",
+                        lambda: {"scopes_user": "gmail.modify", "scopes_agent": "gmail.modify"})
+    user_scopes = gmail_api._scopes_for("user")
+    assert "https://www.googleapis.com/auth/gmail.readonly" in user_scopes
+    assert "https://www.googleapis.com/auth/gmail.modify" not in user_scopes
+    agent_scopes = gmail_api._scopes_for("agent")
+    assert "https://www.googleapis.com/auth/gmail.modify" in agent_scopes
+
+
+def test_user_start_requests_readonly(monkeypatch):
+    import urllib.parse as _u
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import backend.api.gmail as gmail_api
+
+    monkeypatch.setattr(gmail_api, "_gmail_cfg", lambda: {})
+    monkeypatch.setattr(gmail_api, "_user_email", lambda: "me@example.com")
+    monkeypatch.setattr(gmail_api, "_client_pair", lambda: ("cid", "csec"))
+    app = FastAPI()
+    app.include_router(gmail_api.router)
+    c = TestClient(app, follow_redirects=False)
+    r = c.get("/api/auth/gmail/start?account=user")
+    assert r.status_code == 302
+    q = dict(_u.parse_qsl(_u.urlsplit(r.headers["location"]).query))
+    assert "gmail.readonly" in q.get("scope", "")
+    assert "gmail.modify" not in q.get("scope", "")
+    assert q.get("login_hint") == "me@example.com"
+
+
+def test_user_writes_refused_without_network():
+    """Send/modify/draft/label on account=user raise before any Google call."""
+    import backend.core.gmail_service as gs
+    import pytest as _pt
+
+    gs._sent_cache.clear()
+    with _pt.raises(PermissionError):
+        gs.send_message("a@x.com", "s", "b", account="user", idempotency_key="k-x")
+    with _pt.raises(PermissionError):
+        gs.modify_labels("m1", remove_labels=["UNREAD"], account="user")
+    with _pt.raises(PermissionError):
+        gs.create_draft("a@x.com", "s", "b", account="user")
+    with _pt.raises(PermissionError):
+        gs.create_label("X", account="user")
+
+
+def test_status_includes_user_slot(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import backend.api.gmail as gmail_api
+    import backend.core.gmail_service as gs
+
+    monkeypatch.setattr(gmail_api, "_gmail_cfg",
+                        lambda: {"enabled": True, "account": "both",
+                                 "agent_email": "agent@example.com",
+                                 "user_email": "me@example.com"})
+    monkeypatch.setattr(gs, "get_token_path",
+                        lambda account="agent": tmp_path / f"{account}.json")
+    import backend.core.gmail_store as _gst
+    monkeypatch.setattr(_gst, "STATE_PATH", tmp_path / "gmail_state.json")
+    app = FastAPI()
+    app.include_router(gmail_api.router)
+    c = TestClient(app, raise_server_exceptions=False)
+    body = c.get("/api/gmail/status").json()
+    assert body["account"] == "both"
+    assert body["user"] == {"email": "me@example.com", "authenticated": False,
+                            "history_id": None}
+
+
+def test_gmail_list_uses_matching_account_for_metadata(monkeypatch):
+    """Regression: list(account=user) fetched metadata with the agent token,
+    so every personal message 404'd. Both calls must carry the same account."""
+    import backend.functions.gmail_functions as gf
+
+    seen = {}
+
+    def fake_list(query, max_results, account="agent"):
+        seen["list"] = account
+        return {"messages": [{"id": "m1", "threadId": "t1"}], "resultSizeEstimate": 1}
+
+    def fake_get(mid, fmt="full", account="agent", **kw):
+        seen["get"] = account
+        return {"id": mid, "threadId": "t1", "labelIds": ["UNREAD"], "snippet": "hi",
+                "payload": {"headers": [
+                    {"name": "From", "value": "a@x.com"},
+                    {"name": "Subject", "value": "S"},
+                    {"name": "Date", "value": "today"},
+                ]}}
+
+    _patch_gmail_service(monkeypatch, list_messages=fake_list, get_message=fake_get)
+    out = gf.gmail_list("is:unread", 5, account="user")
+    assert seen == {"list": "user", "get": "user"}, seen
+    assert "a@x.com" in out
+
+
+def test_gmail_list_routes_by_account(monkeypatch):
+    """account=user reaches the user token path; default stays agent; junk rejected."""
+    import asyncio
+    import backend.functions.gmail_functions as gf
+
+    seen = {}
+
+    def fake_list(query, max_results, account="agent"):
+        seen["account"] = account
+        if account == "user":
+            from backend.core.gmail_service import NeedsOAuth
+            raise NeedsOAuth("no user token")
+        return {"messages": [], "resultSizeEstimate": 0}
+
+    _patch_gmail_service(monkeypatch, list_messages=fake_list)
+
+    out_default = gf.gmail_list("is:unread", 5)
+    assert seen["account"] == "agent"
+    assert "No Gmail messages" in out_default
+
+    out_user = gf.gmail_list("is:unread", 5, account="user")
+    assert seen["account"] == "user"
+    assert "Watch personal inbox" in out_user
+
+    out_bad = gf.gmail_list("is:unread", 5, account="work")
+    assert "Invalid account" in out_bad
+
+    async def _dispatch():
+        from backend.assistant.function_registry import dispatch_call
+        return await dispatch_call("gmail_list", {"query": "is:unread", "account": "user"})
+
+    out_dispatch = asyncio.run(_dispatch())
+    assert "Watch personal inbox" in out_dispatch
+
+
+def test_user_sync_never_overwrites_agent_email(monkeypatch, tmp_path):
+    """Regression: first user-slot sync called set_agent_email(personal),
+    corrupting the agent identity. Only the agent slot may store it."""
+    import backend.core.gmail_store as gst
+    from backend.core.scheduler import Scheduler
+
+    monkeypatch.setattr(gst, "STATE_PATH", tmp_path / "gmail_state.json")
+    gst.set_agent_email("maydayishereatwork@gmail.com")
+
+    import backend.core.gmail_service as gs
+
+    monkeypatch.setattr(gs, "get_profile",
+                        lambda account="agent": {"emailAddress": "me@example.com",
+                                                "historyId": "999"})
+    Scheduler()._sync_gmail_account("user")
+    assert gst.get_agent_email() == "maydayishereatwork@gmail.com"
+    assert gst.get_history_id("user") == "999"

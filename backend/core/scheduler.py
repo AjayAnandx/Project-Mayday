@@ -124,6 +124,7 @@ class Scheduler:
             await self._check_todos()
             await self._check_reminders()
             await self._check_gmail()
+            await self._check_commute()
             await asyncio.sleep(60)
 
     async def _check_events(self):
@@ -253,7 +254,9 @@ class Scheduler:
                 prof = get_profile(account)
                 if prof.get("historyId"):
                     gmail_store.set_history_id(account, str(prof["historyId"]))
-                if prof.get("emailAddress"):
+                # Agent slot owns the stored agent_email; a user-slot sync must
+                # never overwrite it with the personal address.
+                if account == "agent" and prof.get("emailAddress"):
                     gmail_store.set_agent_email(prof["emailAddress"])
                 return
             try:
@@ -309,6 +312,88 @@ class Scheduler:
             get_operation_log().record("create", "email", message_id, subject)
         except Exception:
             pass
+
+    async def _check_commute(self):
+        """Commute guard: for events starting in ~15-45 min with a place-like
+        destination, check live traffic from home and nudge when tight.
+        Once per event. Silent when Maps is off/keyless."""
+        try:
+            from backend.core.config import load_config
+            maps_cfg = load_config().get("maps", {}) or {}
+        except Exception:
+            return
+        if not maps_cfg.get("enabled", True) or not (maps_cfg.get("api_key") or "").strip():
+            return
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self._sync_commute)
+        except Exception as e:
+            logger.warning("Scheduler _check_commute error: %s", e)
+
+    def _sync_commute(self) -> None:
+        import re
+        from backend.core.data_store import get_store
+
+        try:
+            from backend.core.maps_service import (compute_route, fmt_duration,
+                                                   resolve_point, search_places)
+        except Exception as e:
+            logger.warning("Commute guard maps import failed: %s", e)
+            return
+        try:
+            from backend.core.location import resolve_location
+            loc = resolve_location() or {}
+        except Exception:
+            loc = {}
+        now = _utcnow()
+        window_end = now + timedelta(minutes=45)
+        try:
+            events = get_store().list_events(start_date=now.isoformat(),
+                                            end_date=window_end.isoformat())
+        except Exception:
+            return
+        for ev in events:
+            ev_id = ev.get("id", "")
+            key = f"commute:{ev_id}"
+            if key in self._seen_gmail:
+                continue
+            start = ev.get("start_time", "")
+            if not start or start <= now.isoformat() or start > window_end.isoformat():
+                continue
+            text = f"{ev.get('title', '')} {ev.get('description', '')}".strip()
+            dest = None
+            m = re.search(r"\b(?:at|in|to|@)\s+([A-Z][\w\s&'\-.]{2,40})", text)
+            if m:
+                dest = m.group(1).strip()
+            if not dest:
+                continue
+            try:
+                o = resolve_point("home", loc.get("lat"), loc.get("lon"))
+                hits = search_places(dest, o["lat"], o["lng"], max_results=1)
+                if not hits or hits[0].get("lat") is None:
+                    continue
+                h = hits[0]
+                d = {"lat": h["lat"], "lng": h["lng"], "label": h["name"]}
+                r = compute_route(o, d, mode="drive")
+                best = r.get("best", {}) or {}
+                dur = best.get("duration_s")
+                if dur is None:
+                    continue
+                from datetime import datetime as _dt
+                start_dt = _dt.fromisoformat(start)
+                if start_dt.tzinfo is None:
+                    start_dt = start_dt.replace(tzinfo=now.tzinfo)
+                leave_by = start_dt - timedelta(seconds=dur + 600)
+                if now >= leave_by:
+                    self._seen_gmail.add(key)
+                    self.fire_notification(
+                        "Leave now 🚗",
+                        f"{ev.get('title', 'Event')} at {start[11:16]} — "
+                        f"{fmt_duration(dur)} with traffic to {h['name']}.",
+                        category="commute", action_page="chat")
+            except Exception as e:
+                logger.warning("Commute check failed for event %s: %s", ev_id, e)
+                continue
 
 
 _scheduler: Scheduler | None = None

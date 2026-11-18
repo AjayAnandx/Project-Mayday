@@ -70,12 +70,27 @@ def _need_auth_error() -> str:
             "on the Dashboard, pick the Mayday mailbox, and grant access.")
 
 
-def gmail_list(query: str = "is:unread", limit: int = 10) -> str:
+def _check_account(account: str) -> str | None:
+    """Validate the mailbox selector. Returns an error string or None."""
+    if account not in ("agent", "user"):
+        return (f"Invalid account '{account}'. Use account=\"agent\" for Mayday's own mailbox "
+                f"or account=\"user\" for the human's personal inbox.")
+    return None
+
+
+def gmail_list(query: str = "is:unread", limit: int = 10, account: str = "agent") -> str:
     from backend.core.gmail_service import NeedsOAuth, get_message, list_messages
 
+    err = _check_account(account)
+    if err:
+        return err
     try:
-        data = list_messages(query=query, max_results=max(1, min(limit, 50)))
+        data = list_messages(query=query, max_results=max(1, min(limit, 50)), account=account)
     except NeedsOAuth:
+        if account == "user":
+            return ("The personal inbox is not connected. Tell the user to click "
+                    "'Watch personal inbox' on the Dashboard, pick their personal address, "
+                    "and grant read-only access.")
         return _need_auth_error()
     except Exception as e:
         return f"Error listing Gmail messages: {e}"
@@ -85,10 +100,21 @@ def gmail_list(query: str = "is:unread", limit: int = 10) -> str:
     lines = [f"Gmail messages for '{query}' ({data.get('resultSizeEstimate', len(msgs))} estimated):"]
     for m in msgs[:limit]:
         try:
-            meta = get_message(m["id"], fmt="metadata")
+            meta = get_message(m["id"], fmt="metadata", account=account)
         except Exception as e:
-            lines.append(f"  - {m['id']} (metadata failed: {e})")
-            continue
+            if "404" in str(e):
+                # Gmail search-index lag: a just-listed ID can 404 for a few
+                # seconds. One retry before degrading to an ID-only line.
+                try:
+                    import time as _time
+                    _time.sleep(2)
+                    meta = get_message(m["id"], fmt="metadata", account=account)
+                except Exception as e2:
+                    lines.append(f"  - {m['id']} (metadata failed: {e2})")
+                    continue
+            else:
+                lines.append(f"  - {m['id']} (metadata failed: {e})")
+                continue
         h = _headers_of(meta)
         labels = ",".join(meta.get("labelIds", []) or [])
         lines.append(f"  - From: {h.get('From', '?')} | Subject: {h.get('Subject', '(no subject)')} "
@@ -98,19 +124,27 @@ def gmail_list(query: str = "is:unread", limit: int = 10) -> str:
     return "\n".join(lines)
 
 
-def gmail_search(query: str, limit: int = 10) -> str:
+def gmail_search(query: str, limit: int = 10, account: str = "agent") -> str:
     if not query or not query.strip():
         return "Missing required parameter: query (Gmail search syntax, e.g. 'from:alice subject:invoice has:attachment')"
-    return gmail_list(query=query.strip(), limit=limit)
+    return gmail_list(query=query.strip(), limit=limit, account=account)
 
 
-def gmail_read(message_id: str) -> str:
+def gmail_read(message_id: str, account: str = "agent") -> str:
     from backend.core.gmail_service import NeedsOAuth, get_message
 
     if not message_id or not message_id.strip():
         return "Missing required parameter: message_id"
+    err = _check_account(account)
+    if err:
+        return err
     try:
-        msg = get_message(message_id.strip(), fmt="full")
+        msg = get_message(message_id.strip(), fmt="full", account=account)
+    except NeedsOAuth:
+        if account == "user":
+            return ("The personal inbox is not connected. Tell the user to click "
+                    "'Watch personal inbox' on the Dashboard first.")
+        return _need_auth_error()
     except NeedsOAuth:
         return _need_auth_error()
     except Exception as e:
@@ -133,14 +167,20 @@ def gmail_read(message_id: str) -> str:
     return "\n".join(lines)
 
 
-def gmail_thread(thread_id: str) -> str:
+def gmail_thread(thread_id: str, account: str = "agent") -> str:
     from backend.core.gmail_service import NeedsOAuth, get_thread
 
     if not thread_id or not thread_id.strip():
         return "Missing required parameter: thread_id"
+    err = _check_account(account)
+    if err:
+        return err
     try:
-        th = get_thread(thread_id.strip())
+        th = get_thread(thread_id.strip(), account=account)
     except NeedsOAuth:
+        if account == "user":
+            return ("The personal inbox is not connected. Tell the user to click "
+                    "'Watch personal inbox' on the Dashboard first.")
         return _need_auth_error()
     except Exception as e:
         return f"Error reading Gmail thread: {e}"

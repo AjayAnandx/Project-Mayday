@@ -24,7 +24,9 @@ ENV_OVERRIDES = {
         "token_path_agent": "GMAIL_TOKEN_PATH_AGENT",
         "token_path_user": "GMAIL_TOKEN_PATH_USER",
         "agent_email": "GMAIL_AGENT_EMAIL",
+        "user_email": "GMAIL_USER_EMAIL",
     },
+    "maps": {"api_key": "GOOGLE_MAPS_API_KEY"},
 }
 
 

@@ -99,6 +99,7 @@ _PREFIX_GROUP_MAP = (
     ("get_source_code", "design_mcp"),
     ("music_", "music"),
     ("video_popup", "music"),
+    ("maps_", "maps"),
     ("gmail_", "gmail"),
 )
 

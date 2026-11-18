@@ -7,8 +7,23 @@ interface UseGmailReturn {
   unreadCount: number
   loading: boolean
   needsReconnect: string | null
+  userUnread: number
+  userNeedsReconnect: string | null
+  userWatching: boolean
   refresh: () => void
   connect: () => void
+  connectUser: () => void
+}
+
+function reconnectMessage(e: unknown): string | null {
+  const msg = e instanceof Error ? e.message : ''
+  if (!/40[13]|scope|connect|unauthorized|forbidden/i.test(msg)) return null
+  try {
+    const detail = JSON.parse(msg)
+    return typeof detail.detail === 'string' ? detail.detail : msg
+  } catch {
+    return msg || 'Gmail needs reconnecting'
+  }
 }
 
 export function useGmail(pollMs = 30000): UseGmailReturn {
@@ -16,10 +31,13 @@ export function useGmail(pollMs = 30000): UseGmailReturn {
   const [unreadCount, setUnreadCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [needsReconnect, setNeedsReconnect] = useState<string | null>(null)
+  const [userUnread, setUserUnread] = useState(0)
+  const [userNeedsReconnect, setUserNeedsReconnect] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
 
   const refresh = useCallback(() => setRefreshKey(k => k + 1), [])
   const connect = useCallback(() => api.startGmailAuth('agent'), [])
+  const connectUser = useCallback(() => api.startGmailAuth('user'), [])
 
   useEffect(() => {
     let cancelled = false
@@ -42,19 +60,31 @@ export function useGmail(pollMs = 30000): UseGmailReturn {
             // 401/403 = token missing scope or expired -> offer reconnect
             // instead of silently showing a dead "connected" badge.
             if (!cancelled) {
-              const msg = e instanceof Error ? e.message : ''
-              if (/40[13]|scope|connect|unauthorized|forbidden/i.test(msg)) {
-                try {
-                  const detail = JSON.parse(msg)
-                  setNeedsReconnect(typeof detail.detail === 'string' ? detail.detail : msg)
-                } catch {
-                  setNeedsReconnect(msg || 'Gmail needs reconnecting')
-                }
-              }
+              const r = reconnectMessage(e)
+              if (r) setNeedsReconnect(r)
             }
           }
         } else if (!cancelled) {
           setUnreadCount(0)
+        }
+        // Personal slot (read-only watch) — only when enabled server-side.
+        const watching = s.account === 'both' || s.account === 'user'
+        if (watching && s.user?.authenticated) {
+          try {
+            const m = await api.listGmailMessages('is:unread', 1, 'user')
+            if (!cancelled) {
+              setUserUnread(m.resultSizeEstimate ?? m.messages.length)
+              setUserNeedsReconnect(null)
+            }
+          } catch (e) {
+            if (!cancelled) {
+              const r = reconnectMessage(e)
+              if (r) setUserNeedsReconnect(r)
+            }
+          }
+        } else if (!cancelled) {
+          setUserUnread(0)
+          if (!watching) setUserNeedsReconnect(null)
         }
       } catch {
         if (!cancelled) setLoading(false)
@@ -73,5 +103,7 @@ export function useGmail(pollMs = 30000): UseGmailReturn {
     }
   }, [pollMs, refreshKey])
 
-  return { status, unreadCount, loading, needsReconnect, refresh, connect }
+  return { status, unreadCount, loading, needsReconnect, userUnread, userNeedsReconnect,
+           userWatching: status?.account === 'both' || status?.account === 'user',
+           refresh, connect, connectUser }
 }

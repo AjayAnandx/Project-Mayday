@@ -24,6 +24,7 @@ def _default_state() -> dict:
         "history_id_agent": None,
         "history_id_user": None,
         "agent_email": "",
+        "user_email": "",
         "last_sync_at": "",
     }
 
@@ -70,4 +71,16 @@ def set_agent_email(email: str) -> None:
     with _lock:
         state = _read()
         state["agent_email"] = (email or "").strip()
+        _write(state)
+
+
+def get_user_email() -> str:
+    with _lock:
+        return _read().get("user_email", "") or ""
+
+
+def set_user_email(email: str) -> None:
+    with _lock:
+        state = _read()
+        state["user_email"] = (email or "").strip()
         _write(state)

@@ -86,6 +86,19 @@ def ensure_token(account: str = "agent") -> Path:
     return p
 
 
+READONLY_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "openid",
+]
+
+
+def _service_scopes(account: str) -> list[str]:
+    """Scopes for loading credentials. Personal slot stays readonly so token
+    refresh never requests (or fails on) gmail.modify. Mirrors api/gmail._scopes_for."""
+    return READONLY_SCOPES if account == "user" else SCOPES
+
+
 def get_gmail_service(account: str = "agent"):
     """Build an authorized Gmail v1 service (transparent refresh)."""
     from google.oauth2.credentials import Credentials
@@ -93,9 +106,18 @@ def get_gmail_service(account: str = "agent"):
     from googleapiclient.discovery import build
 
     token_path = ensure_token(account)
-    creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+    creds = Credentials.from_authorized_user_file(str(token_path), _service_scopes(account))
     if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except Exception as e:
+            # Refresh tokens die when the OAuth app is in Testing mode (7 days),
+            # access is revoked, or the password changed. Surface this as a
+            # reconnect prompt instead of a generic sync failure.
+            if "invalid_grant" in str(e) or "expired or revoked" in str(e):
+                raise NeedsOAuth(
+                    f"Gmail token expired or revoked for account={account!r} — reconnect")
+            raise
         token_path.write_text(creds.to_json(), encoding="utf-8")
         try:
             token_path.chmod(0o600)
@@ -145,6 +167,13 @@ def get_history(start_history_id: str, history_types: list | None = None,
     ).execute()
 
 
+def _refuse_user_writes(account: str, op: str) -> None:
+    if account == "user":
+        raise PermissionError(
+            f"Refused: {op} on the personal mailbox (account='user'). "
+            "The personal slot is read-only by design — outbound mail uses the agent mailbox.")
+
+
 def _prune_cache(now: float) -> None:
     expired = [k for k, v in _sent_cache.items() if v.get("expires_at", 0) <= now]
     for k in expired:
@@ -156,6 +185,7 @@ def send_message(to, subject: str, text: str, html: str | None = None,
                  thread_id: str | None = None, in_reply_to: str | None = None,
                  account: str = "agent", idempotency_key: str | None = None) -> dict:
     """Send via users.messages.send. Same idempotency_key+payload returns cached id."""
+    _refuse_user_writes(account, "send_message")
     now = time.time()
     _prune_cache(now)
     if idempotency_key and idempotency_key in _sent_cache:
@@ -192,6 +222,7 @@ def send_message(to, subject: str, text: str, html: str | None = None,
 
 def modify_labels(message_id: str, add_labels: list | None = None,
                   remove_labels: list | None = None, account: str = "agent") -> dict:
+    _refuse_user_writes(account, "modify_labels")
     svc = get_gmail_service(account)
     body: dict = {}
     if add_labels:
@@ -207,6 +238,7 @@ def get_thread(thread_id: str, fmt: str = "full", account: str = "agent") -> dic
 
 
 def create_label(name: str, account: str = "agent") -> dict:
+    _refuse_user_writes(account, "create_label")
     svc = get_gmail_service(account)
     body = {"name": name, "labelListVisibility": "labelShow",
             "messageListVisibility": "show"}
@@ -217,6 +249,7 @@ def create_draft(to, subject: str, text: str, html: str | None = None,
                  cc: list | None = None, thread_id: str | None = None,
                  account: str = "agent") -> dict:
     """Create a Gmail draft (approval gate: user reviews before send)."""
+    _refuse_user_writes(account, "create_draft")
     msg = EmailMessage()
     msg["To"] = to if isinstance(to, str) else ", ".join(to)
     msg["Subject"] = subject
