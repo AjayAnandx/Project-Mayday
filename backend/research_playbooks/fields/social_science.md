@@ -1,0 +1,5 @@
+- Record the identification strategy (randomised experiment, difference-in-differences, regression discontinuity, instrumental variables, matching, descriptive) and treat only credible designs as causal evidence.
+- Record sample, setting, country and period: results often do not transfer across contexts.
+- Report effect sizes with units (elasticity, percentage points, standard deviations) and their confidence intervals; note when results are not statistically significant.
+- Working papers (NBER, SSRN, IZA, CEPR) are preprints: label them as not yet peer reviewed.
+- Watch for replication and pre-registration status, and for publication bias in literatures with many small significant results.

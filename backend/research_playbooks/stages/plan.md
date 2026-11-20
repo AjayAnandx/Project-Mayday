@@ -1,0 +1,7 @@
+- Aim queries at primary sources first: regulators and statistics offices, company filings and investor material, peer-reviewed papers, standards bodies. Then reputable analysis and news.
+- Vary the wording across queries: synonyms, the industry's own terms, units ("$/kWh", "CAGR"), and named organisations likely to publish the data.
+- Put a year or date range in queries about figures that change over time.
+- Pick the most specific source kind for each question: pubmed for medicine and health, academic or crossref for research findings, news for recent events, web for companies, markets and products.
+- Use different source kinds for the same question when it helps cross-checking (e.g. web + academic, or web + news).
+- Wikipedia only for orientation and definitions, never as the main source for a figure.
+- Avoid queries that would only find opinion pieces when a figure is needed.

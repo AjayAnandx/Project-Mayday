@@ -6,7 +6,7 @@ import type { SearchResults } from '../../types/search'
 interface SearchOverlayProps {
   open: boolean
   onClose: () => void
-  onNavigate: (page: 'chat' | 'todos' | 'calendar' | 'brain') => void
+  onNavigate: (page: 'chat' | 'planner' | 'brain') => void
 }
 
 export function SearchOverlay({ open, onClose, onNavigate }: SearchOverlayProps) {
@@ -36,11 +36,11 @@ export function SearchOverlay({ open, onClose, onNavigate }: SearchOverlayProps)
     key: keyof SearchResults
     icon: typeof Search
     label: string
-    page: 'chat' | 'todos' | 'calendar' | 'brain'
+    page: 'chat' | 'planner' | 'brain'
     render: (item: any) => string
   }[] = [
-    { key: 'todos', icon: ListTodo, label: 'Todos', page: 'todos', render: (t) => `${t.title} — ${t.snippet}` },
-    { key: 'events', icon: CalendarDays, label: 'Events', page: 'calendar', render: (e) => `${e.title} — ${e.snippet}` },
+    { key: 'todos', icon: ListTodo, label: 'Tasks', page: 'planner', render: (t) => `${t.title} — ${t.snippet}` },
+    { key: 'events', icon: CalendarDays, label: 'Events', page: 'planner', render: (e) => `${e.title} — ${e.snippet}` },
     { key: 'conversations', icon: MessageSquare, label: 'Conversations', page: 'chat', render: (c) => `${c.title} (${c.date})` },
     { key: 'graph_nodes', icon: BrainCircuit, label: 'Memories', page: 'brain', render: (n) => `[${n.type}] ${n.label}` },
     { key: 'operations', icon: History, label: 'Operations', page: 'chat', render: (o) => `[${o.timestamp.slice(0, 10)}] ${o.action} ${o.entity_type} '${o.entity_name}'` },

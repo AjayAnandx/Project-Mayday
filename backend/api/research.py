@@ -90,7 +90,7 @@ def list_research(status: str = None, q: str = None):
     if q and q.strip():
         from backend.core.research_index import get_research_index
         return get_research_index().search(q.strip(), limit=20)
-    return store.list_projects(status)
+    return store.list_projects(status or None)  # "?status=" (empty) means no filter
 
 
 @router.post("/academic-search")
@@ -275,3 +275,147 @@ def promote_research(body: ResearchPromote):
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+# ── evidence-based research runs (Research page) ────────────────────────────
+
+class RunStart(BaseModel):
+    topic: str
+    request: str = ""
+    type: str = "domain"
+    preset: str = "standard"            # quick | standard | deep
+    questions: Optional[list[str]] = None
+    field: Optional[str] = None         # academic: general | cs_ml | social_science
+    hypotheses: Optional[list[str]] = None
+    snowball: Optional[bool] = None
+    sources: Optional[list[str]] = None  # per-run adapter allow-list
+
+
+class RunExport(BaseModel):
+    format: str = "docx"                # docx | xlsx
+
+
+def _record_or_404(topic: str) -> dict:
+    record = get_research_store()._get_by_topic(topic)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Research '{topic}' not found")
+    return record
+
+
+def _run_summary(r: dict) -> dict:
+    return {k: r.get(k) for k in ("id", "status", "stage", "usage", "budget", "error", "started_at",
+                                  "finished_at", "outputs")} | {
+        "questions": (r.get("brief") or {}).get("questions", []),
+        "answered": sum(1 for a in r.get("answers") or [] if a.get("answer")),
+    }
+
+
+@router.post("/runs")
+def start_run(body: RunStart):
+    from backend.core.research_flow import start_research_run
+    from backend.functions.research_flow_functions import BUDGET_PRESETS
+    if not body.topic.strip():
+        raise HTTPException(status_code=400, detail="topic is required")
+    rtype = body.type if body.type in RESEARCH_TYPES else "domain"
+    res = start_research_run(body.topic.strip(), request=body.request or body.topic,
+                             questions=[q for q in (body.questions or []) if q.strip()] or None,
+                             research_type=rtype, budget=dict(BUDGET_PRESETS.get(body.preset, {})),
+                             options={"field": body.field, "hypotheses": [h for h in (body.hypotheses or []) if h.strip()],
+                                      "snowball": body.snowball, "sources": body.sources or []})
+    if "error" in res:
+        raise HTTPException(status_code=409, detail=res["error"])
+    return res
+
+
+@router.get("/{topic}/runs")
+def list_runs(topic: str):
+    record = _record_or_404(topic)
+    return [_run_summary(r) for r in reversed(record.get("runs", []))]
+
+
+@router.get("/{topic}/runs/{run_id}")
+def get_run(topic: str, run_id: str):
+    record = _record_or_404(topic)
+    run = next((r for r in record.get("runs", []) if r["id"] == run_id), None)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+    from backend.core.research_report import _render_answer, _source_numbering
+    claim_refs, sources = _source_numbering(record, run.get("answers") or [])
+    answers = [{**a, "rendered": _render_answer(a, claim_refs)} for a in run.get("answers") or []]
+    return {**run, "answers": answers,
+            "cited_sources": [{"n": n, **{k: s.get(k) for k in ("id", "title", "url", "type", "tier",
+                                                                  "published_date", "access", "evidence_status", "is_retracted", "is_oa", "oa_pdf_url", "authors", "venue", "year", "doi", "arxiv_id")}}
+                              for n, s in enumerate(sources, 1)],
+            "claim_refs": claim_refs}
+
+
+@router.get("/{topic}/runs/{run_id}/report")
+def get_run_report(topic: str, run_id: str):
+    from pathlib import Path
+    record = _record_or_404(topic)
+    path = get_research_store().get_reports_dir(record) / f"run-{run_id}.md"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Report not written yet")
+    return {"markdown": Path(path).read_text(encoding="utf-8"),
+            "url": f"/research/{record['slug']}/artifacts/reports/{path.name}"}
+
+
+@router.post("/{topic}/runs/{run_id}/export")
+def export_run_file(topic: str, run_id: str, body: RunExport):
+    from backend.core.research_export import export_run
+    res = export_run(topic, run_id, body.format)
+    if "error" in res:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@router.get("/{topic}/claims")
+def list_claims(topic: str, status: Optional[str] = None, limit: int = 300):
+    record = _record_or_404(topic)
+    srcs = {s["id"]: s for s in record.get("sources", [])}
+    out = []
+    for c in sorted(record.get("claims", []), key=lambda c: -c.get("confidence", 0)):
+        if status and c["status"] != status:
+            continue
+        e = next((x for x in c["evidence"] if x.get("verified")), c["evidence"][0] if c["evidence"] else {})
+        s = srcs.get(e.get("source_id", ""), {})
+        out.append({k: c.get(k) for k in ("id", "statement", "status", "confidence", "confidence_reasons",
+                                          "kind", "value", "unit", "as_of", "question", "run_id", "study",
+                                          "evidence_level", "hypothesis_id", "hypothesis_stance")}
+                   | {"quote": e.get("quote", ""), "verified": e.get("verified"),
+                      "source": {"id": s.get("id"), "title": s.get("title"), "url": s.get("url"),
+                                 "tier": s.get("tier"), "evidence_status": s.get("evidence_status")}})
+        if len(out) >= limit:
+            break
+    return out
+
+
+@router.get("/{topic}/sources")
+def list_sources(topic: str):
+    record = _record_or_404(topic)
+    counts: dict[str, int] = {}
+    for c in record.get("claims", []):
+        if c["status"] in ("supported", "contested"):
+            for e in c["evidence"]:
+                if e.get("verified"):
+                    counts[e["source_id"]] = counts.get(e["source_id"], 0) + 1
+    return [{k: s.get(k) for k in ("id", "title", "url", "type", "tier", "publisher", "published_date",
+                                    "access", "fetched_at", "content_hash", "evidence_status", "is_retracted", "is_oa", "oa_pdf_url", "authors", "venue", "year", "doi", "arxiv_id")} | {"verified_claims": counts.get(s["id"], 0)}
+            for s in record.get("sources", [])]
+
+
+@router.get("/meta/adapters")
+def list_adapters():
+    """Source adapters usable right now (for per-run source toggles)."""
+    from backend.core.research_sources import available_adapters
+    return [{"name": n, "description": a.description} for n, a in available_adapters().items()]
+
+
+@router.get("/{topic}/cite")
+def cite(topic: str, style: str = "bibtex", run_id: str = ""):
+    from backend.functions.research_flow_functions import research_cite
+    _record_or_404(topic)
+    text = research_cite(topic, style, run_id)
+    if text.startswith("Style must be"):
+        raise HTTPException(status_code=400, detail=text)
+    return {"style": style, "text": text}

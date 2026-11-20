@@ -1,14 +1,24 @@
 import json
+import logging
 import re
 import shutil
 import threading
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.core.config import load_config
 from backend.core.operation_log import get_operation_log
 from backend.memory.knowledge_graph import get_graph
+from backend.core import research_evidence as ev
+
+logger = logging.getLogger(__name__)
+
+# Default per-run budget (config.yaml research.budget overrides; per-run overrides win).
+DEFAULT_RUN_BUDGET = {"max_minutes": 10, "max_sources": 40, "max_cost_usd": 0.5}
+BACKUP_INTERVAL_S = 600
 
 
 def _utcnow():
@@ -135,6 +145,11 @@ class ResearchStore:
 
         self._lock = threading.RLock()
         self._projects: list[dict] = []
+        self._defer_depth = 0
+        self._dirty = False
+        self._last_backup = 0.0
+        self._budget_cfg = dict(DEFAULT_RUN_BUDGET)
+        self._budget_cfg.update((cfg.get("research", {}) or {}).get("budget", {}) or {})
         self._migrate_legacy_storage()
         self._load()
         self._backfill_research_node_types()
@@ -234,8 +249,16 @@ class ResearchStore:
                 t.setdefault("sources", [])
             for key in ("data_points", "entities", "findings"):
                 for item in p.get(key, []):
+                    if "source_ids" in item:
+                        continue  # already linked to the source registry
                     if "sources" in item and isinstance(item["sources"], list):
                         item["sources"] = [self._normalize_source(s) for s in item["sources"]]
+            if ev.migrate_record(p):
+                self._dirty = True
+            for run in p.get("runs", []):
+                if run.get("status") == "running":  # process died mid-run
+                    ev.finish_run(run, "stopped", "interrupted (server restarted)")
+                    self._dirty = True
             # ensure operations threshold warning
             try:
                 from backend.core.operation_log import get_operation_log
@@ -314,16 +337,62 @@ class ResearchStore:
         except Exception:
             pass
 
+    def _backup_path(self) -> Path:
+        return self._path.with_name(self._path.name + ".bak")
+
     def _load(self):
-        if self._path.exists():
+        if not self._path.exists():
+            return
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            # Never start empty on top of a damaged file: that would overwrite all research.
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            corrupt = self._path.with_name(f"{self._path.name}.corrupt-{stamp}")
             try:
-                data = json.loads(self._path.read_text(encoding="utf-8"))
-                self._projects = data.get("projects", [])
-                self._normalize_projects()
-            except (json.JSONDecodeError, OSError):
+                shutil.copy2(self._path, corrupt)
+            except OSError:
                 pass
+            logger.error("research store unreadable (%s); copied to %s, trying backup", e, corrupt)
+            try:
+                data = json.loads(self._backup_path().read_text(encoding="utf-8"))
+                logger.warning("research store restored from %s", self._backup_path())
+            except (json.JSONDecodeError, OSError):
+                logger.error("no usable research backup; starting empty (damaged file preserved)")
+                return
+        self._projects = data.get("projects", [])
+        self._normalize_projects()
+        if self._dirty:
+            self._dirty = False
+            self._save()
+
+    @contextmanager
+    def batch(self):
+        """Group many mutations into one disk write: ``with store.batch(): ...``."""
+        with self._lock:
+            self._defer_depth += 1
+            try:
+                yield self
+            finally:
+                self._defer_depth -= 1
+                if self._defer_depth == 0 and self._dirty:
+                    self._dirty = False
+                    self._save()
+
+    def _maybe_backup(self):
+        now = time.monotonic()
+        if self._path.exists() and (self._last_backup == 0.0 or now - self._last_backup >= BACKUP_INTERVAL_S):
+            try:
+                shutil.copy2(self._path, self._backup_path())
+                self._last_backup = now
+            except OSError as e:
+                logger.warning("research backup failed: %s", e)
 
     def _save(self):
+        if self._defer_depth > 0:
+            self._dirty = True
+            return
+        self._maybe_backup()
         # auto-migrate before persisting
         try:
             self._migrate_artifacts_if_needed()
@@ -365,7 +434,8 @@ class ResearchStore:
                 return p
         return None
 
-    def create_research(self, topic: str, research_type: str, depth: int = 2, questions: list[str] | None = None) -> dict:
+    def create_research(self, topic: str, research_type: str, depth: int = 2, questions: list[str] | None = None,
+                        allow_similar: bool = False) -> dict:
         with self._lock:
             topic = topic.strip()
             if not topic:
@@ -383,7 +453,7 @@ class ResearchStore:
                 (p, _kw_overlap(topic, p.get("topic", ""))) for p in self._projects
                 if p.get("topic", "").strip().lower() != topic.strip().lower()
             ]
-            near = [x for x in near if x[1] >= 0.6]
+            near = [x for x in near if x[1] >= 0.6] if not allow_similar else []
             if near:
                 near.sort(key=lambda x: -x[1])
                 suggestions = ", ".join(f"'{p['topic']}' ({p['status']})" for p, _s in near[:3])
@@ -441,6 +511,9 @@ class ResearchStore:
                 "data_points": [],
                 "entities": [],
                 "findings": [],
+                "sources": [],
+                "claims": [],
+                "runs": [],
                 "generated_outputs": [],
                 "tasks": tasks,
                 "conversation_ids": [],
@@ -539,16 +612,16 @@ class ResearchStore:
             project = self._find_by_topic(topic)
             if not project:
                 return {"error": f"Research '{topic}' not found"}
-            norm_sources = [self._normalize_source(s) for s in (sources or [])]
             dp = {
                 "id": "dp_" + uuid.uuid4().hex[:8],
                 "label": str(label) if label is not None else "",
                 "value": str(value) if value is not None else "",
                 "unit": str(unit) if unit else "",
                 "confidence": str(confidence) if confidence else "medium",
-                "sources": norm_sources,
+                "sources": [],
                 "created_at": _utcnow(),
             }
+            ev.link_item_sources(project, dp, sources)
             project["data_points"].append(dp)
             project["updated_at"] = _utcnow()
             self._save()
@@ -566,16 +639,16 @@ class ResearchStore:
             project = self._find_by_topic(topic)
             if not project:
                 return {"error": f"Research '{topic}' not found"}
-            norm_sources = [self._normalize_source(s) for s in (sources or [])]
             ent = {
                 "id": "ent_" + uuid.uuid4().hex[:8],
                 "name": name,
                 "type": entity_type,
                 "description": description or "",
                 "relevance": relevance or 0.5,
-                "sources": norm_sources,
+                "sources": [],
                 "created_at": _utcnow(),
             }
+            ev.link_item_sources(project, ent, sources)
             project["entities"].append(ent)
             project["updated_at"] = _utcnow()
             self._save()
@@ -592,14 +665,14 @@ class ResearchStore:
             project = self._find_by_topic(topic)
             if not project:
                 return {"error": f"Research '{topic}' not found"}
-            norm_sources = [self._normalize_source(s) for s in (sources or [])]
             fin = {
                 "id": "fin_" + uuid.uuid4().hex[:8],
                 "content": content,
                 "confidence": confidence or "medium",
-                "sources": norm_sources,
+                "sources": [],
                 "created_at": _utcnow(),
             }
+            ev.link_item_sources(project, fin, sources)
             project["findings"].append(fin)
             project["updated_at"] = _utcnow()
             self._save()
@@ -1101,6 +1174,29 @@ class ResearchStore:
                 pass
             return {"id": task["id"], "title": task["title"], "status": task["status"], "frozen": task.get("frozen", False), "run_count": task.get("run_count", 0)}
 
+    def set_hypothesis_verdict(self, topic: str, task_id: str, verdict: str, summary: str, run_id: str,
+                               freeze: bool) -> dict:
+        """Record a run's verdict on a hypothesis task; a decided hypothesis is frozen (answered),
+        and follow-up ideas become new hypotheses. Frozen tasks are never changed again."""
+        with self._lock:
+            project = self._require(topic)
+            task = self._find_task_by_id(project.get("tasks", []), task_id)
+            if not task:
+                return {"error": f"Task '{task_id}' not found"}
+            if task.get("frozen"):
+                return {"id": task_id, "status": task["status"], "verdict": task.get("verdict"), "unchanged": True}
+            task.update(verdict=verdict, verdict_run=run_id, result=summary[:2000], result_summary=summary[:200],
+                        updated_at=_utcnow())
+            if freeze:
+                task.update(status="frozen", frozen=True)
+            elif task.get("status") == "pending":
+                task["status"] = "in_progress"
+            project["updated_at"] = _utcnow()
+            self._save()
+            get_operation_log().record("hypothesis_verdict", "research", project["id"], f"{topic}/{task['title']}",
+                                       details={"verdict": verdict, "run_id": run_id, "frozen": freeze})
+            return {"id": task_id, "status": task["status"], "verdict": verdict, "frozen": task.get("frozen", False)}
+
     def freeze_task(self, topic: str, task_id: str) -> dict:
         return self.update_task_status(topic, task_id, "frozen")
 
@@ -1113,6 +1209,145 @@ class ResearchStore:
             if status:
                 tasks = [t for t in tasks if t.get("status") == status]
             return [dict(t) for t in tasks]
+
+
+    # ── evidence model: sources, claims, runs ───────────────────────────────
+
+    def get_topic_dir(self, project: dict) -> Path:
+        return self._outputs_dir / project["slug"]
+
+    def _require(self, topic: str) -> dict:
+        project = self._find_by_topic(topic)
+        if not project:
+            raise KeyError(f"Research '{topic}' not found")
+        return project
+
+    def add_source(self, topic: str, source, snapshot_text: str | None = None, access: str = "ok") -> dict:
+        """Register a source (deduplicated) and optionally store its fetched text."""
+        with self._lock:
+            project = self._require(topic)
+            sid = ev.register_source(project, source)
+            if snapshot_text is not None:
+                ev.save_snapshot(project, self.get_topic_dir(project), sid, snapshot_text, access)
+            project["updated_at"] = _utcnow()
+            self._save()
+            return dict(ev.get_source(project, sid))
+
+    def save_source_snapshot(self, topic: str, source_id: str, text: str, access: str = "ok") -> dict:
+        with self._lock:
+            project = self._require(topic)
+            src = ev.save_snapshot(project, self.get_topic_dir(project), source_id, text, access)
+            self._save()
+            return dict(src)
+
+    def get_source_text(self, topic: str, source_id: str) -> str | None:
+        with self._lock:
+            project = self._require(topic)
+            return ev.read_snapshot(project, self.get_topic_dir(project), source_id)
+
+    def list_sources(self, topic: str) -> list[dict]:
+        with self._lock:
+            return [dict(s) for s in self._require(topic).get("sources", [])]
+
+    def add_claim(self, topic: str, statement: str, evidence: list | None = None, **fields) -> dict:
+        """Add a claim with evidence quotes; quotes are checked at once when snapshots exist."""
+        with self._lock:
+            project = self._require(topic)
+            claim = ev.add_claim(project, statement, evidence, **fields)
+            ev.verify_claim(project, self.get_topic_dir(project), claim)
+            project["updated_at"] = _utcnow()
+            self._save()
+            get_operation_log().record("add_claim", "research", project["id"], topic,
+                                       details={"statement": statement[:120], "status": claim["status"]})
+            return dict(claim)
+
+    def verify_claims(self, topic: str) -> dict:
+        with self._lock:
+            project = self._require(topic)
+            counts = ev.verify_all(project, self.get_topic_dir(project))
+            self._save()
+            return counts
+
+    def list_claims(self, topic: str, status: str | None = None) -> list[dict]:
+        with self._lock:
+            claims = self._require(topic).get("claims", [])
+            return [dict(c) for c in claims if status is None or c["status"] == status]
+
+    def run_budget(self, overrides: dict | None = None) -> dict:
+        budget = dict(self._budget_cfg)
+        budget.update({k: v for k, v in (overrides or {}).items() if v is not None})
+        return budget
+
+    def start_run(self, topic: str, brief: dict | None = None, budget: dict | None = None,
+                  models: dict | None = None) -> dict:
+        with self._lock:
+            project = self._require(topic)
+            brief = brief or {"questions": list(project.get("research_questions", []))}
+            run = ev.start_run(project, brief, self.run_budget(budget), models)
+            self._save()
+            get_operation_log().record("start_run", "research", project["id"], topic,
+                                       details={"run_id": run["id"]})
+            return dict(run)
+
+    def _require_run(self, project: dict, run_id: str) -> dict:
+        run = ev.get_run(project, run_id)
+        if run is None:
+            raise KeyError(f"Run '{run_id}' not found")
+        return run
+
+    def record_run_stage(self, topic: str, run_id: str, stage: str, passed: bool, notes: str = "") -> dict:
+        with self._lock:
+            project = self._require(topic)
+            entry = ev.record_stage(self._require_run(project, run_id), stage, passed, notes)
+            self._save()
+            return entry
+
+    def add_run_usage(self, topic: str, run_id: str, sources: int = 0, llm_calls: int = 0,
+                      cost_usd: float = 0.0) -> dict:
+        with self._lock:
+            project = self._require(topic)
+            u = self._require_run(project, run_id)["usage"]
+            u["sources"] += sources
+            u["llm_calls"] += llm_calls
+            u["cost_usd"] = round(u["cost_usd"] + cost_usd, 6)
+            self._save()
+            return dict(u)
+
+    def finish_run(self, topic: str, run_id: str, status: str = "completed", error: str | None = None,
+                   outputs: list | None = None) -> dict:
+        with self._lock:
+            project = self._require(topic)
+            run = self._require_run(project, run_id)
+            if outputs:
+                run["outputs"].extend(outputs)
+            ev.finish_run(run, status, error)
+            self._save()
+            get_operation_log().record("finish_run", "research", project["id"], topic,
+                                       details={"run_id": run_id, "status": status})
+            return dict(run)
+
+    def get_run(self, topic: str, run_id: str) -> dict | None:
+        with self._lock:
+            run = ev.get_run(self._require(topic), run_id)
+            return dict(run) if run else None
+
+    def update_run(self, topic: str, run_id: str, **fields) -> dict:
+        """Set run fields (plan, answers, gaps, review, report, ...)."""
+        with self._lock:
+            project = self._require(topic)
+            run = self._require_run(project, run_id)
+            run.update(fields)
+            self._save()
+            return dict(run)
+
+    def mark_sources_extracted(self, topic: str, source_ids: list[str]) -> None:
+        with self._lock:
+            project = self._require(topic)
+            ids = set(source_ids)
+            for s in project.get("sources", []):
+                if s["id"] in ids:
+                    s["extracted"] = True
+            self._save()
 
 
 _instance: ResearchStore | None = None

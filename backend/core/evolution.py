@@ -124,8 +124,10 @@ def get_relevant_preferences(project_name: str = "", project_type: str = "") -> 
     lines: list[str] = []
     seen: set[str] = set()
 
-    for node in kg.get_nodes_by_type("preference"):
+    for node in kg.get_nodes_by_type(BUILD_PREF_TYPE):
         props = node.get("properties", {})
+        if not _is_rule_text(props.get("rule", "")):
+            continue
         if props.get("project_type") != project_type and props.get("project_type") != "any":
             continue
 
@@ -175,11 +177,27 @@ def _normalize_pattern(text: str) -> str:
     return text
 
 
+# Build lessons are about how builds go, not about the user, so they get their own
+# node type. Raw tool output (errors, paths, JSON, tracebacks) is never a rule.
+BUILD_PREF_TYPE = "build_preference"
+_RAW_OUTPUT_RE = re.compile(
+    r"error|exception|traceback|failed|not defined|\\|/src/"
+    r"|\.(py|tsx?|jsx?|md|json)\b|[{}\[\]]|^opencode_|^cdp_",
+    re.I)
+
+
+def _is_rule_text(rule: str) -> bool:
+    rule = (rule or "").strip()
+    if len(rule) < 8 or "\n" in rule:
+        return False
+    return not _RAW_OUTPUT_RE.search(rule)
+
+
 def _store_preference(kg, project_type: str, rule: str, category: str, confidence: float, count: int):
-    if not rule:
+    if not _is_rule_text(rule):
         return
     label = f"pref:{project_type}/{category}/{rule[:40]}"
-    for node in kg.get_nodes_by_type("preference"):
+    for node in kg.get_nodes_by_type(BUILD_PREF_TYPE):
         if node.get("properties", {}).get("rule") == rule:
             props = node["properties"]
             old_count = int(props.get("confirmation_count", 0))
@@ -189,7 +207,7 @@ def _store_preference(kg, project_type: str, rule: str, category: str, confidenc
             kg._save()
             return
 
-    kg.add_node("preference", label, {
+    kg.add_node(BUILD_PREF_TYPE, label, {
         "project_type": project_type,
         "category": category,
         "rule": rule,

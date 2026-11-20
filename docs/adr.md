@@ -563,6 +563,30 @@ Need on-demand song playback, per-song radio, mood playlists, play-history with 
 
 ---
 
+## ADR-17: Brain V2 Storage: SQLite, Not PostgreSQL
+
+**Status**: Accepted | **Date**: 2026-11-20
+
+### Context
+The knowledge graph (`memory_graph.json`) was rewritten whole on every change, with no atomic write. A crash mid-save could leave it empty. Brain V2 also needs new tables: facts with provenance, episodes, commitments, aliases and embeddings, plus BM25 keyword search. Mayday is one FastAPI process for one user on one Windows machine. The graph holds about 500 nodes after clean-up and should stay under 100k memories for years.
+
+### Decision
+**SQLite (WAL mode, FTS5, embeddings stored as BLOBs) in one file, `brain.db`, behind `backend/brain/store.py`.**
+
+- `KnowledgeGraph` keeps its in-memory model and full API, so its 27 callers are unchanged. Only `_load`/`_save` switch, according to `memory.backend` (`sqlite` | `json`).
+- `sync()` writes only the changed rows, in one transaction. On first start the JSON file is imported once and then left as a backup.
+- PostgreSQL with pgvector was rejected: it needs a second Windows service, credentials and `pg_dump` backups, and it only pays off with several writers, several users or millions of vectors.
+
+### Consequences
++ Atomic, incremental writes. Backup is one file (`python -m backend.brain.cli backup`).
++ FTS5 BM25 and the embedding cache need no extra service.
++ Rollback: export, set `memory.backend: json`, restart.
+- Each save still compares every node to find changes, which costs about 11 ms at 500 nodes and grows with the graph. New memories (facts, episodes) are written as rows directly.
+- One process should own `brain.db`. Running the dev server and the service at the same time means two in-memory graphs (the same limitation the JSON file had).
+- **Revisit** if Mayday becomes multi-user or several devices write to the same brain. Only `store.py` would change.
+
+---
+
 ## Summary Statistics
 
 | Metric | Count |

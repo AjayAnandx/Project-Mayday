@@ -30,7 +30,9 @@ class QueryClassifier:
              [r"\b(resume|update|list|show)\s+(project|task)",
               r"\bproject\s+(status|note|task)", r"\badd\s+task\b",
               r"\bupdate\s+task\b", r"\bcreate_project\b", r"\blist_projects\b",
-              r"\bcreate\s+project\b", r"\bnew\s+project\b"]),
+              r"\bcreate\s+project\b", r"\bnew\s+project\b",
+              r"\b(continue|keep)\s+working\s+on\b",
+              r"\bget\s+back\s+to\s+(working\s+on\s+)?\w+"]),
 
             ("todo", True, "auto",
              ["BASE", "PERSONALITY", "PROJECT"],
@@ -39,7 +41,17 @@ class QueryClassifier:
               r"\bcreate\s+(a\s+)?todos?\b", r"\blist\s+(all\s+)?(todos?|tasks?)",
               r"\badd\s+(a\s+)?(todos?|tasks?|reminders?)",
               r"\bmark\s+(as\s+)?(done|complete|finished)",
-              r"\bwhat\s+(do\s+I\s+need|is\s+due|tasks?)"]),
+              r"\bwhat\s+(do\s+I\s+need|is\s+due|tasks?)",
+              # Planner (V2): delegation / waiting-on / day planning
+              r"\bwaiting\s+(on|for)\b", r"\bfollow[\s-]*up\s+(with|on)\b",
+              r"\bwho\s+owes\b", r"\bowes\s+me\b", r"\bdelegat(e|ed|ing)\b",
+              r"\b(asked|told)\s+\w+\s+to\b", r"\bplan\s+my\s+(day|week)\b",
+              r"\btime[\s-]*block\b", r"\bsnooze\b", r"\bplanner\b",
+              # Everyday phrasing that fell through to `general` (Brain V2 eval).
+              # First match wins, so "don't let me forget" beats memory's \bforget\b.
+              r"\bdon'?t\s+let\s+me\s+forget\b", r"\b(to|on|from)\s+my\s+(list|day)\b",
+              r"\bmy\s+day\s+look", r"\bwhat'?s\s+on\s+(my\s+)?(plate|list)\b",
+              r"^\s*(finished|done\s+with|completed)\b"]),
 
             ("calendar", True, "auto",
              ["BASE", "PERSONALITY", "PROJECT"],
@@ -59,6 +71,10 @@ class QueryClassifier:
              ["BASE", "PERSONALITY"],
              ["basic", "system"],
              [r"\bopen\s+(app|application|program|chrome|notepad|calculator)",
+              # "open spotify" / "launch zoom" (whole message is the command; not files)
+              r"^\s*(open|launch|start)\s+(?!(the|my|a|this|that)\b)[a-z][\w.-]{1,30}\s*$",
+              r"\btoo\s+(loud|quiet|soft)\b", r"\b(turn|crank)\s+(it\s+)?(up|down)\b",
+              r"\bmute\b",
               r"\bclose\s+(app|application)",
               r"\bvolume\s+(up|down|set|mute|0[-\s]?100)",
               r"\bset\s+volume\b", r"\bwhat(\'s| is)\s+(my\s+)?volume\b",
@@ -119,7 +135,9 @@ class QueryClassifier:
              ["BASE", "PERSONALITY", "PROJECT", "BUILD", "RESEARCH", "DATA"],
              ["basic", "research", "data", "project"],
              [r"\bresearch\b", r"\binvestigate\b", r"\bfind\s+out\s+about\b",
-              r"\blook\s+into\b", r"\bstudy\b", r"\banalyze\b", r"\bsurvey\b",
+              r"\blook\s+into\b", r"\bstudy\b", r"\banaly[sz]e\b", r"\banalysis\b", r"\bsurvey\b",
+              r"\bstudies\b", r"\bliterature\b", r"\bwhat\s+does\s+(the\s+)?(research|science|evidence)\s+say\b",
+              r"\bmarket\s+size\b", r"\bcompetitors?\b",
               r"\bgrowth\b", r"\btrend\b", r"\bover\s+time\b", r"\bcompare\b",
               r"\bversus\b", r"\bvs\.?\b", r"\bstatistics\b", r"\bchart\b"]),
 
@@ -149,6 +167,8 @@ class QueryClassifier:
               [],
              [r"^(hi|hello|hey|yo|sup|howdy|good\s+(morning|afternoon|evening))[\s!.]*$",
               r"^(thanks|thank\s+you|ty|thx)[\s!.]*$",
+              r"^(ok(ay)?\s*,?\s*)?(thanks|thank\s+you|thx|cool|great|nice|perfect|awesome)"
+              r"[\s,!.]*(that|this|it)?\s*(helped|helps|works|worked|was\s+(great|helpful))?[\s!.]*$",
               r"^(bye|goodbye|cya|see\s+ya)[\s!.]*$",
               r"^what'?s\s+up[\s?!]*$",
               r"^how\s+(are\s+you|it\s+going)[\s?!]*$"]),

@@ -1,5 +1,6 @@
 import type { Todo } from './todo'
 import type { Event } from './event'
+import type { PlannerItem } from './planner'
 
 export interface DashboardStats {
   open_todos: number
@@ -9,6 +10,8 @@ export interface DashboardStats {
   total_conversations: number
   active_projects: number
   graph_nodes: number
+  waiting_on?: number
+  follow_ups_due?: number
 }
 
 export interface DashboardOperation {
@@ -30,6 +33,8 @@ export interface DashboardMusic {
 export interface DashboardData {
   stats: DashboardStats
   upcoming_events: Event[]
+  /** Planner V2: events + dated tasks/follow-ups, next 7 days */
+  agenda?: PlannerItem[]
   open_todos: Todo[]
   overdue_todos: Todo[]
   recent_activity: DashboardOperation[]

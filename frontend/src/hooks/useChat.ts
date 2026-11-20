@@ -1,6 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { ChatWebSocket } from '../services/websocket'
-import type { WsResponse } from '../types/chat'
+import type { UiPayload, WsResponse } from '../types/chat'
+import { markAssistantDone, markUserSend, wireVisibility } from '../services/brainSignals'
+
+wireVisibility()
 
 export interface ChatMessage {
   id: string
@@ -12,6 +15,7 @@ export interface ChatMessage {
   artifact_url?: string
   artifact_title?: string
   open_in_new_tab?: boolean
+  ui?: UiPayload
 }
 
 export interface PendingSkill {
@@ -21,6 +25,19 @@ export interface PendingSkill {
 
 let msgId = 0
 const nextId = () => `msg-${++msgId}`
+
+/** Stored message → chat message. Tool results that carried an inline OpenUI card keep it. */
+function restoreMessage(m: { role: string; content: string }): ChatMessage {
+  const base: ChatMessage = { id: nextId(), role: m.role as ChatMessage['role'], content: m.content }
+  if (m.role !== 'tool' || !m.content?.includes('"ui"')) return base
+  try {
+    const data = JSON.parse(m.content)
+    if (data && typeof data.ui?.lang === 'string') {
+      return { ...base, content: data.message || data.ui.fallback_text || '', ui: data.ui, tool_name: 'tool' }
+    }
+  } catch { /* plain text tool result */ }
+  return base
+}
 
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -82,20 +99,24 @@ export function useChat() {
           artifact_url: data.artifact_url,
           artifact_title: data.artifact_title,
           open_in_new_tab: data.open_in_new_tab,
+          ui: data.ui,
         })
         setToolCallCount((c) => c + 1)
-        if (data.artifact_url) {
+        // A tool with an inline OpenUI card shows it in the chat; its page artifact (if any)
+        // stays available from the card instead of auto-opening.
+        if (data.artifact_url && !data.ui) {
           window.dispatchEvent(new CustomEvent('open-artifact', {
             detail: { url: data.artifact_url, title: data.artifact_title || 'Artifact' },
           }))
         }
-        if (data.open_in_new_tab && data.artifact_url) {
+        if (data.open_in_new_tab && data.artifact_url && !data.ui) {
           window.open(data.artifact_url, '_blank')
         }
         break
       case 'done':
         setStreaming(false)
         currentAssistantId.current = null
+        markAssistantDone()
         break
       case 'error':
         addMessage({ id: nextId(), role: 'assistant', content: `Error: ${data.content}` })
@@ -111,13 +132,21 @@ export function useChat() {
       case 'skill_deactivated':
         setActiveSkill(null)
         break
+      case 'approval_gate': {
+        // The backend can announce the same pause twice (socket + engine); keep one card per
+        // pending phase. "Approved" notices (no ui) clear the card.
+        const msg: ChatMessage = { id: nextId(), role: 'tool', tool_name: 'approval', content: data.message || '', ui: data.ui }
+        setMessages(prev => {
+          const last = prev[prev.length - 1]
+          const lastIsApproval = last?.role === 'tool' && last.tool_name === 'approval' && !!last.ui
+          if (!data.ui) return lastIsApproval ? prev.slice(0, -1) : prev
+          return lastIsApproval ? [...prev.slice(0, -1), msg] : [...prev, msg]
+        })
+        break
+      }
       case 'conversation_loaded':
         if (data.conversation) {
-          const msgs = data.conversation.messages.map((m) => ({
-            id: nextId(),
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-          }))
+          const msgs = data.conversation.messages.map((m) => restoreMessage(m))
           setMessages(msgs)
         }
         break
@@ -158,6 +187,7 @@ export function useChat() {
     (text: string) => {
       if (!text.trim() || !wsRef.current) return
       addMessage({ id: nextId(), role: 'user', content: text })
+      markUserSend(text.length)
       wsRef.current.send({ type: 'message', content: text })
     },
     [addMessage],
@@ -186,6 +216,10 @@ export function useChat() {
     addMessage({ id: nextId(), role: 'assistant', content })
   }, [addMessage])
 
+  const confirmPhase = useCallback((phase: string) => {
+    wsRef.current?.sendConfirmPhase(phase)
+  }, [])
+
   const sendMusicCommand = useCallback((payload: { action: string; video_id?: string; title?: string; artist?: string; thumb?: string; language?: string }) => {
     wsRef.current?.sendMusicCommand(payload)
   }, [])
@@ -195,6 +229,7 @@ export function useChat() {
     connected,
     streaming,
     sendMessage,
+    confirmPhase,
     newConversation,
     toolCallCount,
     pendingSkill,

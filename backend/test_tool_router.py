@@ -221,13 +221,13 @@ def test_play_song_routes_music_play_without_pipeline_distractors():
 def test_calendar_plurals_route_calendar_tools():
     intent, names = _route_query("what meetings do I have tomorrow?")
     assert intent.intent == "calendar"
-    assert "list_events" in names and "query_events" in names
+    assert "plan_list" in names and "plan_add" in names
 
 
 def test_todo_plurals_route_todo_tools():
     intent, names = _route_query("list my todos")
     assert intent.intent == "todo"
-    assert "list_todos" in names and "create_todo" in names
+    assert "plan_list" in names and "plan_add" in names and "plan_complete" in names
 
 
 def test_core_group_never_selected():
@@ -256,3 +256,11 @@ def test_confusable_descriptions_discriminate():
     assert "remember" in defs["add_finding"]
     assert "opencode_read" in defs["read_file"]
     assert "opencode_bash" in defs["sandbox_exec"]
+
+
+def test_delegation_phrases_route_planner_tools():
+    for q in ("Ravi owes me the deck, remind me to follow up with him friday",
+              "who owes me what this week", "plan my day"):
+        intent, names = _route_query(q)
+        assert intent.intent == "todo", q
+        assert "plan_delegate" in names and "plan_list" in names, q

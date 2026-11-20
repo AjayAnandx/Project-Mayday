@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from backend.core import scholarly
 from backend.core.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,6 @@ EXA_API_BASE = "https://api.exa.ai"
 
 TIMEOUT = httpx.Timeout(connect=10, read=30, write=10, pool=10)
 
-DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+")
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 
 
@@ -52,27 +52,44 @@ def _normalize_title(t: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
 
 
-def _extract_doi(text: str, arxiv_doi_elem: str | None = None) -> str | None:
-    if arxiv_doi_elem and arxiv_doi_elem.strip():
-        m = DOI_RE.search(arxiv_doi_elem)
-        if m:
-            return m.group(0)
-        # arxiv:doi may be bare DOI without prefix handling
-        cand = arxiv_doi_elem.strip()
-        if cand.startswith("10."):
-            return cand
-    if text:
-        m = DOI_RE.search(text)
-        if m:
-            return m.group(0).rstrip(".")
-    return None
+def _parse_arxiv_feed(text: str) -> list[dict]:
+    root = ET.fromstring(text)
+    results = []
+    for entry in root.findall("atom:entry", ARXIV_NS):
+        def _t(tag):
+            el = entry.find(tag, ARXIV_NS)
+            return el.text.strip().replace("\n", " ") if el is not None and el.text else ""
+        arxiv_url = _t("atom:id")
+        arxiv_id = scholarly.normalize_arxiv_id(arxiv_url)
+        # Only the arXiv-declared journal DOI counts; DOIs inside the abstract usually belong
+        # to *cited* papers, so they are never taken as this paper's DOI.
+        doi = scholarly.normalize_doi(_t("arxiv:doi")) or None
+        authors = [a.findtext("atom:name", "", ARXIV_NS).strip() for a in entry.findall("atom:author", ARXIV_NS)]
+        journal_ref = _t("arxiv:journal_ref")
+        results.append({
+            "url": f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else arxiv_url,
+            "title": _t("atom:title"),
+            "content": _t("atom:summary")[:3000],
+            "doi": doi,
+            "published_date": _t("atom:published")[:10],
+            "arxiv_id": arxiv_id or None,
+            "authors": [a for a in authors if a][:50],
+            "venue": journal_ref,
+            "oa_pdf_url": f"https://arxiv.org/pdf/{arxiv_id}" if arxiv_id else None,
+            "is_oa": True,
+            "publication_type": "article" if (doi and journal_ref) else "",
+            "score": 0.6,
+            "citationCount": None,
+            "corpus": "arxiv",
+            "type": "paper",
+        })
+    return results
 
 
 def search_arxiv(query: str, limit: int = 20, sort_by: str = "relevance") -> list[dict]:
-    """Query arXiv Atom API. Returns [{url,title,content,doi,published_date,arxiv_id}]."""
+    """Query arXiv Atom API (one retry on 503/429)."""
     if not query or not query.strip():
         return []
-    # arXiv expects search_query param; use all: prefix for broad match
     params = {
         "search_query": f"all:{query}",
         "start": 0,
@@ -80,268 +97,42 @@ def search_arxiv(query: str, limit: int = 20, sort_by: str = "relevance") -> lis
         "sortBy": sort_by if sort_by in ("relevance", "lastUpdatedDate", "submittedDate") else "relevance",
         "sortOrder": "descending",
     }
-    try:
-        resp = httpx.get(ARXIV_API, params=params, timeout=TIMEOUT)
-        resp.raise_for_status()
-        root = ET.fromstring(resp.text)
-        results = []
-        for entry in root.findall("atom:entry", ARXIV_NS):
-            title_el = entry.find("atom:title", ARXIV_NS)
-            summary_el = entry.find("atom:summary", ARXIV_NS)
-            id_el = entry.find("atom:id", ARXIV_NS)
-            pub_el = entry.find("atom:published", ARXIV_NS)
-            doi_el = entry.find("arxiv:doi", ARXIV_NS)
-            title = title_el.text.strip().replace("\n", " ") if title_el is not None and title_el.text else ""
-            summary = summary_el.text.strip().replace("\n", " ") if summary_el is not None and summary_el.text else ""
-            arxiv_url = id_el.text.strip() if id_el is not None and id_el.text else ""
-            arxiv_id = arxiv_url.split("/abs/")[-1] if "/abs/" in arxiv_url else arxiv_url
-            doi_text = doi_el.text.strip() if doi_el is not None and doi_el.text else None
-            doi = _extract_doi(summary, doi_text)
-            pub = pub_el.text.strip()[:10] if pub_el is not None and pub_el.text else ""
-            results.append({
-                "url": arxiv_url or f"https://arxiv.org/abs/{arxiv_id}",
-                "title": title,
-                "content": summary[:3000],
-                "doi": doi,
-                "published_date": pub,
-                "arxiv_id": arxiv_id,
-                "score": 0.6,  # base, reranked later
-                "citationCount": None,
-                "corpus": "arxiv",
-            })
-        return results
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 503:
-            time.sleep(3.5)
-            try:
-                resp = httpx.get(ARXIV_API, params=params, timeout=TIMEOUT)
-                resp.raise_for_status()
-                root = ET.fromstring(resp.text)
-                # quick parse retry (single)
-                results = []
-                for entry in root.findall("atom:entry", ARXIV_NS):
-                    title_el = entry.find("atom:title", ARXIV_NS)
-                    summary_el = entry.find("atom:summary", ARXIV_NS)
-                    id_el = entry.find("atom:id", ARXIV_NS)
-                    pub_el = entry.find("atom:published", ARXIV_NS)
-                    doi_el = entry.find("arxiv:doi", ARXIV_NS)
-                    title = title_el.text.strip().replace("\n", " ") if title_el is not None and title_el.text else ""
-                    summary = summary_el.text.strip().replace("\n", " ") if summary_el is not None and summary_el.text else ""
-                    arxiv_url = id_el.text.strip() if id_el is not None and id_el.text else ""
-                    arxiv_id = arxiv_url.split("/abs/")[-1] if "/abs/" in arxiv_url else arxiv_url
-                    doi_text = doi_el.text.strip() if doi_el is not None and doi_el.text else None
-                    doi = _extract_doi(summary, doi_text)
-                    pub = pub_el.text.strip()[:10] if pub_el is not None and pub_el.text else ""
-                    results.append({
-                        "url": arxiv_url or f"https://arxiv.org/abs/{arxiv_id}",
-                        "title": title,
-                        "content": summary[:3000],
-                        "doi": doi,
-                        "published_date": pub,
-                        "arxiv_id": arxiv_id,
-                        "score": 0.6,
-                        "citationCount": None,
-                        "corpus": "arxiv",
-                    })
-                return results
-            except Exception:
-                logger.warning("arXiv retry failed")
-                return []
-        logger.warning("arXiv HTTP %s", e.response.status_code)
-        return []
-    except Exception as e:
-        logger.warning("arXiv search error: %s", e)
-        return []
+    for attempt in range(2):
+        try:
+            resp = httpx.get(ARXIV_API, params=params, timeout=TIMEOUT)
+            if resp.status_code in (429, 503) and attempt == 0:
+                time.sleep(3.5)
+                continue
+            resp.raise_for_status()
+            return _parse_arxiv_feed(resp.text)
+        except Exception as e:
+            if attempt == 1:
+                logger.warning("arXiv search error: %s", e)
+    return []
 
 
 def search_openalex_keyword(query: str, limit: int = 20, from_date: str | None = None) -> list[dict]:
-    """OpenAlex keyword search via title_and_abstract.search."""
+    """OpenAlex keyword search (shared parser in backend/core/scholarly.py)."""
     if not query or not query.strip():
         return []
-    params = {
-        "search": query,
-        "per-page": max(1, min(int(limit), 50)),
-        "sort": "relevance_score:desc",
-    }
-    if from_date:
-        params["filter"] = f"from_publication_date:{from_date}"
-    # attach API key if configured (raising rate limits) via header to avoid URL logging
-    _oak = _openalex_key()
-    _headers = {"api_key": _oak} if _oak else None
-    try:
-        resp = httpx.get(OPENALEX_API, params=params, headers=_headers, timeout=TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        results = []
-        for w in data.get("results", [])[:limit]:
-            doi = w.get("doi", "")
-            if doi and doi.startswith("https://doi.org/"):
-                doi = doi.replace("https://doi.org/", "")
-            title = w.get("title", "") or ""
-            # abstract inverted index → reconstruct snippet
-            ab = w.get("abstract_inverted_index")
-            abstract = ""
-            if isinstance(ab, dict) and ab:
-                # rebuild approximate abstract by sorting by position
-                try:
-                    flat = {}
-                    for word, pos_list in ab.items():
-                        for pos in pos_list:
-                            flat[pos] = word
-                    abstract = " ".join(flat[i] for i in sorted(flat))[:3000]
-                except Exception:
-                    abstract = ""
-            if not abstract:
-                # fallback: use display_name + concepts
-                abstract = title
-            pub_date = w.get("publication_date", "") or ""
-            cited = w.get("cited_by_count", 0) or 0
-            landing = (w.get("primary_location") or {}).get("landing_page_url") or w.get("id", "")
-            # OpenAlex id like https://openalex.org/W123 -> url
-            openalex_id = w.get("id", "")
-            url = doi and f"https://doi.org/{doi}" or landing or openalex_id
-            results.append({
-                "url": url,
-                "title": title,
-                "content": abstract[:3000],
-                "doi": doi or None,
-                "published_date": pub_date[:10],
-                "score": 0.6,
-                "citationCount": cited,
-                "openalex_id": openalex_id,
-                "referenced_works": w.get("referenced_works", [])[:20],
-                "corpus": "openalex",
-            })
-        return results
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 429:
-            retry_after = int(e.response.headers.get("Retry-After", "1") or "1")
-            time.sleep(min(retry_after, 5))
-            try:
-                resp = httpx.get(OPENALEX_API, params=params, headers=_headers, timeout=TIMEOUT)
-                resp.raise_for_status()
-                data = resp.json()
-                results = []
-                for w in data.get("results", [])[:limit]:
-                    doi = w.get("doi", "")
-                    if doi and doi.startswith("https://doi.org/"):
-                        doi = doi.replace("https://doi.org/", "")
-                    title = w.get("title", "") or ""
-                    ab = w.get("abstract_inverted_index")
-                    abstract = ""
-                    if isinstance(ab, dict) and ab:
-                        try:
-                            flat = {}
-                            for word, pos_list in ab.items():
-                                for pos in pos_list:
-                                    flat[pos] = word
-                            abstract = " ".join(flat[i] for i in sorted(flat))[:3000]
-                        except Exception:
-                            abstract = ""
-                    if not abstract:
-                        abstract = title
-                    pub_date = w.get("publication_date", "") or ""
-                    cited = w.get("cited_by_count", 0) or 0
-                    landing = (w.get("primary_location") or {}).get("landing_page_url") or w.get("id", "")
-                    openalex_id = w.get("id", "")
-                    url = doi and f"https://doi.org/{doi}" or landing or openalex_id
-                    results.append({
-                        "url": url,
-                        "title": title,
-                        "content": abstract[:3000],
-                        "doi": doi or None,
-                        "published_date": pub_date[:10],
-                        "score": 0.6,
-                        "citationCount": cited,
-                        "openalex_id": openalex_id,
-                        "referenced_works": w.get("referenced_works", [])[:20],
-                        "corpus": "openalex",
-                    })
-                return results
-            except Exception:
-                return []
-        logger.warning("OpenAlex HTTP %s", e.response.status_code)
-        return []
-    except Exception as e:
-        logger.warning("OpenAlex search error: %s", e)
-        return []
+    rows = scholarly.openalex_search(query, n=limit,
+                                     filters={"from_publication_date": from_date} if from_date else None)
+    for r in rows:
+        r["score"] = 0.6
+    return rows
 
 
 def resolve_openalex_by_doi(doi: str) -> dict | None:
-    if not doi:
-        return None
-    try:
-        _oak = _openalex_key()
-        _headers = {"api_key": _oak} if _oak else None
-        url = f"{OPENALEX_API}/https://doi.org/{doi}"
-        resp = httpx.get(url, headers=_headers, timeout=TIMEOUT)
-        if resp.status_code == 404:
-            return None
-        resp.raise_for_status()
-        w = resp.json()
-        title = w.get("title", "") or ""
-        doi_clean = w.get("doi", "").replace("https://doi.org/", "") if w.get("doi") else doi
-        cited = w.get("cited_by_count", 0) or 0
-        pub_date = w.get("publication_date", "") or ""
-        return {
-            "doi": doi_clean,
-            "title": title,
-            "citationCount": cited,
-            "published_date": pub_date[:10],
-            "referenced_works": w.get("referenced_works", [])[:20],
-            "openalex_id": w.get("id", ""),
-        }
-    except Exception:
-        return None
+    rows = scholarly.openalex_by_dois([doi]) if doi else []
+    return rows[0] if rows else None
 
 
 def search_openalex_by_referenced(openalex_ids: list[str], limit: int = 5) -> list[dict]:
-    results = []
-    _oak = _openalex_key()
-    _headers = {"api_key": _oak} if _oak else None
-    for oid in openalex_ids[:limit]:
-        # OpenAlex id like https://openalex.org/W123
-        try:
-            target = oid if oid.startswith("http") else f"{OPENALEX_API}/{oid}"
-            resp = httpx.get(target, headers=_headers, timeout=TIMEOUT)
-            if resp.status_code != 200:
-                continue
-            w = resp.json()
-            doi = w.get("doi", "")
-            if doi and doi.startswith("https://doi.org/"):
-                doi = doi.replace("https://doi.org/", "")
-            title = w.get("title", "") or ""
-            ab = w.get("abstract_inverted_index")
-            abstract = ""
-            if isinstance(ab, dict) and ab:
-                try:
-                    flat = {}
-                    for word, pos_list in ab.items():
-                        for pos in pos_list:
-                            flat[pos] = word
-                    abstract = " ".join(flat[i] for i in sorted(flat))[:3000]
-                except Exception:
-                    abstract = ""
-            if not abstract:
-                abstract = title
-            pub_date = w.get("publication_date", "") or ""
-            cited = w.get("cited_by_count", 0) or 0
-            landing = (w.get("primary_location") or {}).get("landing_page_url") or w.get("id", "")
-            url = doi and f"https://doi.org/{doi}" or landing or oid
-            results.append({
-                "url": url,
-                "title": title,
-                "content": abstract[:3000],
-                "doi": doi or None,
-                "published_date": pub_date[:10],
-                "score": 0.55,
-                "citationCount": cited,
-                "openalex_id": w.get("id", oid),
-                "corpus": "openalex_ref",
-            })
-        except Exception:
-            continue
-    return results
+    rows = scholarly.openalex_get_many(list(openalex_ids)[:limit])
+    for r in rows:
+        r["score"] = 0.55
+        r["corpus"] = "openalex_ref"
+    return rows
 
 
 def search_exa_paper(query: str, limit: int = 10) -> list[dict]:
@@ -382,121 +173,109 @@ def search_exa_paper(query: str, limit: int = 10) -> list[dict]:
 
 
 def _dedup_sources(sources: list[dict]) -> list[dict]:
+    """Merge the same paper across corpora (arXiv id ⇄ 10.48550/arxiv DOI ⇄ DOI ⇄ OpenAlex id).
+    Fields are merged fill-gaps-only; the higher citation count and longer abstract win."""
     seen: dict[str, dict] = {}
     for s in sources:
-        doi = (s.get("doi") or "").strip().lower()
-        arxiv_id = (s.get("arxiv_id") or "").strip().lower()
-        norm_title = _normalize_title(s.get("title", "") or "")
-        key = doi or arxiv_id or norm_title
-        if not key:
-            # fallback to url
-            key = (s.get("url", "") or "").strip().lower()
-        if key in seen:
-            # merge citationCount/score if better
-            existing = seen[key]
-            # keep higher citationCount/score
-            if (s.get("citationCount") or 0) > (existing.get("citationCount") or 0):
-                existing["citationCount"] = s.get("citationCount")
-            if float(s.get("score", 0) or 0) > float(existing.get("score", 0) or 0):
-                existing["score"] = s.get("score")
-            # merge content longer
-            if len(s.get("content", "") or "") > len(existing.get("content", "") or ""):
-                existing["content"] = s.get("content", "")
-            # keep doi if missing
-            if not existing.get("doi") and s.get("doi"):
-                existing["doi"] = s.get("doi")
-        else:
+        key = scholarly.identity_key(s) or ("title:" + _normalize_title(s.get("title", "") or "")) \
+            or (s.get("url", "") or "").strip().lower()
+        if key not in seen:
             seen[key] = s
+            continue
+        existing = seen[key]
+        if (s.get("citationCount") or 0) > (existing.get("citationCount") or 0):
+            existing["citationCount"] = s.get("citationCount")
+        if float(s.get("score", 0) or 0) > float(existing.get("score", 0) or 0):
+            existing["score"] = s.get("score")
+        if len(s.get("content", "") or "") > len(existing.get("content", "") or ""):
+            existing["content"] = s.get("content", "")
+        for k, v in s.items():
+            if v not in (None, "", [], False) and existing.get(k) in (None, "", [], False):
+                existing[k] = v
+        existing["is_retracted"] = bool(existing.get("is_retracted") or s.get("is_retracted"))
     return list(seen.values())
 
 
 def _rerank(sources: list[dict]) -> list[dict]:
+    """Rank = 0.4·within-corpus reciprocal rank + 0.3·log citations + 0.3·base score + recency.
+
+    Rank is taken *within each corpus* (stored as ``_corpus_rank`` by academic_search), so the
+    order in which corpora were concatenated no longer biases the result. Unknown citation
+    counts get the median instead of 0, so brand-new papers are not buried."""
+    import math
     if not sources:
         return sources
-    max_cite = max((s.get("citationCount") or 0) for s in sources) or 1
-    # compute recency bonus: newer = higher (within 5 years)
+    counts = sorted(s["citationCount"] for s in sources if isinstance(s.get("citationCount"), (int, float)))
+    median = counts[len(counts) // 2] if counts else 0
+    max_cite = max(counts) if counts else 1
     now_year = datetime.now(timezone.utc).year
-    for idx, s in enumerate(sources):
-        base = 0.0
-        # reciprocal rank approximation via original order
-        base += 0.4 * (1.0 / (idx + 1))
-        cite = s.get("citationCount") or 0
-        # log1p normalized
-        import math
-        cite_norm = math.log1p(cite) / math.log1p(max_cite) if max_cite else 0
-        base += 0.3 * cite_norm
-        exa_score = float(s.get("score", 0.5) or 0.5)
-        base += 0.3 * exa_score
-        # recency: within 2y bonus 0.05, 5y 0.02
+    for s in sources:
+        rank = s.get("_corpus_rank", 0)
+        cite = s.get("citationCount") if isinstance(s.get("citationCount"), (int, float)) else median
+        score = 0.4 * (1.0 / (rank + 1))
+        score += 0.3 * (math.log1p(cite) / math.log1p(max_cite) if max_cite else 0)
+        score += 0.3 * float(s.get("score", 0.5) or 0.5)
         pub = s.get("published_date", "") or ""
-        try:
-            year = int(pub[:4]) if pub and pub[:4].isdigit() else None
-            if year:
-                age = now_year - year
-                if age <= 2:
-                    base += 0.05
-                elif age <= 5:
-                    base += 0.02
-        except Exception:
-            pass
-        s["_rank_score"] = base
+        if pub[:4].isdigit():
+            age = now_year - int(pub[:4])
+            score += 0.05 if age <= 2 else 0.02 if age <= 5 else 0.0
+        if s.get("is_retracted"):
+            score -= 1.0  # never rank a retracted paper first
+        s["_rank_score"] = score
     sources.sort(key=lambda x: x.get("_rank_score", 0), reverse=True)
     for s in sources:
         s.pop("_rank_score", None)
     return sources
 
 
-def academic_search(query: str, max_sources: int = 20, difficulty: int = 5, include_arxiv: bool = True, include_openalex: bool = True) -> list[dict]:
-    """3-corpus academic search with DOI dedup + rerank + difficulty budget.
+def _with_corpus_rank(rows: list[dict]) -> list[dict]:
+    for i, r in enumerate(rows):
+        r["_corpus_rank"] = i
+    return rows
 
-    difficulty 1-3:0 follow-ups, 4-7:1, 8-10:2 (OR pattern).
-    """
+
+def academic_search(query: str, max_sources: int = 20, difficulty: int = 5, include_arxiv: bool = True,
+                    include_openalex: bool = True, enrich: bool = True) -> list[dict]:
+    """arXiv + OpenAlex (+ Exa papers) with cross-corpus dedup, rerank and optional reference chasing.
+
+    difficulty 1-3: no follow-ups, 4-7: chase references of the top 3 OpenAlex hits, 8-10: more.
+    ``enrich`` fills retraction/preprint/OA/author metadata via scholarly.enrich (batched)."""
     if not query or not query.strip():
         return []
     max_sources = max(1, min(int(max_sources), 50))
     difficulty = max(1, min(int(difficulty), 10))
-    # follow-up budget
-    if difficulty <= 3:
-        follow_budget = 0
-    elif difficulty <= 7:
-        follow_budget = 1
-    else:
-        follow_budget = 2
+    follow_budget = 0 if difficulty <= 3 else 1 if difficulty <= 7 else 2
 
-    arxiv_results = search_arxiv(query, limit=max_sources // 2 + 5) if include_arxiv else []
-    openalex_results = search_openalex_keyword(query, limit=max_sources // 2 + 5) if include_openalex else []
-    exa_paper_results = search_exa_paper(query, limit=max_sources // 3 + 3)
+    arxiv_results = _with_corpus_rank(search_arxiv(query, limit=max_sources // 2 + 5)) if include_arxiv else []
+    openalex_results = _with_corpus_rank(search_openalex_keyword(query, limit=max_sources // 2 + 5)) \
+        if include_openalex else []
+    exa_paper_results = _with_corpus_rank(search_exa_paper(query, limit=max_sources // 3 + 3))
+    for r in exa_paper_results:
+        # Exa's "paper" category also returns tutorials and blog posts; without a scholarly
+        # identifier a result is treated as a web page, not as a research paper.
+        if not scholarly.identity_key(r):
+            r["type"] = "web"
 
     merged = _dedup_sources(arxiv_results + openalex_results + exa_paper_results)
     merged = _rerank(merged)
 
-    # difficulty follow-ups: chase referenced_works of top OpenAlex hits
     if follow_budget > 0:
-        top_openalex = [s for s in merged if s.get("corpus") == "openalex"][:3]
         referenced_ids = []
-        for s in top_openalex:
-            refs = s.get("referenced_works") or []
-            referenced_ids.extend(refs[:3])
-        # dedup referenced ids
-        referenced_ids = list(dict.fromkeys(referenced_ids))[: follow_budget * 3]
+        for s in [s for s in merged if s.get("openalex_id")][:3]:
+            referenced_ids.extend((s.get("referenced_works") or [])[:3 * follow_budget])
+        referenced_ids = list(dict.fromkeys(referenced_ids))[: follow_budget * 9]
         if referenced_ids:
-            follow = search_openalex_by_referenced(referenced_ids, limit=follow_budget * 3)
-            if follow:
-                merged = _dedup_sources(merged + follow)
-                merged = _rerank(merged)
-
-    # optional DOI enrichment: for arXiv entries without citationCount, try OpenAlex DOI resolve
-    # limit to top 5 to avoid hammering
-    for s in merged[:5]:
-        if s.get("doi") and s.get("citationCount") is None and s.get("corpus") == "arxiv":
-            info = resolve_openalex_by_doi(s["doi"])
-            if info:
-                s["citationCount"] = info.get("citationCount")
-                s["published_date"] = s.get("published_date") or info.get("published_date", "")
-                s["referenced_works"] = info.get("referenced_works", [])
+            follow = _with_corpus_rank(search_openalex_by_referenced(referenced_ids, limit=len(referenced_ids)))
+            merged = _rerank(_dedup_sources(merged + follow))
 
     merged = merged[:max_sources]
-    # log metrics
+    if enrich:
+        try:
+            scholarly.enrich(merged, crossref=False)  # Crossref per-DOI calls happen later, for kept sources
+        except Exception as e:
+            logger.warning("scholarly enrichment failed: %s", e)
+    for s in merged:
+        s.pop("_corpus_rank", None)
     try:
         doi_cov = sum(1 for s in merged if s.get("doi")) / len(merged) if merged else 0
         logger.info("academic_search q=%r returned=%d doi_cov=%.2f difficulty=%d", query[:60], len(merged), doi_cov, difficulty)

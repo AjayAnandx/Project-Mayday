@@ -1,0 +1,5 @@
+- Copy quotes character for character from the text. Never fix grammar, shorten words, convert units or join sentences from different places in one quote.
+- Keep the quote to the sentence (or part of it) that carries the fact; include the number, unit and date when present.
+- The statement may only say what the quote says. Who said it belongs in the statement when the source attributes it ("BNEF reports ...").
+- Mark forecasts as kind "forecast" and opinions as "opinion"; do not present them as facts.
+- Skip marketing claims without data, navigation text, and content unrelated to the questions.

@@ -17,85 +17,114 @@ def _today_str():
     return _utcnow().strftime("%Y-%m-%d")
 
 
-REMINDERS_PATH = Path(__file__).resolve().parent.parent.parent / "reminders.json"
+REMINDERS_PATH = Path(__file__).resolve().parent.parent.parent / "reminders.json"  # legacy; migrated into the planner
+BROADCAST_KEEP = 200  # notifications kept for multi-client polling
+
+
+def _hhmm(value: str | None) -> str:
+    if not value or len(value) < 16:
+        return ""
+    return datetime.fromisoformat(value).strftime("%I:%M %p").lstrip("0")
+
+
+def build_planner_notification(alert: dict) -> dict:
+    """Turn a PlannerStore alert into the UI notification payload."""
+    item = alert["item"]
+    kind, reason, title = item["kind"], alert["reason"], item["title"]
+    person = (alert.get("person") or {}).get("name", "")
+    actions = ["done", "snooze"]
+    if reason == "reminder" and kind == "event":
+        head, cat, actions = "Upcoming event", "event_reminder", ["snooze"]
+        when = _hhmm(alert.get("occurrence"))
+        body = f"{title}" + (f" at {when}" if when else "")
+    elif reason == "reminder" and kind == "reminder":
+        head, cat, body = "Reminder", "custom_reminder", title
+    elif reason == "reminder":
+        head, cat, body = "Task due", "task_due", title
+    elif reason == "overdue":
+        head, cat, body = "Overdue", "todo_overdue", f"{title} was due {item.get('due_at', '')[:10]}"
+    elif reason == "due_today":
+        head, cat, body = "Due today", "task_due", title
+    elif reason == "follow_up":
+        head, cat = f"Follow up with {person or 'them'}", "follow_up"
+        body = f"Still waiting on: {title}"
+    else:  # snooze
+        head, cat, body = "Snoozed reminder", "custom_reminder", title
+    return {
+        "type": "notification",
+        "id": alert["key"],
+        "title": head,
+        "body": body,
+        "category": cat,
+        "item_id": item["id"],
+        "item_kind": kind,
+        "actions": actions,
+        "action": {"page": "planner"},
+    }
+
+
+def _auto_draft_nudge(item_id: str) -> bool:
+    """Draft (never send) a follow-up email for a waiting item. True if drafted."""
+    try:
+        from backend.core.planner_nudge import draft_nudge
+        return bool(draft_nudge(item_id, automatic=True).get("drafted"))
+    except Exception as e:
+        logger.warning("auto nudge draft failed for %s: %s", item_id, e)
+        return False
 
 
 class Scheduler:
     def __init__(self):
-        self._reminders: dict[str, dict] = {}
-        self._seen_events: set[str] = set()
-        self._seen_todos: set[str] = set()
         self._seen_gmail: set[str] = set()
         self._queue: asyncio.Queue[dict] = asyncio.Queue()
         self._lock = threading.Lock()
-        self._fired_notifications: list[dict] = []
-        self._load_reminders()
+        self._fired_notifications: list[dict] = []   # legacy drain-on-read buffer
+        self._broadcast: list[tuple[int, dict]] = []  # (seq, notification) for multi-client reads
+        self._seq = 0
 
-    def _reminders_path(self) -> Path:
-        return REMINDERS_PATH
-
-    def _load_reminders(self):
-        p = self._reminders_path()
-        if p.exists():
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                self._reminders = {r["id"]: r for r in data.get("reminders", [])}
-            except (json.JSONDecodeError, OSError):
-                pass
-
-    def _save_reminders(self):
-        p = self._reminders_path()
-        data = {"reminders": list(self._reminders.values())}
-        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    # ── reminder API (backed by the Planner store; kind="reminder") ──────────
+    @staticmethod
+    def _planner():
+        from backend.core.planner_store import get_planner
+        return get_planner()
 
     def add_reminder(self, message: str, datetime_str: str) -> tuple[str, bool, str]:
-        now_utc = _utcnow()
+        """Create a reminder at local time `datetime_str`. Past times move to now+1min.
+
+        Returns (id, adjusted, stored_local_time)."""
+        from backend.core.planner_store import norm_time, now_local
         adjusted = False
         try:
-            local_dt = datetime.fromisoformat(datetime_str)
-        except ValueError:
-            local_dt = now_utc
-            adjusted = True
-
-        offset = now_utc.astimezone().utcoffset()
-        if offset is not None:
-            dt_utc = (local_dt - offset).replace(tzinfo=timezone.utc)
-        else:
-            dt_utc = local_dt.replace(tzinfo=timezone.utc)
-
-        if dt_utc.replace(microsecond=0) < now_utc.replace(microsecond=0):
-            dt_utc = now_utc + timedelta(minutes=1)
-            adjusted = True
-
-        datetime_utc_str = dt_utc.isoformat()[:16]
-        reminder_id = uuid.uuid4().hex[:12]
-        reminder = {
-            "id": reminder_id,
-            "message": message,
-            "datetime": datetime_utc_str,
-            "created_at": now_utc.isoformat(),
-            "fired": False,
-        }
-        with self._lock:
-            self._reminders[reminder_id] = reminder
-            self._save_reminders()
-        return reminder_id, adjusted, datetime_utc_str
+            normalized = norm_time(datetime_str)
+            when = datetime.fromisoformat(normalized)
+            if len(normalized) == 10:
+                when = when.replace(hour=9)  # date-only reminder → 09:00
+        except (ValueError, TypeError):
+            when, adjusted = now_local(), True
+        if when < now_local():
+            when, adjusted = now_local() + timedelta(minutes=1), True
+        stored = when.strftime("%Y-%m-%dT%H:%M")
+        item = self._planner().create_item(message, kind="reminder", due_at=stored,
+                                           source={"type": "reminder_api"})
+        return item["id"], adjusted, stored
 
     def list_reminders(self) -> list[dict]:
-        with self._lock:
-            return [
-                r for r in self._reminders.values()
-                if not r["fired"] and r["datetime"] >= _utcnow().isoformat()[:16]
-            ]
+        from backend.core.planner_store import now_local
+        now = now_local().strftime("%Y-%m-%dT%H:%M")
+        out = []
+        for it in self._planner().list_items("all", kinds=("reminder",)):
+            if (it.get("due_at") or "") >= now[: len(it.get("due_at") or "")]:
+                out.append({"id": it["id"], "message": it["title"], "datetime": it["due_at"],
+                            "created_at": it["created_at"], "fired": False})
+        return out
 
     def delete_reminder(self, reminder_id: str) -> bool:
-        with self._lock:
-            if reminder_id in self._reminders:
-                del self._reminders[reminder_id]
-                self._save_reminders()
-                return True
+        item = self._planner().get_item(reminder_id)
+        if not item or item["kind"] != "reminder":
             return False
+        return self._planner().delete_item(reminder_id)
 
+    # ── delivery ─────────────────────────────────────────────────────────────
     def get_queue(self) -> asyncio.Queue:
         return self._queue
 
@@ -105,114 +134,80 @@ class Scheduler:
             self._fired_notifications.clear()
             return result
 
-    def fire_notification(self, title: str, body: str, category: str = "event_reminder", action_page: str = "chat"):
-        n = {
+    def get_fired_since(self, since: int | None) -> dict:
+        """Broadcast read: every client sees every notification newer than `since`.
+
+        A client starts with since=-1 (or omitted) to learn the current cursor
+        without replaying history, then polls with the returned `seq`.
+        """
+        with self._lock:
+            if since is None or since < 0:
+                return {"seq": self._seq, "items": []}
+            return {"seq": self._seq, "items": [n for s, n in self._broadcast if s > since]}
+
+    def _deliver(self, n: dict):
+        """Single delivery path: broadcast log (multi-tab UI) + legacy drain buffer + WS queue."""
+        with self._lock:
+            self._seq += 1
+            self._broadcast.append((self._seq, n))
+            del self._broadcast[:-BROADCAST_KEEP]
+            self._fired_notifications.append(n)
+        try:
+            self._queue.put_nowait(n)
+        except Exception:
+            pass
+
+    def fire_notification(self, title: str, body: str, category: str = "event_reminder", action_page: str = "chat",
+                          extra: dict | None = None):
+        self._deliver({**(extra or {}),
             "type": "notification",
             "id": f"immediate_{uuid.uuid4().hex[:8]}",
             "title": title,
             "body": body,
             "category": category,
             "action": {"page": action_page},
-        }
-        with self._lock:
-            self._fired_notifications.append(n)
+        })
 
     async def run(self):
         logger.info("Scheduler started")
         while True:
-            await self._check_events()
-            await self._check_todos()
-            await self._check_reminders()
+            await self._check_planner()
+            await self._check_digest()
             await self._check_gmail()
             await self._check_commute()
+            await self._check_brain()
             await asyncio.sleep(60)
 
-    async def _check_events(self):
+    async def _check_brain(self):
+        """Brain V2 P6: nightly consolidation + weekly persona (each at most once)."""
         try:
-            from backend.core.data_store import get_store
-            store = get_store()
-            now = _utcnow()
-            window_end = (now + timedelta(minutes=30)).isoformat()
-            now_iso = now.isoformat()
-            raw = store.list_events(start_date=now_iso, end_date=window_end)
-            for ev in raw:
-                ev_id = ev["id"]
-                if ev_id in self._seen_events:
-                    continue
-                expanded = store.expand_recurring(ev, now_iso[:10], (now + timedelta(days=1)).isoformat()[:10])
-                for inst in expanded:
-                    if inst.get("_recurring"):
-                        inst_id = inst.get("_original_id", ev_id) + "_" + inst.get("start_time", "")
-                    else:
-                        inst_id = ev_id
-                    if inst_id in self._seen_events:
-                        continue
-                    self._seen_events.add(inst_id)
-                    start = inst.get("start_time", "")
-                    if start <= window_end and start >= now_iso:
-                        await self._queue.put({
-                            "type": "notification",
-                            "id": inst_id,
-                            "title": "Upcoming Event",
-                            "body": f"{inst['title']} at {start[:16]}",
-                            "category": "event_reminder",
-                            "action": {"page": "calendar"},
-                        })
+            from backend.brain.reflection import maybe_reflect
+            await asyncio.get_running_loop().run_in_executor(None, maybe_reflect)
         except Exception as e:
-            logger.exception("Scheduler _check_events error: %s", e)
+            logger.exception("Scheduler _check_brain error: %s", e)
 
-    async def _check_todos(self):
+    # ── planner alerts ───────────────────────────────────────────────────────
+    async def _check_planner(self):
         try:
-            from backend.core.data_store import get_store
-            store = get_store()
-            today = _today_str()
-            todos = store.list_todos(include_completed=False)
-            for t in todos:
-                due = t.get("due_date")
-                if not due:
-                    continue
-                if due >= today:
-                    continue
-                todo_key = t["id"] + "_" + today
-                if todo_key in self._seen_todos:
-                    continue
-                self._seen_todos.add(todo_key)
-                await self._queue.put({
-                    "type": "notification",
-                    "id": todo_key,
-                    "title": "Overdue Todo",
-                    "body": f"{t['title']} was due {due}",
-                    "category": "todo_overdue",
-                    "action": {"page": "todos"},
-                })
+            planner = self._planner()
+            for alert in planner.pending_alerts():
+                n = build_planner_notification(alert)
+                if alert["reason"] == "follow_up":
+                    drafted = await asyncio.get_running_loop().run_in_executor(
+                        None, _auto_draft_nudge, alert["item"]["id"])
+                    if drafted:
+                        n["body"] += " — a polite follow-up draft is waiting in Gmail for your approval."
+                self._deliver(n)
+                planner.mark_fired(alert["key"])
         except Exception as e:
-            logger.exception("Scheduler _check_todos error: %s", e)
+            logger.exception("Scheduler _check_planner error: %s", e)
 
-    async def _check_reminders(self):
+    async def _check_digest(self):
         try:
-            now_str = _utcnow().isoformat()[:16]
-            to_fire: list[dict] = []
-            with self._lock:
-                for rid, r in list(self._reminders.items()):
-                    if not r["fired"] and r["datetime"] <= now_str:
-                        r["fired"] = True
-                        to_fire.append(dict(r))
-                if to_fire:
-                    self._save_reminders()
-            for r in to_fire:
-                n = {
-                    "type": "notification",
-                    "id": r["id"],
-                    "title": "Reminder",
-                    "body": r["message"],
-                    "category": "custom_reminder",
-                    "action": {"page": "chat"},
-                }
-                await self._queue.put(n)
-                with self._lock:
-                    self._fired_notifications.append(n)
+            from backend.core.planner_digest import maybe_send_digests
+            await asyncio.get_running_loop().run_in_executor(None, maybe_send_digests)
         except Exception as e:
-            logger.exception("Scheduler _check_reminders error: %s", e)
+            logger.exception("Scheduler _check_digest error: %s", e)
 
     async def _check_gmail(self):
         """Poll the dedicated Mayday mailbox (60s, history.list incremental sync).
@@ -300,13 +295,21 @@ class Scheduler:
         tid = meta.get("threadId", "")
         self.fire_notification("New Email", f"{frm}: {subject}",
                                category="email", action_page="chat")
+        # Brain V3 P8: urgent-message signal (sender identity reduced to "known"/"unknown").
         try:
-            from backend.memory.knowledge_graph import get_graph
-            get_graph().add_node("email", f"email:{message_id}",
-                                 {"subject": subject, "from": frm,
-                                  "thread_id": tid, "account": account})
-        except Exception:
-            pass
+            from backend.brain.signals import publish
+            from backend.brain.timing import important_senders, urgency
+            score, reasons = urgency(frm, subject, meta.get("snippet", ""), important_senders())
+            if score >= 0.6:
+                publish("urgent_message", "backend", {"channel": "gmail", "account": account,
+                                                      "score": round(score, 2), "reasons": reasons},
+                        subject=message_id)
+        except Exception as e:
+            logger.debug("urgency scoring failed: %s", e)
+        # Emails are not written to the knowledge graph (Brain V2): they live in
+        # Gmail + the operation log, and as graph nodes they were 1 in 5 nodes of
+        # pure retrieval noise. tid/account stay for the op-log/notification.
+        _ = (tid, account)
         try:
             from backend.core.operation_log import get_operation_log
             get_operation_log().record("create", "email", message_id, subject)
@@ -391,6 +394,15 @@ class Scheduler:
                         f"{ev.get('title', 'Event')} at {start[11:16]} — "
                         f"{fmt_duration(dur)} with traffic to {h['name']}.",
                         category="commute", action_page="chat")
+                    try:
+                        from backend.brain.signals import publish
+                        static = best.get("static_duration_s") or dur
+                        publish("traffic_delay", "backend",
+                                {"travel_min": round(dur / 60), "delay_min": round(max(0, dur - static) / 60),
+                                 "starts_in_min": round((start_dt - now).total_seconds() / 60)},
+                                subject=ev_id)
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.warning("Commute check failed for event %s: %s", ev_id, e)
                 continue

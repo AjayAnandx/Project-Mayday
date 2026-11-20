@@ -26,7 +26,9 @@ ENV_OVERRIDES = {
         "agent_email": "GMAIL_AGENT_EMAIL",
         "user_email": "GMAIL_USER_EMAIL",
     },
-    "maps": {"api_key": "GOOGLE_MAPS_API_KEY"},
+    # personal: keep the real home address out of the (public) repo — set it in .env
+    "maps": {"api_key": "GOOGLE_MAPS_API_KEY", "home": "MAYDAY_HOME_ADDRESS",
+             "home_latlng": "MAYDAY_HOME_LATLNG"},
 }
 
 

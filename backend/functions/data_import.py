@@ -182,7 +182,7 @@ def import_data_to_store(file_id: str, sheet_name: str | None = None, header_row
             return {"error": f"Research '{topic}' not found"}
         
         df = _read_file_as_df(file_id, sheet_name, header_row)
-        data_points = _convert_df_to_data_points(df, parse_result["detected"])
+        data_points = _convert_df_to_data_points(df, parse_result["detected"], file_id)
         if not data_points:
             return {"error": "No numeric data found in the file — nothing was imported. Make sure at least one column contains numbers (years, counts, amounts)."}
         
@@ -207,7 +207,7 @@ def import_data_to_store(file_id: str, sheet_name: str | None = None, header_row
             return {"error": f"Project '{project_name}' not found"}
         
         df = _read_file_as_df(file_id, sheet_name, header_row)
-        data_points = _convert_df_to_data_points(df, parse_result["detected"])
+        data_points = _convert_df_to_data_points(df, parse_result["detected"], file_id)
         if not data_points:
             return {"error": "No numeric data found in the file — nothing was imported. Make sure at least one column contains numbers (years, counts, amounts)."}
         
@@ -251,7 +251,7 @@ def _fmt_value(v) -> str:
         return str(v)
 
 
-def _convert_df_to_data_points(df: pd.DataFrame, detected: dict) -> list[dict]:
+def _convert_df_to_data_points(df: pd.DataFrame, detected: dict, source_name: str = "") -> list[dict]:
     data_points = []
     date_cols = detected.get("date_cols", [])
     numeric_cols = detected.get("numeric_cols", [])
@@ -286,7 +286,7 @@ def _convert_df_to_data_points(df: pd.DataFrame, detected: dict) -> list[dict]:
                 "value": _fmt_value(num_val),
                 "unit": "",
                 "confidence": "high",
-                "sources": [f"imported_from_file_row_{idx}"],
+                "sources": [{"title": f"Imported file: {source_name or 'upload'}", "corpus": "imported_file", "type": "imported_file"}],
             })
 
     return data_points

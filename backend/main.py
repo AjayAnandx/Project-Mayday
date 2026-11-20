@@ -11,6 +11,8 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from backend.api import todos, events, conversations, chat, memory, screenshots, search, notifications, location, projects, dashboard, documents, data_import, music, gmail
 from backend.api import awareness
+from backend.api import brain as brain_api
+from backend.api import planner as planner_api
 from backend.api.research import router as research_router
 from backend.voice import router as voice_router
 from backend.voice.router import realtime_router
@@ -100,6 +102,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(planner_api.router)
 app.include_router(todos.router)
 app.include_router(events.router)
 app.include_router(conversations.router)
@@ -117,6 +120,7 @@ app.include_router(research_router)
 app.include_router(voice_router)
 app.include_router(realtime_router)
 app.include_router(awareness.router)
+app.include_router(brain_api.router)
 app.include_router(music.router)
 app.include_router(gmail.router)
 

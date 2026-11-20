@@ -1,0 +1,101 @@
+# Brain V2 smoke suite. Fictional people/facts only (this file is committed).
+# Real-data cases go in smoke.personal.yaml (gitignored, same keys, merged at load).
+#
+# seed:    memories written through the real remember() path before recall cases run
+# recall:  q + expect (all regexes must appear in the injected "Relevant memories" block;
+#          recall@5 requires them in the first 5 lines)
+# tools:   q + expect_any (routing must send at least one) + optional forbid
+# capture: text + expect (regexes over "slot: value" the observer captures) + forbid
+
+seed:
+  - {entity: Kiran Rao, relation: is, value: my college friend from Anna University, type: person}
+  - {entity: Kiran Rao, relation: lives_in, value: Bengaluru, type: person}
+  - {entity: Kiran Rao, relation: said, value: Coorg trip moved to the second week of December, type: person}
+  - {entity: Meera, relation: is, value: my younger sister, type: person}
+  - {entity: Meera, relation: birthday, value: March 14, type: person}
+  - {entity: user, relation: allergic_to, value: peanuts, type: user}
+  - {entity: user, relation: prefers, value: short bullet-point answers in the morning, type: user}
+  - {entity: user, relation: goal, value: clear the GATE exam in February, type: user}
+  - {entity: user, relation: routine, value: gym at 6 am on weekdays, type: user}
+  - {entity: Orbit CRM, relation: status, value: waiting on client feedback from Dinesh, type: project}
+  - {entity: Orbit CRM, relation: deadline, value: launch on December 5, type: project}
+  - {entity: user, relation: decided, value: use Supabase instead of Firebase for Orbit CRM, type: user}
+  - {entity: user, relation: idea, value: voice-first expense tracker for small shops, type: user}
+  - {entity: Dinesh, relation: is, value: client contact at Orbit Logistics, type: person}
+
+recall:
+  - {id: person-direct, q: "who is Kiran Rao?", expect: ["Anna University|college friend"]}
+  - {id: person-paraphrase, q: "what did Kiran tell me about the trip?", expect: ["Coorg|December"]}
+  - {id: person-relation, q: "when is my sister's birthday?", expect: ["March 14"]}
+  - {id: health, q: "can I eat this satay sauce?", expect: ["peanut"]}
+  - {id: style, q: "how do I like my answers in the morning?", expect: ["bullet"]}
+  - {id: goal, q: "what exam am I preparing for?", expect: ["GATE"]}
+  - {id: routine, q: "should I book a 6 am meeting tomorrow?", expect: ["gym"]}
+  - {id: project-status, q: "where are we with the CRM project?", expect: ["client feedback|Dinesh"]}
+  - {id: project-deadline, q: "when does Orbit launch?", expect: ["December 5"]}
+  - {id: decision, q: "which database did we pick for Orbit?", expect: ["Supabase"]}
+  - {id: idea, q: "remind me of that app idea I had for shop owners", expect: ["expense tracker"]}
+  - {id: coref-client, q: "who is our contact at Orbit Logistics?", expect: ["Dinesh"]}
+  - {id: city, q: "which city is Kiran in now?", expect: ["Bengaluru"]}
+  - {id: open-ended, q: "what do you know about me?", expect: ["GATE|peanut|gym"]}
+  # coreference: the pronoun refers to someone named in an earlier user message
+  - {id: coref-pronoun, q: "what did he say about the trip?", history: ["I met Kiran for lunch today"], expect: ["Coorg|December"]}
+  - {id: coref-project, q: "what's the deadline for that project?", history: ["let's talk about Orbit CRM"], expect: ["December 5"]}
+  # meaning, not words
+  - {id: semantic-food, q: "is a Thai satay okay for me to order?", expect: ["peanut"]}
+  - {id: semantic-db, q: "what backend storage did we go with for the logistics client app?", expect: ["Supabase"]}
+
+tools:
+  # planner
+  - {id: todo-plain, q: "add buy milk to my list", expect_any: [plan_add]}
+  - {id: todo-personal, q: "I need to call the bank tomorrow, don't let me forget", expect_any: [plan_add]}
+  - {id: reminder, q: "remind me at 7pm to take my medicine", expect_any: [plan_add]}
+  - {id: schedule, q: "what does my day look like?", expect_any: [plan_list, plan_day]}
+  - {id: stressed, q: "I'm stressed about the exam, too much to do this week", expect_any: [plan_list, plan_day]}
+  - {id: delegate, q: "Dinesh owes me the feedback by Friday, keep track of it", expect_any: [plan_delegate]}
+  - {id: done, q: "finished the gym today", expect_any: [plan_complete]}
+  - {id: snooze, q: "push that reminder by an hour", expect_any: [plan_snooze]}
+  # memory
+  - {id: remember-explicit, q: "remember that my sister's birthday is March 14", expect_any: [remember]}
+  - {id: recall-person, q: "what did Kiran say about the trip last week?", expect_any: [recall, recall_entity, unified_search, get_conversations]}
+  - {id: recall-past-chat, q: "what were we discussing yesterday?", expect_any: [get_conversations, get_conversation_history]}
+  - {id: forget, q: "forget what I told you about my old job", expect_any: [forget, delete_entity]}
+  # email
+  - {id: email-him, q: "email him the report", expect_any: [gmail_send, gmail_draft]}
+  - {id: email-check, q: "anything new from Dinesh in my inbox?", expect_any: [gmail_search, gmail_list]}
+  - {id: email-reply, q: "reply to Kiran saying I'm in", expect_any: [gmail_reply, gmail_draft]}
+  # maps
+  - {id: commute, q: "how long to get to the office right now?", expect_any: [maps_route, maps_traffic]}
+  - {id: place, q: "find a quiet cafe near me to study", expect_any: [maps_search_places]}
+  # music
+  - {id: music-mood, q: "play something calm, I need to focus", expect_any: [music_play]}
+  # weather
+  - {id: weather, q: "do I need an umbrella today?", expect_any: [get_weather]}
+  # project
+  - {id: project-resume, q: "let's continue working on Orbit", expect_any: [resume_project]}
+  - {id: project-list, q: "what projects am I juggling right now?", expect_any: [list_projects]}
+  # research / web
+  - {id: research, q: "analyse the EV two-wheeler market in India", expect_any: [research_start, create_research]}
+  - {id: web, q: "what's the latest on the RBI rate decision?", expect_any: [web_search_exa, web_search_advanced_exa]}
+  # documents / system
+  - {id: pdf, q: "what does my offer letter pdf say about notice period?", expect_any: [search_pdfs, read_pdf]}
+  - {id: volume, q: "it's too loud", expect_any: [set_volume]}
+  - {id: open-app, q: "open spotify", expect_any: [open_application]}
+  # no tools needed
+  - {id: chitchat, q: "thanks, that helped", expect_any: [], forbid: [gmail_send, plan_delete, delete_entity]}
+
+capture:
+  - {id: sister, text: "my sister Meera's birthday is on March 14", expect: ["Meera", "March 14"]}
+  - {id: friend, text: "Kiran is my college friend, he lives in Bengaluru now", expect: ["Kiran", "Bengaluru"]}
+  - {id: allergy, text: "I'm allergic to peanuts", expect: ["peanut"]}
+  - {id: goal, text: "I want to clear the GATE exam in February", expect: ["GATE"]}
+  - {id: routine, text: "I go to the gym at 6 every weekday morning", expect: ["gym"]}
+  - {id: preference, text: "keep your answers short in the morning, I hate long paragraphs", expect: ["short|long paragraph"]}
+  - {id: decision, text: "ok we'll go with Supabase instead of Firebase for Orbit", expect: ["Supabase"]}
+  - {id: commitment, text: "I'll send Dinesh the invoice on Friday", expect: ["invoice|Dinesh"]}
+  - {id: idea, text: "random thought: a voice-first expense tracker for small shops could work", expect: ["expense tracker"]}
+  - {id: mood, text: "honestly I'm exhausted, didn't sleep well all week", expect: ["sleep|exhausted"]}
+  - {id: job, text: "I work as an ML engineer at QuantumScripts", expect: ["ML engineer|QuantumScripts"], forbid: ["relations: .*engineer", "relations: QuantumScripts"]}
+  - {id: coping, text: "when I'm stressed I take a long walk, it keeps me calm", expect: ["walk"]}
+  - {id: no-fact, text: "what's the weather like today?", expect: []}
+  - {id: no-fact-2, text: "can you open spotify", expect: []}

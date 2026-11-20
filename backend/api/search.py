@@ -143,19 +143,16 @@ def unified_search(q: str = Query("", min_length=1), limit: int = 20):
 
 @router.get("/prefix")
 def prefix_search(q: str = Query("", min_length=1), limit: int = 20):
-    store = get_store()
-    ids = store._trie.search(q)
-    todos = []
-    events = []
-    for t in store._todos:
-        if f"todo:{t['id']}" in ids:
-            if len(todos) >= limit:
-                break
-            todos.append({"id": t["id"], "title": t["title"]})
-    for e in store._events:
-        key = f"event:{e['id']}"
-        if key in ids:
-            if len(events) >= limit:
-                break
-            events.append({"id": e["id"], "title": e["title"]})
+    """Autocomplete over planner items: a title or any word in it starts with q."""
+    from backend.core.planner_store import get_planner
+    needle = q.strip().lower()
+    todos, events = [], []
+    for it in get_planner().all_items():
+        title = it["title"]
+        words = [title.lower(), *title.lower().split()]
+        if not any(w.startswith(needle) for w in words):
+            continue
+        bucket = events if it["kind"] == "event" else todos
+        if len(bucket) < limit:
+            bucket.append({"id": it["id"], "title": title})
     return {"todos": todos, "events": events, "conversations": []}

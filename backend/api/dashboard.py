@@ -57,6 +57,19 @@ def get_dashboard():
 
     recent = op_log.query(limit=10)
 
+    # Planner (V2): agenda = events + dated tasks/follow-ups for the next 7 days
+    try:
+        from backend.core.planner_store import get_planner, now_local
+        planner = get_planner()
+        agenda = planner.list_items("upcoming", days=7)[:8]
+        waiting = planner.list_items("waiting")
+        local_today = now_local().date().isoformat()
+        waiting_on = len(waiting)
+        follow_ups_due = sum(1 for w in waiting if (w.get("follow_up_at") or "9")[:10] <= local_today)
+    except Exception as e:
+        logger.warning("dashboard planner block failed: %s", e)
+        agenda, waiting_on, follow_ups_due = [], 0, 0
+
     try:
         analytics = _build_analytics(op_log, all_todos, today)
     except Exception as e:
@@ -87,7 +100,10 @@ def get_dashboard():
             "total_conversations": len(conversations),
             "active_projects": len(active_projects),
             "graph_nodes": graph_nodes,
+            "waiting_on": waiting_on,
+            "follow_ups_due": follow_ups_due,
         },
+        "agenda": agenda,
         "upcoming_events": sorted(all_events, key=lambda e: e["start_time"])[:7],
         "open_todos": sorted(open_todos, key=lambda t: t.get("due_date") or "9999-12-31")[:5],
         "overdue_todos": sorted(overdue_todos, key=lambda t: t.get("due_date") or "")[:5],

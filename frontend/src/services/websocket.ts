@@ -60,6 +60,10 @@ export class ChatWebSocket {
     }
   }
 
+  sendConfirmPhase(phase: string) {
+    this.send({ type: 'confirm_phase', phase })
+  }
+
   sendConfirmSkill(name: string) {
     this.send({ type: 'confirm_skill', name })
   }

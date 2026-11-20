@@ -117,3 +117,23 @@ body {
     transparent 1.5px 5px
   );
 }
+
+/* Voice orb */
+@keyframes orb-ripple {
+  0% { transform: scale(0.85); opacity: 0.55; }
+  100% { transform: scale(1.75); opacity: 0; }
+}
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+@keyframes orb-bar {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+.orb-ripple { animation: orb-ripple 2.4s cubic-bezier(0.2, 0.6, 0.3, 1) infinite; }
+.orb-breathe { animation: orb-breathe 3.2s ease-in-out infinite; }
+.orb-bar { animation: orb-bar 0.9s ease-in-out infinite; transform-origin: center; }
+@media (prefers-reduced-motion: reduce) {
+  .orb-ripple, .orb-breathe, .orb-bar { animation: none; }
+}

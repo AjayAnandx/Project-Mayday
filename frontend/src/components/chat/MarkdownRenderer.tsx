@@ -12,7 +12,7 @@ const components: Components = {
     const isInline = !className
     if (isInline) {
       return (
-        <code className="bg-surface1/70 text-green px-1 rounded text-[12px] font-mono" {...props}>
+        <code className="bg-white/[0.07] text-green px-1.5 py-0.5 rounded-md text-[0.85em] font-mono" {...props}>
           {children}
         </code>
       )
@@ -25,31 +25,31 @@ const components: Components = {
   },
   pre({ children }) {
     return (
-      <pre className="bg-black/60 border border-surface1/60 rounded-lg p-3 my-2 overflow-x-auto text-[12px] font-mono leading-relaxed">
+      <pre className="bg-black/60 border border-white/[0.07] rounded-xl p-3.5 my-3 overflow-x-auto text-[12px] font-mono leading-relaxed">
         {children}
       </pre>
     )
   },
   h1({ children }) {
-    return <h1 className="text-base font-bold text-green mb-1 mt-2">{children}</h1>
+    return <h1 className="text-lg font-semibold text-text mb-2 mt-4 first:mt-0">{children}</h1>
   },
   h2({ children }) {
-    return <h2 className="text-sm font-bold text-green mb-1 mt-2">{children}</h2>
+    return <h2 className="text-base font-semibold text-text mb-1.5 mt-4 first:mt-0">{children}</h2>
   },
   h3({ children }) {
-    return <h3 className="text-sm font-semibold text-green mb-0.5 mt-1.5">{children}</h3>
+    return <h3 className="font-semibold text-green mb-1 mt-3 first:mt-0">{children}</h3>
   },
   h4({ children }) {
-    return <h4 className="text-[13px] font-semibold text-green mb-0.5 mt-1.5">{children}</h4>
+    return <h4 className="font-semibold text-subtext1 mb-1 mt-3 first:mt-0">{children}</h4>
   },
   ul({ children }) {
-    return <ul className="list-disc list-inside text-text space-y-0.5 my-1">{children}</ul>
+    return <ul className="list-disc pl-5 marker:text-green/70 text-text space-y-1 my-2">{children}</ul>
   },
   ol({ children }) {
-    return <ol className="list-decimal list-inside text-text space-y-0.5 my-1">{children}</ol>
+    return <ol className="list-decimal pl-5 marker:text-overlay1 text-text space-y-1 my-2">{children}</ol>
   },
   li({ children }) {
-    return <li className="text-[13px] leading-snug">{children}</li>
+    return <li className="leading-relaxed pl-0.5">{children}</li>
   },
   a({ href, children }) {
     return (
@@ -65,13 +65,13 @@ const components: Components = {
   },
   blockquote({ children }) {
     return (
-      <blockquote className="border-l-2 border-green/50 pl-3 my-2 italic text-overlay0 text-[13px]">
+      <blockquote className="border-l-2 border-green/50 pl-3 my-3 text-subtext0">
         {children}
       </blockquote>
     )
   },
   hr() {
-    return <hr className="border-surface1/60 my-3" />
+    return <hr className="border-white/[0.07] my-4" />
   },
   strong({ children }) {
     return <strong className="font-semibold text-text">{children}</strong>
@@ -80,24 +80,24 @@ const components: Components = {
     return <em className="italic text-text">{children}</em>
   },
   p({ children }) {
-    return <p className="my-1 leading-snug text-[13px]">{children}</p>
+    return <p className="my-2 first:mt-0 last:mb-0 leading-relaxed">{children}</p>
   },
   table({ children }) {
     return (
-      <div className="overflow-x-auto my-2">
+      <div className="overflow-x-auto my-3 rounded-xl border border-white/[0.07]">
         <table className="w-full border-collapse text-[12px]">{children}</table>
       </div>
     )
   },
   th({ children }) {
     return (
-      <th className="border border-surface1/60 px-2 py-1 text-green font-semibold text-left bg-surface0/50">
+      <th className="border-b border-white/[0.07] px-3 py-2 text-subtext1 font-semibold text-left bg-white/[0.03]">
         {children}
       </th>
     )
   },
   td({ children }) {
-    return <td className="border border-surface1/60 px-2 py-1 text-text">{children}</td>
+    return <td className="border-b border-white/[0.05] px-3 py-2 text-text">{children}</td>
   },
 }
 

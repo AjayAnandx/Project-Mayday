@@ -1,0 +1,3 @@
+- Separate what was measured from what the authors infer from it.
+- Record the study design, sample and conditions for each result, and note when findings come from a single lab or dataset.
+- Prefer reviews and meta-analyses for the state of a field, and primary studies for specific results.

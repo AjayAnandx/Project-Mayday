@@ -180,174 +180,109 @@ class DataStore:
     def _unindex_conversation(self, conv_id: str):
         self._conv_text_idx.remove(conv_id)
 
-    # --- Todos ---
+    # --- Todos & Events ---------------------------------------------------
+    # Thin adapters over the Planner store (backend/core/planner_store.py), which
+    # is the single source of truth since Mayday V2. Shapes returned here are the
+    # legacy todo/event dicts so existing callers keep working unchanged.
+
+    @staticmethod
+    def _planner():
+        from backend.core.planner_store import get_planner
+        return get_planner()
+
+    _TODO_KINDS = ("task", "waiting")
 
     def create_todo(self, title: str, description: str = "", due_date: str = None,
                     priority: int = 2, tags: list[str] = None,
                     recurrence: dict = None) -> dict:
-        with self._lock:
-            todo = {
-                "id": uuid.uuid4().hex[:12],
-                "title": title,
-                "description": description,
-                "due_date": due_date,
-                "priority": priority,
-                "completed": False,
-                "tags": tags or [],
-                "created_at": _utcnow(),
-                "updated_at": _utcnow(),
-            }
-            if recurrence:
-                todo["recurrence"] = recurrence
-            self._todos.append(todo)
-            self._index_todo(todo)
-            self._save()
-            return todo
+        p = self._planner()
+        item = p.create_item(title, kind="task", notes=description or "", due_at=due_date,
+                             priority=priority or 2, tags=tags or [], recurrence=recurrence)
+        return p.to_legacy_todo(item)
 
     def update_todo(self, todo_id: str, **kwargs) -> dict | None:
-        with self._lock:
-            for todo in self._todos:
-                if todo["id"] == todo_id:
-                    for k, v in kwargs.items():
-                        if k in ("title", "description", "due_date", "priority", "completed", "tags", "recurrence"):
-                            if v is None:
-                                todo.pop(k, None)
-                            else:
-                                todo[k] = v
-                    todo["updated_at"] = _utcnow()
-                    self._index_todo(todo)
-                    self._save()
-                    return todo
-            return None
+        p = self._planner()
+        fields = {}
+        for k, v in kwargs.items():
+            if k == "description":
+                fields["notes"] = v or ""
+            elif k == "due_date":
+                fields["due_at"] = v
+            elif k == "completed":
+                item = p.complete_item(todo_id, done=bool(v))
+                if item is None:
+                    return None
+            elif k in ("title", "priority", "tags", "recurrence"):
+                fields[k] = v
+        item = p.update_item(todo_id, **fields) if fields else p.get_item(todo_id)
+        return p.to_legacy_todo(item) if item else None
 
     def delete_todo(self, todo_id: str) -> bool:
-        with self._lock:
-            before = len(self._todos)
-            self._todos = [t for t in self._todos if t["id"] != todo_id]
-            if len(self._todos) != before:
-                self._unindex_todo(todo_id)
-                self._save()
-                return True
-            return False
+        return self._planner().delete_item(todo_id)
 
     def find_duplicate_todos(self, title: str, due_date: str = None, exclude_id: str = None) -> list[dict]:
-        with self._lock:
-            q = title.strip().lower()
-            results = []
-            for t in self._todos:
-                if exclude_id and t["id"] == exclude_id:
-                    continue
-                if t["title"].strip().lower() != q:
-                    continue
-                if due_date and t.get("due_date"):
-                    if t["due_date"] != due_date:
-                        continue
-                results.append(dict(t))
-            return results
+        p = self._planner()
+        hits = [i for i in p.find_duplicates(title, day=due_date, exclude_id=exclude_id)
+                if i["kind"] in self._TODO_KINDS]
+        return [p.to_legacy_todo(i) for i in hits]
 
     def list_todos(self, include_completed: bool = True, query: str = "") -> list[dict]:
-        if query:
-            ids = set(self._todo_idx.search_top(query))
-            with self._lock:
-                todos = [t for t in self._todos if t["id"] in ids]
-        else:
-            with self._lock:
-                todos = list(self._todos)
-        if not include_completed:
-            todos = [t for t in todos if not t["completed"]]
-        return todos
+        p = self._planner()
+        items = p.list_items("all", query=query or None, kinds=self._TODO_KINDS,
+                             include_done=include_completed)
+        return [p.to_legacy_todo(i) for i in items]
 
     def get_todo(self, todo_id: str) -> dict | None:
-        with self._lock:
-            for todo in self._todos:
-                if todo["id"] == todo_id:
-                    return todo
-            return None
-
-    # --- Events ---
+        p = self._planner()
+        item = p.get_item(todo_id)
+        return p.to_legacy_todo(item) if item and item["kind"] in self._TODO_KINDS else None
 
     def create_event(self, title: str, start_time: str, end_time: str,
                      description: str = "", all_day: bool = False,
                      recurrence: dict = None) -> dict:
-        with self._lock:
-            event = {
-                "id": uuid.uuid4().hex[:12],
-                "title": title,
-                "description": description,
-                "start_time": start_time,
-                "end_time": end_time,
-                "all_day": all_day,
-                "created_at": _utcnow(),
-                "updated_at": _utcnow(),
-            }
-            if recurrence:
-                event["recurrence"] = recurrence
-            self._events.append(event)
-            self._index_event(event)
-            self._save()
-            return event
+        p = self._planner()
+        item = p.create_item(title, kind="event", start_at=start_time, end_at=end_time,
+                             notes=description or "", all_day=all_day, recurrence=recurrence)
+        return p.to_legacy_event(item)
 
     def update_event(self, event_id: str, **kwargs) -> dict | None:
-        with self._lock:
-            for event in self._events:
-                if event["id"] == event_id:
-                    for k, v in kwargs.items():
-                        if k in ("title", "description", "start_time", "end_time", "all_day", "recurrence"):
-                            if v is None:
-                                event.pop(k, None)
-                            else:
-                                event[k] = v
-                    event["updated_at"] = _utcnow()
-                    self._index_event(event)
-                    self._save()
-                    return event
-            return None
+        p = self._planner()
+        mapping = {"description": "notes", "start_time": "start_at", "end_time": "end_at"}
+        fields = {mapping.get(k, k): v for k, v in kwargs.items()
+                  if k in ("title", "description", "start_time", "end_time", "all_day", "recurrence")}
+        item = p.update_item(event_id, **fields)
+        return p.to_legacy_event(item) if item else None
 
     def delete_event(self, event_id: str) -> bool:
-        with self._lock:
-            before = len(self._events)
-            self._events = [e for e in self._events if e["id"] != event_id]
-            if len(self._events) != before:
-                self._unindex_event(event_id)
-                self._save()
-                return True
-            return False
+        return self._planner().delete_item(event_id)
 
     def find_duplicate_events(self, title: str, start_time: str, exclude_id: str = None) -> list[dict]:
-        with self._lock:
-            q = title.strip().lower()
-            start_day = start_time[:10]
-            results = []
-            for e in self._events:
-                if exclude_id and e["id"] == exclude_id:
-                    continue
-                if e["title"].strip().lower() != q:
-                    continue
-                if e["start_time"][:10] != start_day:
-                    continue
-                results.append(dict(e))
-            return results
+        p = self._planner()
+        hits = p.find_duplicates(title, kind="event", day=(start_time or "")[:10] or None,
+                                 exclude_id=exclude_id)
+        return [p.to_legacy_event(i) for i in hits]
 
     def list_events(self, start_date: str = None, end_date: str = None, query: str = "") -> list[dict]:
-        if query:
-            ids = set(self._event_idx.search_top(query))
-            with self._lock:
-                events = [e for e in self._events if e["id"] in ids]
-        else:
-            with self._lock:
-                events = list(self._events)
-        if start_date:
-            events = [e for e in events if e["start_time"] >= start_date]
-        if end_date:
-            events = [e for e in events if e["start_time"] <= end_date]
-        return events
+        """Without a range: the raw event series. With a range: recurrence-expanded
+        instances inside it (tagged `_expanded`, so expand_recurring passes them through)."""
+        p = self._planner()
+        if start_date or end_date:
+            start = start_date or end_date
+            end = end_date or start_date
+            items = p.list_items("calendar", start=start, end=end, kinds=("event",), query=query or None)
+            out = []
+            for i in items:
+                ev = p.to_legacy_event(i)
+                ev["_expanded"] = True
+                out.append(ev)
+            return out
+        items = p.list_items("all", kinds=("event",), query=query or None, include_done=True)
+        return [p.to_legacy_event(i) for i in items]
 
     def get_event(self, event_id: str) -> dict | None:
-        with self._lock:
-            for event in self._events:
-                if event["id"] == event_id:
-                    return event
-            return None
+        p = self._planner()
+        item = p.get_item(event_id)
+        return p.to_legacy_event(item) if item and item["kind"] == "event" else None
 
     # --- Recurrence Expansion ---
 
@@ -361,6 +296,8 @@ class DataStore:
                           hour=dt.hour, minute=dt.minute, second=dt.second)
 
     def expand_recurring(self, entity: dict, start_date: str, end_date: str) -> list[dict]:
+        if entity.get("_expanded"):
+            return [entity]  # already expanded by the planner (ranged list_events)
         rec = entity.get("recurrence")
         if not rec:
             return [entity]
@@ -602,10 +539,29 @@ class DataStore:
             return True
 
     def get_recent_messages(self, conversation_id: str, limit: int = 20) -> list[dict]:
+        """Model context. Inline OpenUI specs (``ui``) stay in storage for the UI but are
+        replaced by a short note here, so they don't cost tokens on every later turn."""
         conv = self.get_conversation(conversation_id)
         if conv:
-            return conv["messages"][-limit:]
+            return [_without_ui(m) for m in conv["messages"][-limit:]]
         return []
+
+
+def _without_ui(msg: dict) -> dict:
+    content = msg.get("content")
+    if msg.get("role") != "tool" or not isinstance(content, str) or '"ui"' not in content:
+        return msg
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return msg
+    if not isinstance(data, dict) or not isinstance(data.get("ui"), dict):
+        return msg
+    title = data["ui"].get("title") or "result"
+    data = {k: v for k, v in data.items() if k != "ui"}
+    data["shown_to_user"] = (f"inline card: {title}. The user already sees this card; do not repeat its "
+                             "contents. Reply with at most one or two sentences of takeaway or next step.")
+    return {**msg, "content": json.dumps(data, ensure_ascii=False)}
 
 
 _store: DataStore | None = None

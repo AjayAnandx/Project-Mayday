@@ -1,0 +1,6 @@
+- Lead each answer with the direct answer, then the supporting detail.
+- Attribute figures to who reported them ("According to BNEF, ...") and keep their dates.
+- When sources give different numbers, give the range and who reported each end; do not average them silently.
+- Separate what sources state from your own inference, and hedge inference ("this suggests ...").
+- Prefer claims backed by several sources or primary sources; flag single-source figures as such.
+- Write prose, not bullet lists.

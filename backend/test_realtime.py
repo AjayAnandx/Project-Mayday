@@ -97,7 +97,7 @@ def test_session_update_shape(cfg):
     assert sess["tool_choice"] == "auto"
     assert sess["audio"]["output"]["voice"] == "marin"
     # 11 interactive max + 3 worker-control tools (delegate/status/cancel).
-    assert 8 <= len(sess["tools"]) <= 14
+    assert 8 <= len(sess["tools"]) <= 18
     for t in sess["tools"]:
         assert t["type"] == "function" and t["name"]
     names = {t["name"] for t in sess["tools"]}
@@ -234,7 +234,7 @@ def test_calls_session_config_shape(cfg):
     assert scfg["type"] == "realtime"
     assert scfg["model"] == "gpt-realtime-2.1"
     assert scfg["audio"]["output"]["voice"] == "marin"
-    assert 8 <= len(scfg["tools"]) <= 14
+    assert 8 <= len(scfg["tools"]) <= 18
     assert all(t["type"] == "function" and t["name"] for t in scfg["tools"])
     assert {"delegate_to_worker", "worker_status", "cancel_worker"} <= {
         t["name"] for t in scfg["tools"]}

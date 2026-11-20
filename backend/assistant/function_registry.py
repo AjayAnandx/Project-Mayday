@@ -10,6 +10,16 @@ from backend.core.operation_log import get_operation_log
 from backend.functions.todo_functions import create_todo, update_todo, delete_todo, list_todos
 from backend.functions.calendar_functions import create_event, update_event, delete_event, list_events, query_events
 from backend.functions.reminder_functions import create_reminder, list_reminders, delete_reminder
+from backend.functions.planner_functions import (
+    plan_add, plan_update, plan_complete, plan_delete, plan_list, plan_snooze,
+    plan_schedule, plan_delegate, plan_people, plan_nudge, plan_day,
+)
+from backend.assistant.planner_tools import PLANNER_TOOL_DEFINITIONS, RETIRED_PLANNER_TOOLS
+from backend.assistant.research_flow_tools import RESEARCH_FLOW_TOOL_DEFINITIONS
+from backend.functions.research_flow_functions import (
+    research_start, research_status, research_claims, research_sources, research_export, research_add_pdf,
+    research_cite, research_hypotheses,
+)
 from backend.memory.memory_tools import remember, recall, recall_entity, forget, delete_entity, set_status
 from backend.api.screenshots import list_screenshots, get_screenshot_info, delete_screenshot_file
 from backend.core.port_utils import find_free_port as find_free_port_impl
@@ -114,6 +124,7 @@ def get_conversations_from_store(date: str) -> str:
 
 
 TOOL_KEYWORDS = (
+    "plan_add", "plan_update", "plan_complete", "plan_delete", "plan_list", "plan_delegate",
     "create_todo", "update_todo", "delete_todo", "list_todos",
     "create_event", "update_event", "delete_event", "list_events",
     "remember", "recall", "recall_entity", "forget",
@@ -1829,12 +1840,12 @@ LOCAL_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "generate_report",
-            "description": "Generate a Markdown report from research data. PDF via pandoc if available.",
+            "description": "Generate a report from research data: Markdown (default) or a styled PDF.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "topic": {"type": "string", "description": "Research topic"},
-                    "format": {"type": "string", "enum": ["md", "pdf"], "description": "Output format: md (default) or pdf (requires pandoc)"},
+                    "format": {"type": "string", "enum": ["md", "pdf"], "description": "Output format: md (default) or pdf"},
                 },
                 "required": ["topic"],
             },
@@ -2670,6 +2681,25 @@ def video_popup(action="", video_id="", tab_id=""):
 
 
 FUNCTION_MAP = {
+    "research_start": research_start,
+    "research_status": research_status,
+    "research_claims": research_claims,
+    "research_sources": research_sources,
+    "research_export": research_export,
+    "research_add_pdf": research_add_pdf,
+    "research_cite": research_cite,
+    "research_hypotheses": research_hypotheses,
+    "plan_add": plan_add,
+    "plan_update": plan_update,
+    "plan_complete": plan_complete,
+    "plan_delete": plan_delete,
+    "plan_list": plan_list,
+    "plan_snooze": plan_snooze,
+    "plan_schedule": plan_schedule,
+    "plan_delegate": plan_delegate,
+    "plan_people": plan_people,
+    "plan_nudge": plan_nudge,
+    "plan_day": plan_day,
     "create_research": create_research,
     "resume_research": resume_research,
     "list_research": list_research,
@@ -2822,7 +2852,12 @@ FUNCTION_MAP = {
 
 
 def get_tool_definitions(mcp_tools: list[dict] | None = None) -> list[dict]:
-    tools = list(LOCAL_TOOL_DEFINITIONS)
+    # Planner (V2) replaces the old todo/event/reminder tools in what the model sees;
+    # the old names stay in FUNCTION_MAP so stale history still dispatches.
+    tools = [t for t in LOCAL_TOOL_DEFINITIONS
+             if t.get("function", {}).get("name") not in RETIRED_PLANNER_TOOLS]
+    tools.extend(PLANNER_TOOL_DEFINITIONS)
+    tools.extend(RESEARCH_FLOW_TOOL_DEFINITIONS)
     tools.extend(PLAYWRIGHT_TOOL_DEFINITIONS)
     from backend.assistant.exa_tools import EXA_TOOL_DEFINITIONS
     for td in EXA_TOOL_DEFINITIONS:
@@ -2836,6 +2871,11 @@ def get_tool_definitions(mcp_tools: list[dict] | None = None) -> list[dict]:
         })
     if mcp_tools:
         tools.extend(mcp_tools)
+    try:
+        from backend.brain.tool_descriptions import apply_overrides
+        tools = apply_overrides(tools)
+    except Exception:
+        pass
     return _validate_tool_definitions(tools)
 
 
@@ -2874,7 +2914,30 @@ def _validate_tool_definitions(tools: list[dict]) -> list[dict]:
 
 # Argument repair for sloppy LLM tool calls: alias names, fill defaults,
 # drop unknown kwargs. Kept in one place so every local tool benefits.
+_PLAN_REF = {"id": "item_id", "todo_id": "item_id", "event_id": "item_id", "task_id": "item_id",
+             "reminder_id": "item_id", "title": "item_id"}
+
 _PARAM_ALIASES: dict[str, dict[str, str]] = {
+    "plan_add": {"name": "title", "task": "title", "message": "title", "text": "title", "type": "kind",
+                 "due_date": "due", "due_at": "due", "datetime": "due", "date": "due",
+                 "start_time": "start", "start_at": "start", "end_time": "end", "end_at": "end",
+                 "description": "notes", "note": "notes", "list": "list_name", "project": "list_name",
+                 "estimate": "estimate_min", "duration": "estimate_min", "repeat": "recurrence"},
+    "plan_update": {**{k: v for k, v in _PLAN_REF.items() if k != "title"},
+                    "due_date": "due", "due_at": "due", "start_time": "start", "start_at": "start",
+                    "end_time": "end", "end_at": "end", "description": "notes", "list": "list_name",
+                    "new_title": "title", "follow_up_at": "follow_up", "repeat": "recurrence"},
+    "plan_complete": _PLAN_REF,
+    "plan_delete": _PLAN_REF,
+    "plan_nudge": _PLAN_REF,
+    "plan_snooze": {**_PLAN_REF, "duration": "minutes", "mins": "minutes"},
+    "plan_schedule": {**_PLAN_REF, "start_time": "start", "start_at": "start", "end_time": "end", "end_at": "end"},
+    "plan_list": {"q": "query", "search": "query", "list": "list_name", "filter": "view",
+                  "start_date": "start", "end_date": "end", "who": "person"},
+    "plan_delegate": {"task": "title", "what": "title", "assignee": "person", "owner": "person",
+                      "who": "person", "to": "person", "name": "person", "due_date": "due",
+                      "due_at": "due", "follow_up_at": "follow_up", "description": "notes"},
+    "plan_people": {"person": "name", "mail": "email"},
     "music_play": {"song_name": "song", "title": "song", "name": "song", "seed": "seed_track", "seed_song": "seed_track", "genre": "mood", "vibe": "mood", "style": "mood", "lang": "language", "limit": "count", "n": "count"},
     "music_discover": {"lang": "language", "limit": "max_results", "n": "count", "topic": "query", "q": "query", "sort": "sort_by", "order": "sort_by", "views": "sort_by", "time": "time_filter", "trusted": "trusted_only"},
     "music_library": {"song": "title", "name": "title", "track": "title", "video": "video_id", "id": "video_id"},

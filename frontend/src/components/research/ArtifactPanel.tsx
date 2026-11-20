@@ -1,13 +1,17 @@
 import { useState, useCallback } from 'react'
 import { X, ExternalLink, RefreshCw, AlertTriangle } from 'lucide-react'
+import { ChatOpenUIBlock } from '../../openui/ChatOpenUIBlock'
+import type { UiPayload } from '../../types/chat'
 
 interface ArtifactPanelProps {
   url: string | null
   title: string
   onClose: () => void
+  /** Inline OpenUI card (popped out from chat) instead of a URL. */
+  ui?: UiPayload | null
 }
 
-export function ArtifactPanel({ url, title, onClose }: ArtifactPanelProps) {
+export function ArtifactPanel({ url, title, onClose, ui }: ArtifactPanelProps) {
   const [error, setError] = useState(false)
   const [key, setKey] = useState(0)
 
@@ -19,6 +23,20 @@ export function ArtifactPanel({ url, title, onClose }: ArtifactPanelProps) {
     setError(false)
     setKey((k) => k + 1)
   }, [])
+
+  if (ui) {
+    return (
+      <div className="w-full h-full flex flex-col bg-surface0 border-l border-surface2">
+        <div className="flex items-center justify-between px-4 py-2 bg-surface1 border-b border-surface2 shrink-0">
+          <span className="text-accent text-sm font-medium truncate">{title}</span>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface2 text-overlay1 hover:text-text" title="Close">
+            <X size={14} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4"><ChatOpenUIBlock ui={ui} expandable={false} /></div>
+      </div>
+    )
+  }
 
   if (!url) return null
 

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import uuid
 import logging
 import time
 
@@ -529,7 +530,14 @@ async def _handle_realtime_tool_event(oai_ws, notify_ws, state: dict, event: dic
     has_browser = not isinstance(notify_ws, _NullBrowserWS)
     if not needs_worker_escalation(name):
         try:
-            result = await dispatch_call(name, args or {})
+            if name.startswith("research_"):
+                # the user's spoken words decide category/budget, not the model's paraphrase
+                from backend.functions.research_flow_functions import research_status_voice, set_user_text
+                set_user_text(state.get("transcript", ""))
+            if name == "research_status" and not (args or {}).get("run_id"):
+                result = research_status_voice((args or {}).get("topic", ""))
+            else:
+                result = await dispatch_call(name, args or {})
         except Exception as e:
             result = f"Error executing {name}: {e}"
         if isinstance(result, str) and len(result) > 8000:
@@ -592,6 +600,44 @@ async def _handle_realtime_tool_event(oai_ws, notify_ws, state: dict, event: dic
         await _speak_to_session(
             oai_ws,
             f"System note: could not start the background job ({e}). Apologize briefly.")
+
+
+# ---- live session registry: finished research is spoken into open sessions ----
+_LIVE_SESSIONS: dict[str, tuple] = {}   # id -> (event loop, upstream ws, state)
+
+
+async def _announce_when_quiet(oai_ws, state: dict, text: str, wait_s: float = 45.0):
+    t0 = time.time()
+    while state.get("speaking") and time.time() - t0 < wait_s:
+        await asyncio.sleep(0.5)
+    await _speak_to_session(oai_ws, text)
+
+
+def _research_prompt(title: str, summary: str) -> str:
+    return ("[System notice, not the user] Background research just finished. Tell the user now, briefly and "
+            f"naturally, then stop: {title}. {summary}")
+
+
+def speak_to_live_sessions(title: str, summary: str) -> bool:
+    """Called from the research worker thread. True if at least one live voice session will say it."""
+    heard = False
+    for loop, oai_ws, state in list(_LIVE_SESSIONS.values()):
+        if loop.is_closed():
+            continue
+        try:
+            asyncio.run_coroutine_threadsafe(
+                _announce_when_quiet(oai_ws, state, _research_prompt(title, summary)), loop)
+            heard = True
+        except Exception as e:
+            logger.warning("live research announce failed: %s", e)
+    return heard
+
+
+try:
+    from backend.core.research_autopilot import register_voice_hook
+    register_voice_hook(speak_to_live_sessions)
+except Exception as _e:  # research is optional for voice
+    logger.debug("research voice hook not registered: %s", _e)
 
 
 @realtime_router.websocket("/voice")
@@ -661,6 +707,19 @@ async def realtime_voice(ws: WebSocket):
     async def _handle_function_call(event: dict):
         await _handle_realtime_tool_event(oai_ws, ws, state, event)
 
+    session_id = uuid.uuid4().hex
+    _LIVE_SESSIONS[session_id] = (asyncio.get_running_loop(), oai_ws, state)
+    try:  # research that finished while nobody was listening
+        from backend.core.research_autopilot import take_pending
+        missed = take_pending()
+        if missed:
+            names = "; ".join(m["title"] for m in missed[-3:])
+            asyncio.create_task(_announce_when_quiet(oai_ws, state, (
+                "[System notice, not the user] While the user was away this research finished: " + names +
+                ". Greet them and offer the summary in one sentence; if they say yes call research_status.")))
+    except Exception as e:
+        logger.debug("pending research check failed: %s", e)
+
     async def _frontend_to_upstream():
         try:
             while True:
@@ -724,6 +783,7 @@ async def realtime_voice(ws: WebSocket):
     try:
         await asyncio.gather(_frontend_to_upstream(), _upstream_to_frontend())
     finally:
+        _LIVE_SESSIONS.pop(session_id, None)
         for closer in (oai_ws.close, ws.close):
             try:
                 await closer()

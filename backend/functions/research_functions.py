@@ -1,10 +1,13 @@
 import json
 
+from backend.core.openui_builder import chart_from_chartjs
+
 from backend.core.research_store import get_research_store
 from backend.core.report_generator import (
     generate_report as _generate_report,
     generate_chart as _generate_chart,
     generate_combined_report as _generate_combined_report,
+    source_labels,
 )
 from backend.dspy import get_bridge
 from backend.dspy.report_builder import build_dspy_report, build_dspy_combined_report
@@ -66,7 +69,16 @@ def search_research(query: str) -> str:
     lines = [f"Research matches for '{query}' ({len(results)}):"]
     for r in results:
         kind = r["kind"]
-        label = r["topic"] if kind == "topic" else f"{r['topic']} / {r.get('filename', '')}"
+        if kind == "topic":
+            label = r["topic"]
+        elif r.get("filename"):
+            label = f"{r['topic']} / {r['filename']}"
+        elif kind == "claim":
+            label = f"{r['topic']} ({r.get('claim_status', '')}, confidence {r.get('confidence', 0):.2f})"
+        elif kind == "source":
+            label = f"{r['topic']} / {r.get('title') or r.get('url', '')}"
+        else:
+            label = r["topic"]
         lines.append(f"  - [{kind}] {label}")
         if r.get("snippet"):
             lines.append(f"    {r['snippet'][:150]}")
@@ -114,7 +126,7 @@ def resume_research(topic: str) -> str:
         lines.append("Data Points:")
         for dp in project["data_points"]:
             unit_str = f" {dp.get('unit', '')}" if dp.get('unit') else ""
-            sources_str = f" [src: {', '.join(dp['sources'][:2])}]" if dp.get('sources') else ""
+            sources_str = f" [src: {', '.join(source_labels(dp['sources'], 2))}]" if dp.get('sources') else ""
             lines.append(f"  - {dp['label']}: {dp['value']}{unit_str} ({dp.get('confidence', 'medium')}){sources_str}")
     if ent_count > 0:
         lines.append("Entities:")
@@ -197,22 +209,26 @@ def list_research_outputs(topic: str) -> str:
     if not outputs:
         return f"No charts generated yet for '{topic}'. Call generate_chart(topic) first."
 
-    lines = [f"Charts for '{topic}' ({len(outputs)}):"]
-    for o in outputs:
-        lines.append(
-            f"  - {o['chart_type']} chart ({o['data_points']} points) — {o['relative_url']} "
-            f"[generated {o['created_at']}]"
-        )
+    # list_outputs also returns report and data files, which have no chart fields.
+    charts = [o for o in outputs if o.get("kind", "chart") == "chart" and o.get("chart_type")]
+    others = [o for o in outputs if o not in charts]
 
-    newest = outputs[0]
-    return json.dumps({
-        "message": "\n".join(lines),
-        "artifact": {
-            "url": newest["relative_url"],
-            "title": f"{topic} — {newest['chart_type']} chart",
-        },
-        "charts": outputs,
-    })
+    lines = [f"Outputs for '{topic}' ({len(charts)} charts, {len(others)} other files):"]
+    for o in charts:
+        lines.append(
+            f"  - {o['chart_type']} chart ({o.get('data_points', '?')} points) — {o.get('relative_url', '')} "
+            f"[generated {o.get('created_at', '?')}]"
+        )
+    for o in others:
+        lines.append(f"  - {o.get('kind', 'file')}: {o.get('filename', '')} — {o.get('relative_url', '')}")
+
+    payload = {"message": "\n".join(lines), "charts": charts, "outputs": others}
+    if charts and charts[0].get("relative_url"):
+        payload["artifact"] = {
+            "url": charts[0]["relative_url"],
+            "title": f"{topic} — {charts[0]['chart_type']} chart",
+        }
+    return json.dumps(payload)
 
 
 def generate_report(topic: str, format: str = "md", synthesis: bool | None = None) -> str:
@@ -336,4 +352,5 @@ def generate_chart(topic: str, chart_type: str = "auto", metric: str | None = No
             "url": url,
             "title": f"{topic} — {chart_type.title()} Chart",
         },
+        "ui": chart_from_chartjs(result.get("chart_json") or {}, f"{topic} — {result['chart_type'].title()} chart"),
     })

@@ -1,0 +1,5 @@
+- Turn the request into questions a reader would actually want answered, ordered from most to least important.
+- Each question names its subject, metric and time frame where relevant ("India EV battery pack prices 2023-2025", not "battery prices").
+- Prefer questions that sources can answer with facts or figures; split compound questions.
+- Include at least one question about uncertainty, risks or disagreement when the topic is contested.
+- Do not ask about things the user explicitly excluded.

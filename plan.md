@@ -6414,3 +6414,69 @@ Frontend: second badge line or combined count + pause toggle
 
 
 
+
+---
+
+## Brain V3 — P15 Evaluation Suite + Brain Health Dashboard — TO IMPLEMENT (after go-live)
+
+**Status (2026-11-20):** Brain V2 (P0–P7) and Brain V3 P8–P14 are done in code. See `BrainV2.md`,
+`BrainV3.md` (§8 "as built" sections), `docs/brain.md` and ADR-17. The user is going live first; P15 is
+built afterwards, because the dashboard needs a few days of real data.
+
+### 1. Go-live steps (do first; Administrator PowerShell)
+```powershell
+cd C:\Users\hp\Projects\Mayday\frontend; npm run build
+Restart-Service MaydayBackend
+cd ..; powershell -ExecutionPolicy Bypass -File scripts\install_brain_sensor.ps1
+```
+Then check:
+- [ ] `http://127.0.0.1:8771/api/brain/sensors`: `desktop.online` is true within about 30 s; `backend` and `ui` show activity after one chat.
+- [ ] `python -m backend.brain.cli status`: about 524 nodes, `imported_from` is `memory_graph.json`.
+- [ ] Brain tab shows **Graph / Learned / Thoughts**; the Thoughts dial reads "balanced".
+- [ ] Say something personal ("I'm allergic to peanuts") → it appears in **Learned** with your quote.
+- [ ] After 03:00 the next night, `GET /api/brain/health` → `last_nightly` shows episodes, habits and decay.
+
+### 2. Live checks still open from earlier phases
+- [ ] **P8:** hand-check focus and idle detection on 5 real sessions (Thoughts → "My read of your day" and `/api/brain/sensors`).
+- [ ] **P9:** habits appear after about 2 weeks (gym / deep-work hours); nothing important archived (`GET /api/brain/health` → archive examples).
+- [ ] **P11:** no non-urgent pop-ups during deep focus; daily budget respected.
+- [ ] **P12:** prep packs opened before the event ≥ 60%; frictions found ≥ 24 h ahead.
+- [ ] **P13:** at most 1 state correction a week after 2 weeks; goal hypotheses that look right (✓/✗ in Thoughts).
+- [ ] **P14:** routines induced from repeated tasks; drift and curiosity behave (`/api/brain/routines`, `/api/brain/curiosity`).
+- [ ] Add cases from your real conversations to the gitignored `backend/brain_eval/suites/smoke.personal.yaml`.
+
+### 3. P15 — what to build
+**a) Proactive evaluation suite** (`backend/brain_eval/suites/proactive.yaml` + runner)
+- Cases built from the user's own history (`candidates`, `suggestions`, `actions` tables): given the context at that moment (time, focus/away, state, dial, budget used, frictions, intents), what *should* have happened (stay silent / digest / nudge / framing / autonomous) and whether the why was right.
+- Labels come from the user's real reactions (accepted, dismissed, "less of this", undone, ignored), plus a small hand-labelled set (ProactiveBench style).
+- Metrics: should-speak precision, recall and F1; mode accuracy; % with a valid why; unsupported autonomy (must be 0).
+- Runs nightly on the read-only `brain.db` snapshot (`isolated_brain`), with scorecards and deltas like `brain_eval`.
+
+**b) Brain health dashboard** (Brain tab → new "Health" view; `GET /api/brain/health` extended)
+
+| Metric | Target | Source |
+|---|---|---|
+| Acceptance rate of shown suggestions | ≥ 40% after 2 weeks, rising | `suggestions.outcome` |
+| Annoyance (dismissed + less + ignored) | ≤ 25%, falling | `suggestions` |
+| Non-urgent deliveries during deep focus | 0 | `candidates.gates.G2` + `suggestions` |
+| Unprompted items per day | ≤ dial budget | `suggestions` |
+| Prep packs opened before the event | ≥ 60% | `prep_packs.opened_at` vs `starts_at` |
+| Frictions found ≥ 24 h ahead / missed | ≥ 80% / ≤ 1 a week | `frictions.first_seen` vs `day` |
+| Autonomous actions undone | ≤ 5% | `actions` |
+| Repeat-mistake rate (same lesson trigger) | falling week over week | `lessons` votes/uses + `dissatisfaction` signals |
+| State corrections | ≤ 1 a week after 2 weeks | `state_log.corrected` |
+| Valid one-sentence why | 100% | `candidates.decision != rejected_unexplained` |
+| Window titles / raw coordinates in prompts or logs | 0 | privacy test + log scan |
+| Worker calls per day | ≤ configured ceiling | count of capture, lessons, intents, prep, nightly |
+
+- Weekly self-evaluation report: one digest section, "How Mayday did this week" (top accepted types, what it learned, what it stopped doing).
+- Also add a **daily worker-call ceiling** (`brain.proactive.worker_calls_per_day`, planned in BrainV3 §12 but not enforced yet).
+
+**c) Known follow-ups noticed during P8–P14**
+- `planner_digest.build_digest` marks "Mayday suggests" items as sent even on a preview; add a `mark=False` flag for previews.
+- About 50 tool descriptions (sandbox / Playwright / design) are still one-liners; rewrite the ones the tool log shows being chosen wrongly.
+- The real-time voice path (`realtime_session.py`) doesn't use the P5 tool planner yet.
+- `conversations/` holds scripted ZZTEST smoke-test traffic and many empty conversations (19 Nov). They are skipped by the brain (`brain.reflection.skip_pattern`) but still show up in search; deleting them is the user's decision.
+- The DSPy tests fail only because `dspy` isn't installed (`backend/test_dspy_bridge.py`).
+
+**Exit criteria:** the proactive suite runs nightly with a baseline recorded, and the Health view shows all metrics above from live data.

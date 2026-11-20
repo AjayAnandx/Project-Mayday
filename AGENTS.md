@@ -1,0 +1,608 @@
+# Mayday — Conversation Summary
+
+## Goal
+Desktop AI personal assistant with:
+- **Planner** (V2: unified tasks, events, reminders, waiting-on/delegation, people, recurrence, time-blocking, email digest — replaced the separate Todo + Calendar apps)
+- **LLM chat** (Ollama with tool calling via OpenAI-compatible API)
+- **Dashboard** (default landing page with stats, upcoming events, weather, recent activity, AI news)
+- **Real-time voice** (speech-in/speech-out, interruptible — functional, browser SpeechRecognition + Deepgram/SpeechSynthesis TTS)
+
+See `FutureAdvancement.md` for planned **Hawk Eye** website monitoring feature (architecture, data model, phase plan, edge cases).
+
+## Tech Decisions
+
+| Decision | Choice |
+|----------|--------|
+| Language | Python 3.11+ (backend) + TypeScript (frontend) |
+| Frontend | React 18 + TypeScript + Vite |
+| Styling | Tailwind CSS (black + green custom palette) |
+| Desktop | Electron (BrowserWindow + FastAPI subprocess) |
+| Backend | FastAPI + uvicorn |
+| Data | Todos/events in `data.json`; conversations in per-day files under `conversations/`; operations in per-month files under `operations/`; research store at `data.research_path` (config.yaml) with topics under `topics\{slug}\` (notes/*.md + outputs/) |
+| Chat streaming | WebSocket (`/ws/chat` — token-by-token) |
+| LLM | Ollama local — `gemma4:31b-cloud` |
+| STT | Web Speech API `SpeechRecognition` (frontend, on-device, primary) |
+| TTS | Deepgram TTS (primary) → browser `SpeechSynthesis` (fallback) |
+| VAD | Browser built-in (SpeechRecognition handles VAD internally) |
+| Conv memory | Per-day files in `conversations/YYYY-MM-DD.json` + `index.json` for fast lookup |
+| Icons | `lucide-react` |
+| Animations | `motion` (framer-motion) |
+| Markdown render | `react-markdown` + `remark-gfm` + `rehype-highlight` |
+| Graph viz | `cytoscape` (force-directed, cose layout) |
+| Search | Hash-based trigram inverted index (NgramIndex) + trie prefix tree (SearchTrie) + TF-IDF ranker — O(1) exact substring matching, 50–700× faster, zero accuracy regression |
+| Tool selection | Inverted group index (TF-IDF weighted, BM25 saturation, group-penalty) — replaces hand-written keyword regexes; **92% precision, 91% recall, <<0.01ms** per query |
+
+## Architecture
+- **Two-process**: FastAPI backend (uvicorn) + React frontend (Vite dev / Electron)
+- Vite proxies `/api` → `localhost:8772` (dev) / `localhost:8771` (NSSM production service) and `/ws` → `ws://localhost:8772` (dev) / `ws://localhost:8771` (production)
+- Local JSON-backed data store for todos, events, conversations; per-month operation log under `operations/`
+- **Dashboard** is the default landing page (stats summary, upcoming events, recent activity, weather widget, AI news feed)
+- Ollama OpenAI-compatible API (`/v1/chat/completions`) for LLM with tool calling
+- 60+ built-in function tools: 8 project/task + 5 todo/event CRUD + 2 event query + 5 memory + 2 conversation + 3 screenshot + 3 notifications/reminder + 3 misc (set_status, suggest_skill, capture_page_screenshot) + 11 system/file + query_operations + unified_search + get_weather + 11 sandbox + 5 scaffold/component + 3 visual testing + 8 browser/playwright + 8 data analysis pipeline (import_data, import_data_to_store, list_imported_files, web_search_and_fetch, extract_data_from_sources, batch_add_data_points, export_research_dataset, list_research_outputs)
+- MCP tools merged alongside built-in tools: local git ops (`mcp_server_git`), GitHub API (`github-mcp-server`), Exa AI Search (`exa-mcp-server`), Selenium browser (`mcp-server-selenium`), opencode wrapper (`mcp_server_opencode` — bash, write, read, edit, glob, grep, stop), UI design (`@ui-layouts/mcp`, `@magicuidesign/mcp`), Playwright browser (`@executeautomation/playwright-mcp-server`)
+- Tool selection: Inverted group index (TF-IDF weighted, BM25 saturation, group-penalty) — replaces 4 hand-written keyword regexes; **92.2% precision, 90.8% recall**, <<0.01ms per query
+- `MCPManager` connects stdio subprocesses per WebSocket session, discovers tools, dispatches calls
+- `mcp_server_git` — 12 tools for local git operations (status, log, diff, commit, branch)
+- `github-mcp-server` — GitHub API tools (search repos, list commits, read files, repo info on any public repo)
+- `exa-mcp-server` — 3 web search tools: `web_search_exa` (basic), `web_fetch_exa` (URL content), `web_search_advanced_exa` (filters, domains, dates, categories)
+- Requires `GITHUB_PERSONAL_ACCESS_TOKEN` env var (stored in `config.yaml`)
+- Requires `EXA_API_KEY` env var (stored in `config.yaml`) for Exa MCP server (get from https://dashboard.exa.ai/api-keys)
+- WebSocket protocol: `token`/`tool_call`/`done`/`error` message types
+- Voice pipeline: Mic → SpeechRecognition → LLM → Deepgram/SpeechSynthesis → Speakers (mic OFF during TTS, 1500ms echo cooldown after)
+- Notification system: scheduler fires reminders → in-memory list + queue → REST polling (`GET /api/notifications/fired`) + optional WebSocket
+- Frontend polls `/api/notifications/fired` every 3s — reliable, no WebSocket proxy dependency
+- In-app `ReminderDialog` modal (DOM-based, no browser permission needed) + `Toast` component
+- Browser `Notification` API used best-effort (permission requested on first user click)
+- Panels auto-refresh after LLM tool calls (todos + calendar update live)
+- Operation Log: per-month indexed file storage (`operations/YYYY-MM.json`), 5 in-memory indexes, `query_operations` LLM tool, auto-context injection for historical queries
+- Knowledge Graph "Brain" persists all todos, events, conversations, user preferences, and semantic relationships as typed nodes + edges in `memory_graph.json`
+- Memory tools: `remember`, `recall`, `recall_entity`, `forget` — available to LLM alongside built-in tools
+- Auto-sync: todo/event CRUD → graph nodes; conversation CRUD → conversation nodes
+- Auto-query: LLM context injection of relevant memories before each response
+- 4 tools for LLM: `remember` (store fact), `recall` (search), `recall_entity` (entity detail), `forget` (remove fact)
+- Conversations stored as per-day files (`conversations/2026-06-17.json`) with `index.json` for fast listing
+- `get_conversations` tool: LLM can retrieve conversations from a specific date (`get_conversations(date="2026-06-17")`)
+- `GET /api/conversations?date=` filter: REST API accepts `?date=YYYY-MM-DD` to filter by day
+
+## Project Structure
+```
+mayday/
+├── backend/                          # Python FastAPI
+│   ├── main.py                       # FastAPI app (CORS, routers, health check)
+│   ├── requirements.txt
+│   ├── bin/
+│   │   └── github-mcp-server.exe     # GitHub MCP pre-built binary (v1.3.0)
+│   ├── api/
+│   │   ├── todos.py                  # Todo CRUD routes
+│   │   ├── events.py                 # Event CRUD routes
+│   │   ├── conversations.py          # Conversation routes
+│   │   ├── search.py                 # Unified search across all stores
+│   │   ├── dashboard.py              # Dashboard aggregation, weather, AI news
+│   │   ├── data_import.py            # Excel/CSV upload, parse, import-to-store routes
+│   │   └── chat.py                   # WebSocket endpoint (streaming)
+│   ├── core/
+│   │   ├── data_store.py             # JSON persistence (thread-safe)
+│   │   ├── config.py                 # YAML config loader
+│   │   ├── operation_log.py          # Per-month operation log (indexed, thread-safe)
+│   │   ├── search_index.py           # Hash-based n-gram index + trie + TF-IDF ranker
+│   │   ├── tool_selector.py          # Inverted group index for LLM tool selection
+│   │   ├── project_runner.py         # Isolated subprocess sandbox per project (allowlist, PID tracking)
+│   │   ├── sandbox.py                # 11 sandbox LLM tools wrapping ProjectRunner
+│   │   ├── component_store.py        # Reusable UI component CRUD (JSON-backed)
+│   │   ├── dev_monitor.py            # HTTP health pinger + auto-restart for dev servers
+│   │   ├── evolution.py              # Post-build iteration analysis (ops log + graph)
+│   │   ├── query_classifier.py       # Regex intent classifier for query routing
+│   │   ├── local_playwright.py       # Direct Playwright wrapper (navigate, screenshot, interact)
+│   │   ├── extraction_pipeline.py    # Web search → extract → structure → store pipeline
+│   │   └── project_index.py          # Folder-level search index over project files
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   ├── knowledge_graph.py        # KnowledgeGraph singleton (JSON-backed, thread-safe)
+│   │   └── memory_tools.py           # 4 LLM tools: remember, recall, recall_entity, forget
+│   ├── assistant/
+│   │   ├── llm_client.py             # Ollama HTTP client (streaming, tool calling)
+│   │   ├── function_registry.py      # 13 tool definitions + dispatch (9 local + 4 memory)
+│   │   ├── mcp_manager.py            # MCP stdio connection, tool discovery, dispatch
+│   │   ├── exa_tools.py              # Static tool defs for 3 Exa search/fetch tools
+│   │   ├── skill_manager.py           # SkillManager — scan SKILL.md files, registry, apply
+│   │   ├── playwright_runner.py       # Thin adapter delegating to local_playwright
+│   │   ├── playwright_tools.py        # Static tool defs for 7 Playwright actions
+│   │   └── memory/
+│   │       └── conversation_manager.py  # Context window (last 20 messages)
+│   ├── functions/
+│   │   ├── todo_functions.py         # Todo CRUD implementations
+│   │   ├── calendar_functions.py     # Event CRUD + search implementations
+│   │   ├── document_functions.py     # PDF upload/read/search/list/delete/rename + project copy
+│   │   ├── system_functions.py       # System control + file access tools (11 tools)
+│   │   ├── browser_functions.py      # Selenium/Playwright browser tools for LLM
+│   │   ├── scaffold_functions.py     # UI scaffold + component store tools
+│   │   ├── visual_testing.py         # Visual diff + element check tools
+│   │   ├── research_functions.py     # Research CRUD + notes + search + promote LLM tools
+│   │   ├── data_import.py            # Excel/CSV parse → structured data → data_points LLM tools
+│   │   ├── data_export.py            # export_research_dataset → CSV in uploads/
+│   │   └── web_research.py           # web_search_and_fetch / extract_data_from_sources tools
+│   ├── core/
+│   │   ├── research_store.py         # ResearchStore (config-path JSON store, topic notes/promote/graph sync)
+│   │   ├── research_index.py         # Folder-level NgramIndex/SearchRanker over topics + notes + artifacts
+│   │   └── report_generator.py       # Markdown report builder + chart JSON generator
+│   └── voice/
+│       ├── router.py                 # Voice REST + WebSocket endpoints
+│       ├── deepgram_stt.py           # Deepgram STT WebSocket relay
+│       └── deepgram_tts.py           # Deepgram TTS REST synthesis
+│
+├── frontend/                         # React + Vite + TypeScript
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── tailwind.config.js
+│   ├── postcss.config.js
+│   ├── tsconfig.json
+│   └── src/
+│       ├── main.tsx
+│       ├── App.tsx                   # Page routing root (ChatProvider)
+│       ├── index.css                 # Tailwind + black/green theme (scrollbar)
+│       ├── context/
+│       │   └── ChatContext.tsx        # Shared WebSocket context
+│       ├── components/
+│       │   ├── layout/
+│       │   │   └── Sidebar.tsx       # Pill-shaped top nav bar (Chat/Todos/Calendar)
+│       │   ├── chat/
+│       │   │   ├── ChatPanel.tsx     # Message list, pill input, send, loading dots
+│   │   │   ├── MessageBubble.tsx # User/assistant/tool pill-shaped bubbles
+│   │   │   ├── MarkdownRenderer.tsx # react-markdown styled renderer for LLM output
+│   │   │   └── SkillSuggestionCard.tsx # Skill suggestion card with Confirm/Dismiss
+│       │   ├── todos/
+│       │   │   ├── TodoPanel.tsx     # List, search, filter, add button
+│       │   │   ├── TodoItem.tsx      # Single todo row with toggle/edit/delete
+│       │   │   └── TodoDialog.tsx    # Create/edit form modal
+│       │   ├── calendar/
+│       │   │   ├── CalendarPanel.tsx # Month navigation + grid
+│       │   │   ├── MonthGrid.tsx     # Calendar grid with event dots
+│       │   │   ├── DayCell.tsx       # Single day cell
+│       │   │   └── EventDialog.tsx   # Create/edit form modal
+│       │   └── ui/                   # Shared primitives
+│       │       ├── Button.tsx        # rounded-full pill buttons
+│       │       ├── Input.tsx         # rounded-xl with green focus ring
+│       │       ├── Select.tsx
+│       │       ├── Checkbox.tsx
+│       │       ├── Modal.tsx         # rounded-2xl backdrop blur
+│       │       └── Badge.tsx
+│       ├── brain/
+│   │   ├── BrainPanel.tsx       # Main graph page with search bar
+│   │   ├── GraphCanvas.tsx      # Cytoscape.js force-directed graph
+│   │   └── NodeDetail.tsx       # Side panel for selected node info
+│   ├── dashboard/
+│   │   ├── DashboardPanel.tsx   # Main container with layout grid
+│   │   ├── StatsSummary.tsx     # Open/overdue todos, events, projects
+│   │   ├── UpcomingEvents.tsx   # Next 7 days of events
+│   │   ├── RecentActivity.tsx   # Last 10 operation log entries
+│   │   ├── WeatherWidget.tsx    # Chennai weather from wttr.in
+│   │   └── AINewsWidget.tsx     # Exa API AI news feed
+│   ├── data/
+│       │   ├── AnalysisPanel.tsx    # Data workspace (Import / Web Research / Data Points / Charts)
+│       │   └── DataImportPanel.tsx  # Excel/CSV drag-drop upload + preview
+│   ├── search/
+│       │   └── SearchOverlay.tsx    # Ctrl+K search modal with categorized results
+│       ├── hooks/
+│       │   ├── useChat.ts           # WebSocket hook (token streaming)
+│       │   ├── useTodos.ts          # REST CRUD with search/filter
+│       │   ├── useEvents.ts         # REST CRUD
+│   │   ├── useGraph.ts          # Memory graph data fetching
+│   │   ├── useDashboard.ts      # Dashboard aggregation + weather + AI news
+│   │   ├── useSearch.ts         # Debounced unified search hook
+│   │   ├── useVoice.ts          # Browser SpeechRecognition + SpeechSynthesis hook
+│   │   ├── useBackendVoice.ts   # Voice mode hook (SpeechRecognition STT + Deepgram/SpeechSynthesis TTS)
+│   │   ├── useDataAnalysis.ts   # Data import / web research / data points / charts hook
+│       │   └── use-auto-resize-textarea.ts
+│       ├── services/
+│       │   ├── api.ts               # Typed REST client
+│       │   └── websocket.ts         # WebSocket client with auto-reconnect
+│       ├── lib/
+│       │   └── utils.ts             # cn() utility
+│       └── types/
+│           ├── todo.ts
+│           ├── event.ts
+│           ├── conversation.ts
+│           ├── chat.ts
+│           ├── search.ts
+│           ├── dashboard.ts
+│           ├── data-import.ts
+│           └── project.ts
+│
+├── electron/                         # Electron main process
+│   ├── main.ts                      # BrowserWindow + spawn uvicorn
+│   ├── preload.ts                   # Context bridge
+│   └── electron-builder.yml         # Packaging config
+│
+├── conversations/                   # Per-day conversation files
+│   ├── index.json                   # Fast lookup: id → date mapping
+│   └── YYYY-MM-DD.json              # All conversations from that day
+├── screenshots/                     # Screenshot images + index.json
+├── operations/                      # Per-month operation log files
+│   └── YYYY-MM.json                 # All operations from that month
+├── uploads/                         # Imported Excel/CSV files + exported datasets (gitignored)
+├── docker/
+│   └── Dockerfile                   # Playwright sandbox container for project builds
+├── docs/
+│   └── adr.md                       # Architecture Decision Record (15 decisions)
+├── plan.md                          # Implementation plans (MCP, tool latency, data pipeline, DSPy)
+├── opencode.json                    # opencode permission config
+├── main.py                          # Original PyQt6 entry (kept as reference)
+├── ui/                              # Original PyQt6 widgets (kept as reference)
+├── data_store.py                    # Original data store (kept as reference)
+├── screenshots/                      # Screenshot images + index.json
+├── config.yaml                      # Shared config (Ollama, voice, server)
+├── package.json                     # Root scripts (dev runs backend + frontend)
+├── requirements.txt                 # Python deps
+└── AGENTS.md                        # This file
+```
+
+## API Endpoints (37 total)
+
+### REST (37 total)
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/health` | Health check |
+| `GET` | `/api/todos` | List todos `?include_completed&q=` |
+| `GET` | `/api/todos/check-duplicates` | Check for duplicate todos `?title=&due_date=&exclude_id=` |
+| `POST` | `/api/todos` | Create todo |
+| `PUT` | `/api/todos/:id` | Update todo |
+| `DELETE` | `/api/todos/:id` | Delete todo |
+| `GET` | `/api/events` | List events `?start_date&end_date&q=` |
+| `GET` | `/api/events/check-duplicates` | Check for duplicate events `?title=&start_time=&exclude_id=` |
+| `POST` | `/api/events` | Create event |
+| `PUT` | `/api/events/:id` | Update event |
+| `DELETE` | `/api/events/:id` | Delete event |
+| `GET` | `/api/conversations` | List conversations `?date=YYYY-MM-DD` |
+| `POST` | `/api/conversations` | Create conversation |
+| `GET` | `/api/conversations/:id` | Get with messages |
+| `DELETE` | `/api/conversations/:id` | Delete |
+| `GET` | `/api/screenshots` | List screenshot metadata |
+| `GET` | `/screenshots/{filename}` | Serve screenshot image file |
+| `DELETE` | `/api/screenshots/{filename}` | Delete screenshot + index entry |
+| `GET` | `/api/memory/graph` | Full knowledge graph |
+| `GET` | `/api/memory/graph/search?q=` | Search graph nodes |
+| `GET` | `/api/memory/graph/node/:id` | Node + neighborhood |
+| `DELETE` | `/api/memory/graph/node/:id` | Delete node + edges |
+| `GET` | `/api/memory/stats` | Node/edge counts |
+| `POST` | `/api/memory/repair` | One-time cleanup of junk nodes + stale projects |
+| `GET` | `/api/search` | Unified search across todos, events, conversations, graph, operations `?q=&limit=` |
+| `GET` | `/api/search/prefix` | Prefix/autocomplete search `?q=&limit=` (trie-based) |
+| `GET` | `/api/dashboard` | Aggregate stats, upcoming events, recent activity |
+| `GET` | `/api/dashboard/weather` | Live weather from wttr.in |
+| `GET` | `/api/dashboard/ai-news` | AI news from Exa API (cached 1h) |
+| `GET` | `/api/voice/status` | Backend voice status (STT/TTS engine info) |
+| `POST` | `/api/voice/transcribe` | Upload audio blob for transcription (stub) |
+| `GET` | `/api/gmail/status` | Gmail connect status (`authenticated`, `agent_email`) |
+| `GET` | `/api/auth/gmail/start?account=` | 302 to Google OAuth (login_hint=Mayday mailbox; Desktop client, loopback needs no pre-registration) |
+| `GET` | `/api/auth/gmail/callback` | OAuth code exchange → `tokens/agent_token.json` + getProfile verify |
+| `GET` | `/api/gmail/messages?q=&limit=` | List Gmail messages (METADATA proxy) |
+| `GET` | `/api/research` | List research records (filter `?status=&type=&q=`) |
+| `POST` | `/api/research` | Create research record |
+| `GET` | `/api/research/types` | Research type + status catalogs |
+| `GET` | `/api/research/:topic` | Research record detail |
+| `PUT` | `/api/research/:topic/status` | Update research status (draft/active/completed/archived) |
+| `POST` | `/api/research/:topic/data-points` | Add data point with source URL |
+| `POST` | `/api/research/:topic/notes` | Add note to research record |
+| `GET` | `/api/research/:topic/notes` | List notes |
+| `POST` | `/api/research/promote` | Promote research → project (moves topic/file to project dir, archives record) |
+| `POST` | `/api/data/import` | Upload Excel/CSV file → `file_id` |
+| `POST` | `/api/data/parse` | Parse uploaded file → columns/rows/dtypes preview |
+| `POST` | `/api/data/import-to-store` | Import parsed data → research or project data_points |
+| `GET` | `/api/data/files` | List uploaded files |
+| `GET` | `/uploads/{file_id}` | Serve imported/exported dataset files |
+
+### WebSocket
+| Path | Description |
+|------|-------------|
+| `/ws/chat` | Bidirectional streaming chat |
+
+### WebSocket Protocol
+```
+→ {"type":"message","content":"create a todo to buy milk"}
+← {"type":"token","content":"I've "}
+← {"type":"token","content":"created a "}
+...
+← {"type":"tool_call","name":"create_todo","result":"Created todo: buy milk (id: abc)"}
+...
+← {"type":"done"}
+```
+
+### WebSocket Protocol (detailed)
+```
+→ {"type":"message","content":"..."}
+← {"type":"token","content":"..."}        # Streaming token
+← {"type":"tool_call","name":"fn","result":"..."}  # Tool result card
+← {"type":"tool_call","name":"fn","result":"...","image_url":"/screenshots/..."}  # With image
+← {"type":"error","content":"..."}         # Error message
+← {"type":"done"}                          # Stream complete
+```
+
+## Data Flow
+```
+User types → WebSocket.send()
+  → FastAPI receives → Engine processes
+    → LLM.chat() → Ollama
+    → if tool_calls: dispatch → DataStore → WS.send({tool_call})
+    → if content: LLM returns tokens → WS.send({token}) each
+  → WS.send({done})
+  → React ChatPanel renders tokens in real-time
+  → React CalendarPanel / TodoPanel auto-refresh on tool_call
+```
+
+## Color Palette (`tailwind.config.js`)
+```
+crust:   '#050505'     (near-black root bg)
+mantle:  '#0d0d0d'
+base:    '#141414'     (dark charcoal)
+surface0:'#1c1c1c'
+surface1:'#262626'
+surface2:'#303030'
+overlay0:'#525252'
+overlay1:'#737373'
+overlay2:'#999999'
+subtext0:'#a3a3a3'
+subtext1:'#cccccc'
+text:    '#e5e5e5'
+accent:  '#22c55e'
+green:   '#22c55e'     (single accent color everywhere)
+red:     '#ef4444'
+yellow:  '#eab308'
+```
+
+## Current Status
+
+### Legacy (PyQt6 — kept as reference)
+- [x] Phase 1: PyQt6 shell + config + local data store (Firebase removed)
+- [x] Phase 2: Todo & Calendar UI + CRUD (local JSON persistence)
+- [x] Phase 3: LLM integration + function calling (Ollama local, confirmed working)
+
+### React + FastAPI Migration
+- [x] Phase 1: FastAPI backend (all REST CRUD + WebSocket chat, CORS)
+- [x] Phase 2: React frontend shell (Vite + TS + Tailwind + 3-panel layout + API service)
+- [x] Phase 3: Todo & Calendar UI (full CRUD dialogs, month grid, search/filter)
+- [x] Phase 4: Chat + WebSocket streaming (token-by-token, tool_call cards, context)
+- [x] Phase 5: Electron wrapper (main.ts, preload.ts, electron-builder.yml)
+- [x] Phase 6: Voice stubs (Web Speech API SpeechRecognition) + polish
+- [x] **Theme redesign**: Replaced Catppuccin Mocha with black + green palette (`#050505`, `#22c55e`)
+- [x] **Color cleanup**: Removed all sky/lavender/teal references → single green accent everywhere
+- [x] **UI polish**: Pill-shaped nav, chat input, message bubbles; green gradients in headers/empty states; `bg-crust`/`bg-black/60` backgrounds; green glow on input focus
+- [x] **Removed AITextLoading**: Replaced with simple bouncing dots indicator (JS dropped 334→205 KB)
+- [x] **MCP integration**: `MCPManager` class with stdio transport, tool discovery, dispatch
+- [x] **Git MCP server**: `mcp_server_git` — 12 local git tools (status, log, diff, commit, branch)
+- [x] **GitHub MCP server**: `github-mcp-server` v1.3.0 — list commits, search repos, read files on any public repo
+- [x] **Tool merging**: 9 local + 12 git + 100+ GitHub tools served to LLM dynamically
+- [x] **Env support**: `config.yaml` `env:` section for passing env vars to MCP subprocesses
+- [x] **Bug fixes**: `get_event_loop` → `get_running_loop`, MCPManager close error suppression, 15s connect timeout
+- [x] **Markdown rendering**: Raw LLM plain-text responses now render as styled Markdown with syntax-highlighted code blocks, tables, lists, links (system browser), and green-themed typography
+- [x] **Knowledge Graph Brain**: Persistent JSON-backed graph memory with typed nodes/edges, 4 LLM memory tools, auto-sync from todo/event CRUD, auto-query context injection, 4th "Brain" tab with Cytoscape.js visualization
+- [x] **Per-day conversation files**: Conversations migrated from monolithic `data.json` to per-day files under `conversations/` with `index.json` for fast lookup, `?date=` filter on API, `get_conversations` LLM tool
+- [x] **Selenium MCP server**: Replaced disabled Playwright with `mcp-server-selenium` (18 browser tools). Patched `normal_chrome.py` for Windows Chrome path. Verified navigate + screenshot + page description works.
+- [x] **Screenshot management system**: ScreenshotStore (index.json CRUD), REST list/delete, 3 LLM tools (`list_screenshots`, `get_screenshot`, `delete_screenshot`), image rendering in chat tool bubbles via `image_url` field
+- [x] Notification system: scheduler + REST polling + in-app modals + toasts
+- [x] **Personality system**: Config-driven personality in `config.yaml` (`personality:` section with tone, traits, rules). LLM auto-learns user preferences via `remember("Mayday", "style_feedback", ...)` with `node_type="personality"`. System prompt injects personality + learning instructions on each turn.
+- [x] **Project tracking + context resume**: LLM stores ALL project conversations via `remember(relation="has_conversation", node_type="project")`. New `get_conversation_history` tool loads past conversations by ID. On resume, LLM recalls project → loads ALL linked conversations → presents full context.
+- [x] **delete_entity LLM tool**: `delete_entity(name)` removes an entire node + all its edges from the knowledge graph
+- [x] **Edge deduplication**: `add_edge_if_missing()` prevents duplicate edges in the graph; `remember()` returns `"Already remembered"` on repeat calls
+- [x] **Conversation REST graph sync**: `POST/DELETE /api/conversations` now syncs/cleans up graph nodes
+- [x] **Forget entity-only fallback**: `forget(entity)` without relation/value auto-redirects to `delete_entity()` — LLM never needs to guess edge params
+- [x] **Tombstone system**: Deleted entities are permanently recorded in `memory_graph.json` — `remember()` blocks recreation with `"was previously deleted on <date>"`
+- [x] **Graph repair endpoint**: `POST /api/memory/repair` — one-time cleanup that removes `search_result` junk nodes + stale project nodes + records tombstones
+- [x] **Clean graph API filtering**: `GET /api/memory/graph` and auto-context injection filter out internal `search_result` junk nodes — Brain tab shows only real data
+- [x] **Label normalization**: `add_node()` auto-strips whitespace; `_find_exact_node()` handles `project:`/`tag:` prefixed lookups
+- [x] **LLM operation awareness**: System prompt instructs LLM to explicitly report what was created/updated/deleted after EVERY tool call
+- [x] **Operation Log**: Per-month indexed file storage (`operations/YYYY-MM.json`) with 5 in-memory indexes for O(log n) + O(1) queries. Records all CRUD operations from both REST API and LLM tool dispatch paths. Auto-context injection for historical queries.
+- [x] **`query_operations` LLM tool**: Search operations by action (create/update/delete), entity type, date range, or full-text query. Available to LLM in all conversations.
+- [x] **Bug fix: operation recording in LLM tool path**: Recording was only in REST endpoints (`todos.py`, `events.py`) — LLM-created entities through `todo_functions.py` and `calendar_functions.py` were never logged. Fixed by adding `get_operation_log().record()` to both function files.
+- [x] **Bug fix: silent second LLM call**: Second call passed `tools=filtered_tools`, allowing LLM to call another tool instead of generating text. When LLM returned only tool_calls (no content), user saw tool_call bubble but no natural language response. Fixed by removing tools from second call (`tools=[]`).
+- [x] **80 passing tests** (30 operation log + 40 memory graph + 10 tool selector) covering record, query, stats, full-text, persistence, concurrency, dedup, tombstone, repair, clean graph, prefix matching, threshold calibration, per-group synonym detection, false-positive rejection, cross-domain queries
+- [x] **LLM gateway (Ollama Local + Ollama Cloud + OpenRouter)**: `backend/assistant/providers/` + role routing (worker=openrouter `nemotron-3-super:free`, interactive=local 3B), loud single-attempt chain (no silent swaps/retries by default), parity bodies, cap off by default, free-iteration default 20. `None`-content crash fixed centrally (`add_message` coercion + indexer guards). 33 mocked tests (`test_llm_gateway` + `test_none_content`). See `docs/llm-gateway.md`. Branch: `feat/model-layer`.
+- [x] **Gmail consumer mailbox** (`maydayishereatwork@gmail.com`, Desktop OAuth, local-only): `gmail_service.py` (send/list/get/history/draft/thread/labels + 24h idempotency) + `gmail_store.py` + `api/gmail.py` (status/start/callback/messages) + 9 `gmail_*` LLM tools (approval-gated send/reply, draft-first) + `email` classifier intent + `gmail` tool group + Scheduler 60s inbound poll (history.list + 404 fallback → toast + KG + op log) + Dashboard badge/Connect/Reconnect + `useGmail`. `backend/test_gmail_service.py` mocked tests.
+- [x] **Personal Gmail watch (read-only)**: `account: both` + `tokens/user_token.json`; user slot forced to `gmail.readonly` (escalation refused in `_scopes_for`), send/modify/draft/label raise `PermissionError` on `account="user"`; status exposes `user:{email,authenticated}`; Dashboard second badge row (Watch personal / personal unread / Reconnect personal). Read tools take `account` (`agent` default; `user` for "my email") with per-slot connect guidance; scheduler user-sync never overwrites `agent_email`. Kill switch: flip to `agent` + delete token.
+- [x] **Google Maps (Places New + Routes + Geocoding)** (`GOOGLE_MAPS_API_KEY`, billing required): `maps_service.py` (geocode+24h cache, search/details/autocomplete, computeRoutes traffic-aware, route-matrix, waypoint optimize, address validation, timezone) + 9 `maps_*` LLM tools + `places` classifier intent + `maps` group + home origin (Nesapakkam) + liked-spot KG memory (`maps_save_place`) + scheduler commute guard (event → live traffic → "leave now" nudge). `backend/test_maps_service.py` mocked (zero quota). NOTE (Oct 16): billing not yet enabled on GCP project — live calls return REQUEST_DENIED; flip billing on, then run one live search+route to verify.
+- [x] **Duplicate detection for todos & events**: LLM create_todo/create_event checks for existing items with same title (case-insensitive) before creating. Todo dedup narrows by due_date; event dedup narrows by same day. `force=True` bypasses. Frontend dialogs show inline yellow warning banner with debounced API check. `GET /api/todos/check-duplicates` and `GET /api/events/check-duplicates` endpoints.
+- [x] **Unified Search**: `GET /api/search?q=&limit=` endpoint searches all 5 stores (todos, events, conversations, graph nodes, operations) simultaneously. LLM tool `unified_search(query)` replaces 2-4 guessing game tool calls with one. Frontend Ctrl+K modal overlay with categorized results and click-to-navigate.
+- [x] **DSA-powered search (Jun 28)**: Replaced all O(n) substring scans with `NgramIndex` (hash-based trigram inverted index) + `SearchTrie` (prefix/autocomplete) + `SearchRanker` (TF-IDF). Todos/events/conversations now search in O(1). Conversations indexed in-memory — no more opening JSON files per search. Zero accuracy regression vs O(n) substring scan. 50–700× faster across all stores. New `GET /api/search/prefix` endpoint for instant autocomplete. See `backend/core/search_index.py`.
+- [x] **Voice system rewrite**: Replaced Puter.js speech2txt with browser SpeechRecognition for STT (on-device, reliable). Puter kept only for TTS (ElevenLabs) with SpeechSynthesis fallback. Removed fragile MediaRecorder + VAD code path.
+- [x] **Echo prevention**: Mic is OFF during TTS playback (stopRecognition). After TTS ends, mic restarts with 1500ms cooldown that discards residual room echo. User can interrupt TTS by speaking.
+- [x] **TTS reliability**: Puter txt2speech now handles Blob return type (URL.createObjectURL). `el.play()` rejection caught. 15s timeout on both Puter and SpeechSynthesis paths. Falls back gracefully on any error.
+- [x] **Voice tab reliability**: Added `instanceId` mount counter so voice-start effect re-runs on tab switch; added `hasMicPermission === null` loading state; added "Start Listening" fallback button when state idle
+- [x] **Backend voice router**: `router.py` with `GET /api/voice/status` and `POST /api/voice/transcribe` (stub)
+- [x] **Frontend voice API**: `getVoiceStatus()` and `transcribeAudio()` in `api.ts`
+- [x] **Exa MCP search server**: 3 web search tools (`web_search_exa`, `web_fetch_exa`, `web_search_advanced_exa`) always available in core. Replaces `mcp-server-fetch` for complex search needs. Simple `fetch` tool kept as keyword-triggered fallback. Requires `EXA_API_KEY` in `config.yaml`.
+- [x] **Deepgram integration**: `deepgram_stt.py` (WebSocket relay for STT), `deepgram_tts.py` (REST synthesis for TTS). Backend voice router rewritten with Deepgram endpoints. Puter.js CDN removed from `frontend/index.html`.
+- [x] **Markdown stripping for TTS**: `stripMarkdown()` in `useBackendVoice.ts` removes `**bold**`, `*italic*`, `## headers`, `[links](url)`, `` `code` ``, lists, tables, HTML tags before text reaches TTS — prevents TTS from reading markdown syntax aloud.
+- [x] **Voice/UI Response Router**: Backend `_make_voice_text()` strips all markdown from LLM response and truncates to 2 sentences / 300 chars for TTS. Deterministic — no LLM instruction needed. VoiceMode uses `voice_content` field when available, falls back to content-diff + `stripMarkdown()`.
+- [x] **System App Control (11 tools)** — : 7 system tools (open/close app, set/get volume, clipboard, system info, active window) + 4 file access tools (read/write/append/list files). Path whitelist security (Documents, Desktop, project root). No power/shutdown/shell commands. No file deletion.
+- [x] **Broad app search**: `open_application` now searches Start Menu shortcuts, Windows Registry, Program Files, AppData, and system PATH — not just a hardcoded table. Apps like zoom, word, excel, outlook, onenote, powerpoint found automatically. Non-installed apps return "not available".
+- [x] **Tool Latency Optimization (Jul 2)**: Replaced 4 brittle keyword regexes (`GIT_KEYWORDS`, `GITHUB_KEYWORDS`, `BROWSER_KEYWORDS`, `FETCH_KEYWORDS`) with `ToolSelector` — inverted group index built from tool descriptions (TF-IDF weighted terms, BM25-style TF saturation with k1=1.2, sqrt group-penalty). Default threshold 0.9 yields 92.2% precision, 90.8% recall, <<0.01ms per query. 8 unavoidable failure cases due to intrinsic lexical limits. Core group always active. See `backend/core/tool_selector.py`.
+- [x] **Inverted Group Index design**: TF-IDF weight per term × (k1+1)/k1(1-b+b*L) BM25 saturation × 1/sqrt(groups_containing(term)). Lightweight stemmer (15 suffix rules) + 15-entry alias map + stopword filter. Filter fallback: if select returns empty, all tools passed to LLM. No external dependencies.
+- [x] **plan.md expansion**: Added full Tool Latency Optimization section with strategy, data model, timeline, performance analysis, failed-path alternatives (all 3 evaluated), risk register.
+- [x] **Iterative Tool Loop (Jul 4)**: Replaced two-call architecture (LLM → tools → LLM → text) with Codex-style iterative loop. LLM can call tools repeatedly, see results, self-correct. Duplicate guard (3× identical = stuck), max 20 iterations, intermediate thoughts stream in real-time, "Build Complete" notification on finish. `role: "tool"` messages stored properly.
+- [x] **Project Tracking System (Jul 4)**: Dedicated project store (`projects.json`) with CRUD, lifecycle state machine (active/paused/scrapped), fuzzy matching, conversation auto-link. REST API (5 endpoints) + 5 LLM tools (create/resume/list/update_status/add_note). opencode MCP wrapper server with 6 tools (bash/write/read/edit/glob/grep) for autonomous project building.
+- [x] **Skills System (Jul 4)**: opencode-style skill injection. `SkillManager` scans `C:\Users\hp\agent-skills\skills` (23 pre-existing SKILL.md files), `suggest_skill(name, context)` LLM tool, `SkillSuggestionCard` frontend component with Confirm/Dismiss, skill body+tools injected into system prompt on activation, auto-deactivation on completion. All 23 external skills load at startup.
+- [x] **Bug fix: silent response after tool calls (Jul 4)**: When LLM returned `content=None, tool_calls=[...]`, no natural language response was generated. Added final LLM call with `tools=[]` after the iterative loop to force a summary. Fixes the `resume_project → recall_entity → list_directory → (silent)` pattern.
+- [x] **Project Task System + Auto-Skill Loading (Jul 12)**: 3 new LLM tools (`add_project_task`, `update_task_status`, `list_project_tasks`) for task lifecycle (pending → in_progress → completed/blocked/failed). Dependency tracking with cycle detection. `get_active_task()` auto-picks next eligible task. Auto-skill loading: when a task with `type: "research"` or `type: "build"` is set to `in_progress`, the matching skill auto-loads (Point A at engine start, Point B mid-iterative-loop). Active project block injected into system prompt shows real-time task progress. See `backend/core/project_store.py`, `backend/functions/project_functions.py`.
+- [x] **Dev Server + Screenshot Testing (Jul 12)**: `opencode_bash` now supports `background=True` to launch persistent dev servers (returns PID). New `opencode_stop(pid)` tool terminates background processes via `taskkill`. New `capture_page_screenshot(url)` tool navigates to a URL via Selenium, takes a screenshot, and displays it in chat with `image_url`. LLM can now build → start dev server → screenshot → stop server — all autonomous. See `backend/assistant/mcp_server_opencode.py`.
+- [x] **Production Deployment (Jul 12)**: Frontend served as static files from FastAPI (SPA catch-all). API keys moved to `.env` with `python-dotenv` loading + env var fallback. Production CORS allows Tailscale IPs. NSSM Windows service with auto-restart. Ollama as auto-start service. Tailscale 24/7 tunnel. See `docs/deployment.md`.
+- [x] **Dashboard (Jul 12)**: Default landing page with StatsSummary (todos, events, projects, conversations, graph), UpcomingEvents (next 7 days), RecentActivity (last 10 operations), WeatherWidget (wttr.in Chennai), AINewsWidget (Exa API, cached 1h). 3 new REST endpoints (`GET /api/dashboard`, `/weather`, `/ai-news`). 6 new React components under `dashboard/`. Dashboard is the default page on app load. 6th nav item in Sidebar.
+- [x] **Bug fix: AI news Exa API 400**: Dashboard AI news was returning HTTP 400. Removed invalid `"type": "article"` field from Exa API request — Exa v2 `type` parameter expects search algorithm (`neural`/`keyword`/`auto`), not content category. See `backend/api/dashboard.py`.
+- [x] **Bug fix: weather `available: false`**: `WeatherWidget` showed weather unavailable because `startswith("Weather")` matched valid response `"Weather for Chennai:..."`. Changed to `startswith("Weather data not available")`. See `backend/api/dashboard.py`.
+- [x] **PDF upload in chat (Jul 15)**: ChatPanel drag-drop zone + FileText button calls `sendMessage()` so LLM sees uploaded PDFs in context. `addSystemMessage` on ChatContext for upload failures. See `frontend/src/components/chat/ChatPanel.tsx`.
+- [x] **DocumentPanel + hooks (Jul 15)**: `useDocuments` hook (CRUD + search), `DocumentPanel` with viewer modal, inline `DocumentViewer`. Sidebar `FileText` nav item, App.tsx routing. See `frontend/src/hooks/useDocuments.ts`, `frontend/src/components/documents/DocumentPanel.tsx`.
+- [x] **Auto-context injection for documents (Jul 15)**: chat.py reads first 3 pages from cached `_meta.json` into system prompt when keywords match a document graph node. System prompt hints LLM to proactively use `search_pdfs()`. See `backend/api/chat.py:388-403`.
+- [x] **PDF storage rewrite (Jul 16)**: `pdf_store.py` stores summary from first meaningful paragraph on upload; `rename()` method preserves `_previous_names` in graph nodes. Graph document nodes store full `_text` for instant context injection. `upload_pdf` tool accepts `project_name` to auto-copy to project dir. New `rename_pdf` LLM tool.
+- [x] **Project document tracking (Jul 16)**: ProjectStore has `add_document/remove_document/list_documents/get_project_docs_dir`. Copy-to-project on upload copies PDF file into `projects/{slug}/pdfs/`.
+- [x] **Frontend summary display (Jul 16)**: `DocumentViewer` shows stored summary in green-bordered box when opening a document — no API call needed.
+- [x] **Bug fix: null assistant content for tool-only responses (Jul 16)**: chat.py stored `""` for assistant content when LLM returned `content=None, tool_calls=[...]`. Some Ollama models expect `content: null` (not empty string) when tool_calls present. Fixed by passing `content` directly (allows `None`).
+- [x] **Bug fix: fallback message on empty final summary (Jul 16)**: When all LLM calls (iterative loop + final summary) returned `None`, no text was sent to frontend — only `done`. Added fallback that uses last tool result or generic "couldn't find relevant information" message.
+- [x] **Bug fix: auto-context keyword matching (Jul 16)**: Was checking if full query string (e.g. "when is my tcs exam date") was contained *inside* title — backwards. Fixed to check individual `extract_keywords()` tokens against title+description.
+- [x] **Removed aggressive PDF PRIORITY RULE (Jul 16)**: System prompt told LLM to call `search_pdfs()` for every exam/event/date/personal question. Replaced with passive "PDF content auto-injected" instruction. Auto-context injection already handles PDF content silently.
+- [x] **Port conflict fix (Jul 15)**: NSSM `MaydayBackend` service on 8771 (old code, can't restart w/o admin). Dev backend moved to port 8772. Vite proxy targets 8772. `package.json` dev script updated. `pymupdf` installed.
+- [x] **Streaming stuck bug analysis (Jul 15)**: Root-caused: `_run_engine` may exit without sending `done` when `_send_json` fails (WS drop); frontend `streaming` never resets on reconnect. Fix plan written to `plan.md` for Jul 16.
+- [x] **Project folder routing fix (Jul 18)**: Removed `projects/` prefix in `_project_folder()` — all project storage routes to `C:\Users\hp\Projects\madays projects\` from `config.yaml`. Migrated old `projects.json` entries and moved directories.
+- [x] **Website Build Protocol (Jul 18)**: Replaced `BUILD_MODE_INSTRUCTIONS` with `WEBSITE_BUILD_PROTOCOL` — 4-phase flow (Clarify → Research → Design → Build). One-message clarification, then autonomous execution through all phases. See `backend/api/chat.py:111-179`.
+- [x] **Skill auto-loading for website building (Jul 18)**: Added `task_type: research` to deep-research skill (copied from `.agents` to `agent-skills/skills/`). Added `task_type: build` to frontend-ui-engineering skill. Both auto-load when task transitions to `in_progress`.
+- [x] **Design MCP servers (Jul 18)**: Added `@ui-layouts/mcp` (layout generation) and `@magicuidesign/mcp` (UI component generation) to `config.yaml`. Added `@react-bits` registry (`https://reactbits.dev/r/{name}.json`) to the protocol for shadcn-compatible component imports.
+- [x] **Component Store + Scaffold (Jul 18)**: `backend/core/component_store.py` with `store_component`, `list_stored_components`, `get_stored_component` LLM tools. `scaffold_ui_project` creates a complete Vite + React + TS + Tailwind project from stored components in one call. Auto-replaces with shorter component versions. See `backend/core/component_store.py`, `backend/functions/scaffold_functions.py`.
+- [x] **Visual Testing Tools (Jul 18)**: `visual_diff` captures screenshots via Selenium MCP and compares against baselines (SHA-256 hash). `check_element` navigates to a URL and checks for elements by CSS selector or text. Baselines stored in `baselines/`. See `backend/functions/visual_testing.py`.
+- [x] **8 new LLM tools**: `store_component`, `list_stored_components`, `get_stored_component`, `scaffold_ui_project`, `visual_diff`, `check_element`, `update_baseline`, `find_free_port`. All registered in `function_registry.py` and `CORE_TOOL_NAMES`.
+- [x] **Sandbox + Project Runner**: `backend/core/project_runner.py` manages isolated subprocess sandboxes per project slug (command allowlist, destructive pattern blocking, PID tracking). `backend/core/sandbox.py` wraps it with 11 LLM tools (`sandbox_start`, `sandbox_exec`, `sandbox_stop`, `sandbox_status`, `sandbox_write/read/delete/list_files`, `sandbox_sync_from/to_host`, `list_host_projects`). Docker sandbox container at `docker/Dockerfile` for containerized builds. See `backend/core/project_runner.py`, `backend/core/sandbox.py`.
+- [x] **Tool argument repair (Aug 10)**: `dispatch_call` now auto-repairs sloppy LLM tool calls — param aliases (`project`→`name`, `file_name`→`filename`, `title`→`filename`, `topic_name`→`topic`), unknown kwargs stripped, per-tool defaults (`add_project_note`/`add_research_note` filename→`notes.md`, `create_research` type→`market`). On failure, returns an actionable error listing expected params so the iterative loop self-corrects. `create_project` gained a `description` param (stored on the project record); WEBSITE_BUILD_PROTOCOL updated to match. See `backend/assistant/function_registry.py`, `backend/test_dispatch_repair.py` (13 tests).
+- [x] **Query Classifier (Jul 18)**: `backend/core/query_classifier.py` uses regex-based intent matching to classify queries into categories (build, research, debug, etc.) with confidence scores, activating relevant prompt sections and tool groups.
+- [x] **Evolution System (Jul 18)**: `backend/core/evolution.py` runs post-build iteration analysis — aggregates operation log entries and knowledge graph data to log build outcomes, errors, and tool usage for iterative improvement.
+- [x] **Dev Monitor (Jul 18)**: `backend/core/dev_monitor.py` periodically HTTP-pings dev server URLs and auto-restarts them (via ProjectRunner) up to 3 times on failure, tracking restart count and last command.
+- [x] **Local Playwright (Jul 18)**: `backend/core/local_playwright.py` provides a direct Playwright wrapper (sync API) for browser automation — navigate, screenshot, click, fill, get_text, get_html, evaluate. Exposed as LLM tools via `backend/assistant/playwright_runner.py` and `backend/assistant/playwright_tools.py`. See `backend/core/local_playwright.py`.
+- [x] **Playwright MCP (Jul 18)**: Added `@executeautomation/playwright-mcp-server` to `config.yaml` (lazy) for optional Playwright-based browser testing alongside Selenium.
+- [x] **Universal Data Analysis Pipeline (Aug 14)**: 8 new LLM tools (`import_data`, `import_data_to_store`, `list_imported_files`, `web_search_and_fetch`, `extract_data_from_sources`, `batch_add_data_points`, `export_research_dataset`, `list_research_outputs`) + `DATA_ANALYSIS_PROTOCOL` 4-step flow in `chat.py` (SEARCH → EXTRACT → STORE → CHART + STEP 3.5 CSV export to `uploads/`). Excel/CSV upload via pandas/openpyxl (`uploads/` static mount at `/uploads/{file_id}`). `suggest_chart_type()` auto-selects line/bar/pie. WebSocket `artifact_url` + auto-open-in-new-tab for charts. New "Data" nav tab: `AnalysisPanel` (Import / Web Research / Data Points / Charts) + `DataImportPanel` + `useDataAnalysis` hook. See `plan.md:5431`.
+- [x] **Project data_points + search index (Aug 14)**: Project schema gained `data_points` + 3 tools (`add_project_data_point`, `list_project_data_points`, `generate_project_chart`) + REST endpoints in `backend/api/projects.py`. New `backend/core/project_index.py` — folder-level NgramIndex/SearchRanker over all project files (filename + text content, lazy refresh ≤15s, skips node_modules/.git/build dirs) with `test_project_index.py`.
+- [x] **Data pipeline hardening (Aug 14)**: Fixed `extract_data_from_sources` unhashable dict column schema + `generate_chart` float `.replace()` crash. `_normalize_columns`/`_column_type_hint`/`_fmt_scalar` in `extraction_pipeline.py`; robust `_extract_numeric` + str-coercion in `report_generator.py`; `add_data_point` value coercion at store boundary (`research_store.py`/`project_store.py`). 13 regression tests in `test_data_pipeline.py`; full suite 212 passing.
+- [x] **Duplicate guard tests (Aug 14)**: `test_dup_guard.py` — 3× identical tool-call loop detection in the iterative chat loop.
+- [x] **Mayday V2 Planner (Nov 18)** — unified personal task management replacing the separate Todo + Calendar tabs (see `MaydayV2.md`). One item store (`backend/core/planner_store.py`, data in `planner/items.json` + `planner/people.json`, gitignored) for `task | event | reminder | waiting` with local wall-clock times (`YYYY-MM-DD[THH:MM]`), multiple alerts per item, snooze, checklists, lists/tags, priority 1-4, time-blocks, and a real recurrence engine (`backend/core/recurrence.py`: weekdays, every N, bymonthday, until/count, repeat-from-completion; recurring tasks roll forward on completion; events expand *before* range filtering). One-time idempotent migration from `data.json` todos/events + `reminders.json`. Old `DataStore` todo/event methods and the scheduler reminder API are thin adapters over the planner, so dashboard/search/graph sync keep working. **People + waiting-on**: `delegate()` with follow-up dates, person ledger (they owe / you owe), `planner_nudge.py` drafts chase emails (Gmail draft only — never sends). **Scheduler**: single `_check_planner` → `pending_alerts()` (event reminders, due-time, 09:00 overdue/due-today, follow-ups, snoozes; 6h grace, fire-once keys); all notifications go through `_deliver` → numbered broadcast log so every tab/device gets every alert (`GET /api/notifications/fired?since=N`). **Email digest** (`planner_digest.py`): morning plan 07:30 + evening review 21:00 from the Mayday mailbox (`planner.digest` in config.yaml; recipient falls back to `gmail.user_email`). **Smart**: NL quick-add parser (`planner_parse.py`: dates, times, `every …`, `#tag`, `~list`, `!p1`, `@Name`/"Name to …" → waiting, `for 90m`), `plan_day` auto-planner (`planner_autoplan.py`, proposals only). **LLM tools**: 11 `plan_*` tools (`backend/assistant/planner_tools.py`, impl `backend/functions/planner_functions.py`) replace the 12 todo/event/reminder tools in what the model sees (old names stay dispatchable); `todo`/`calendar` intents route to the planner group; delegation phrases added to the classifier. **REST**: `/api/planner/*` (items CRUD + complete/snooze/schedule/nudge, quick-add, delegate, summary, plan-day, people, digest preview/send). **UI**: `Planner` nav tab (`frontend/src/components/planner/`): Today/Inbox/Upcoming/Waiting/Calendar (day/week/month, drag-to-time-block, drag-to-reschedule)/People/Logbook, quick-add with live parse chips, item drawer editor, Plan-my-day, digest preview; actionable reminders (Done / Snooze) in `ReminderDialog` + persistent toasts; dashboard Agenda shows planner items + "Waiting on others" KPI. Tests: `test_recurrence.py`, `test_planner_store.py`, `test_planner_api.py` (47 hermetic tests).
+- [x] **DSPy research (Aug 13-14, PLANNED — no code)**: Risk analysis + surgical insertion strategy (6 insertion points, T1/T2 privacy tiers, flag-gated default-off, local-first LM policy) + full Module A (Report Synthesis) / Module B (RL Multi-Hop Research Agent) implementation plan. See `plan.md:5680` + `DSPY.txt`.
+
+## How to Run
+
+### Dev mode (two terminals)
+```bash
+# Terminal 1 — Backend
+uvicorn backend.main:app --reload --port 8772 --reload-exclude 'projects/**' --reload-exclude 'operations/**' --reload-exclude 'conversations/**' --reload-exclude 'screenshots/**'
+
+# Terminal 2 — Frontend
+cd frontend && npm run dev
+```
+
+### Or with root package.json
+```bash
+npm run dev
+```
+
+### Electron (production-like)
+```bash
+npm run build         # Build frontend
+npx electron .        # Launch Electron (spawns backend + loads frontend)
+```
+
+Set `model` in `config.yaml` to any model available in your local Ollama (`ollama list`).
+
+Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `config.yaml` `env:` section for GitHub MCP tools.
+
+Set `EXA_API_KEY` in `config.yaml` `env:` section for Exa MCP tools.
+
+## Known Issues
+- Voice mode requires Chrome or Edge (SpeechRecognition not supported in Firefox/Safari)
+- Deepgram TTS requires internet access; falls back to browser SpeechSynthesis if unavailable
+- Frontend WebSocket connects on mount — reconnection logic is basic (3s retry)
+- Electron dev mode requires FastAPI running separately; production mode serves built frontend from FastAPI
+- Playwright MCP server available globally as `@executeautomation/playwright-mcp-server` — no npx needed, reference by direct path in config
+- MCP `mcp_server_git` tools require `repo_path` — LLM may need explicit guidance to pass the correct path
+- LLM model `gemma4:31b-cloud` is cloud-proxied — may have higher latency than local models. Set to any `ollama list` model for local inference
+- Chat engine uses non-streaming LLM calls despite streaming infrastructure existing in `LLMClient.stream_tokens()`
+
+## Knowledge Graph Node Visual Style
+
+| Type | Hex | Shape |
+|------|-----|-------|
+| `user` | `#22c55e` (green) | Rounded rectangle |
+| `todo` | `#eab308` (yellow) | Rounded rectangle |
+| `event` | `#3b82f6` (blue) | Rounded rectangle |
+| `concept` | `#a855f7` (purple) | Ellipse |
+| `conversation` | `#737373` (gray) | Rounded rectangle |
+| `tag` | `#f97316` (orange) | Diamond |
+| `date` | `#525252` (dark gray) | Ellipse |
+| `project` | `#f59e0b` (amber) | Rounded rectangle |
+| `personality` | `#ec4899` (pink) | Ellipse |
+| `research` | `#14b8a6` (cyan) | Ellipse |
+
+## Relevant Files
+- `frontend/tailwind.config.js`: Black/green color palette
+- `frontend/src/App.tsx`: Page routing with ChatProvider
+- `frontend/src/components/layout/Sidebar.tsx`: Pill-shaped top nav bar
+- `frontend/src/components/chat/ChatPanel.tsx`: Chat page with pill input + bouncing dots loading
+- `frontend/src/components/chat/MessageBubble.tsx`: Pill-shaped user/assistant/tool bubbles
+- `frontend/src/components/chat/MarkdownRenderer.tsx`: `react-markdown` styled renderer for LLM output
+- `frontend/src/components/todos/TodoPanel.tsx`: Full-page todo list with search/filter
+- `frontend/src/components/calendar/CalendarPanel.tsx`: Full-page month grid with events
+- `frontend/src/components/ui/Button.tsx`: `rounded-full` pill buttons with green accent
+- `frontend/src/components/ui/Input.tsx`: `rounded-xl` inputs with green focus ring
+- `frontend/src/hooks/useChat.ts`: WebSocket hook with auto-reconnect
+- `frontend/src/services/websocket.ts`: ChatWebSocket class
+- `frontend/src/services/api.ts`: Typed REST client
+- `backend/api/chat.py`: WebSocket endpoint with LLM streaming + tool dispatch
+- `backend/assistant/llm_client.py`: Ollama HTTP client
+- `backend/assistant/function_registry.py`: 50+ tool definitions + dispatch (9 todo/event + 5 memory + 3 screenshot + 4 conversation/operations + 3 reminders + `suggest_skill` + `capture_page_screenshot` + 11 system/file + 8 project/task + 8 data analysis pipeline). `dispatch_call` auto-repairs sloppy LLM args: `_PARAM_ALIASES`, `_TOOL_DEFAULTS`, unknown-kwarg stripping, actionable errors listing expected params
+- `backend/assistant/exa_tools.py`: Static tool definitions for 3 Exa search/fetch tools
+- `config.yaml`: Shared config (Ollama, voice, server)
+- `plan.md`: MCP integration architecture and implementation plan
+- `backend/api/screenshots.py`: ScreenshotStore + REST list/delete endpoints + 3 LLM tools
+- `backend/core/data_store.py`: JSON persistence (todos, events) + per-day conversation file storage
+- `backend/core/operation_log.py`: Per-month indexed operation log (record, query, stats, full-text search)
+- `backend/core/search_index.py`: Hash-based n-gram inverted index (NgramIndex) + trie prefix tree (SearchTrie) + TF-IDF ranker (SearchRanker)
+- `backend/core/tool_selector.py`: Inverted group index for LLM tool selection (TF-IDF weighted, BM25 saturation, group-penalty)
+- `backend/memory/knowledge_graph.py`: KnowledgeGraph singleton (JSON persistence, thread-safe)
+- `backend/memory/memory_tools.py`: 5 LLM functions for memory (remember, recall, recall_entity, forget, delete_entity)
+- `backend/core/project_store.py`: Project store with CRUD, lifecycle state machine (active/paused/scrapped), fuzzy matching, task CRUD (add/update/list/get_active), dependency cycle detection, conversation auto-link
+- `backend/functions/project_functions.py`: 8 LLM functions for project + task management (create_project, resume_project, list_projects, update_project_status, add_project_note, add_project_task, update_task_status, list_project_tasks)
+- `backend/functions/document_functions.py`: PDF upload/read/search/list/delete/rename + project copy (copy_to_project)
+- `backend/functions/system_functions.py`: 11 LLM functions for system control + file access (open_application, close_application, set_volume, get_volume, copy_to_clipboard, get_system_info, get_active_window, read_file, write_file, append_file, list_directory)
+- `backend/api/memory.py`: REST API for graph visualization (GET/DELETE nodes)
+- `backend/api/search.py`: Unified search across all 5 data stores
+- `backend/api/dashboard.py`: Dashboard aggregation, weather, AI news
+- `frontend/src/components/brain/BrainPanel.tsx`: Graph page with search/refresh
+- `frontend/src/components/brain/GraphCanvas.tsx`: Cytoscape.js force-directed graph canvas
+- `frontend/src/components/brain/NodeDetail.tsx`: Node detail side panel with connections
+- `frontend/src/components/search/SearchOverlay.tsx`: Ctrl+K search modal with categorized results
+- `frontend/src/hooks/useSearch.ts`: Debounced unified search hook with abort controller
+- `frontend/src/types/search.ts`: TypeScript interfaces for search results
+- `backend/voice/router.py`: Backend voice REST + WebSocket endpoints
+- `backend/voice/deepgram_stt.py`: Deepgram STT WebSocket relay
+- `backend/voice/deepgram_tts.py`: Deepgram TTS REST synthesis
+- `frontend/src/hooks/useVoice.ts`: Browser SpeechRecognition + SpeechSynthesis hook with echo prevention
+- `frontend/src/hooks/useBackendVoice.ts`: Voice mode hook (SpeechRecognition STT + Deepgram/SpeechSynthesis TTS)
+- `frontend/src/components/voice/VoiceMode.tsx`: Full-page voice UI with auto-speak, tab-switch recovery
+- `frontend/src/components/voice/VoiceIndicator.tsx`: Animated voice state indicator
+- `frontend/src/components/voice/VoiceTranscript.tsx`: Live interim transcript display
+- `docs/adr.md`: Architecture Decision Record (15 decisions — backend, frontend, LLM, voice, search, skills)
+- `docs/deployment.md`: Production deployment guide (NSSM, Tailscale, Ollama service, env setup)
+- `backend/core/config.py`: YAML config loader with `.env` + env var fallback for secrets
+- `backend/core/tool_selector.py`: Inverted group index for LLM tool selection (TF-IDF weighted, BM25 saturation, group-penalty)
+- `backend/assistant/skill_manager.py`: SkillManager — scan SKILL.md files, registry, apply
+- `frontend/src/components/chat/SkillSuggestionCard.tsx`: Skill suggestion card with Confirm/Dismiss
+- `backend/assistant/mcp_server_opencode.py`: opencode wrapper MCP server (bash, write, read, edit, glob, grep, stop tools) with background process management
+- `backend/assistant/selenium_tools.py`: Selenium browser tools (navigate, screenshot, page description) used by `capture_page_screenshot` interception
+- `opencode.json`: opencode permission config for MCP tools
+- `frontend/src/hooks/useDocuments.ts`: Document CRUD + search hook
+- `frontend/src/components/documents/DocumentPanel.tsx`: Document list with viewer modal
+- `frontend/src/types/document.ts`: TypeScript interfaces for documents
+- `backend/core/project_runner.py`: Subprocess sandbox manager (allowlist, PID tracking, dev servers)
+- `backend/core/sandbox.py`: 11 sandbox LLM tools (start/exec/stop/status/file ops/sync/host projects)
+- `backend/core/component_store.py`: Reusable UI component CRUD (JSON-backed)
+- `backend/core/dev_monitor.py`: Dev server health pinger + auto-restart
+- `backend/core/evolution.py`: Post-build iteration analysis
+- `backend/core/query_classifier.py`: Regex intent classifier for query routing
+- `backend/core/local_playwright.py`: Direct Playwright wrapper (navigate, screenshot, interact)
+- `backend/assistant/playwright_runner.py`: Thin Playwright adapter for LLM dispatch
+- `backend/assistant/playwright_tools.py`: Static tool defs for 7 Playwright actions
+- `backend/functions/browser_functions.py`: Browser automation LLM tools
+- `backend/functions/scaffold_functions.py`: UI scaffold + component store LLM tools
+- `backend/functions/visual_testing.py`: Visual diff + element check LLM tools
+- `backend/core/research_store.py`: ResearchStore — config-path JSON store (`data.research_path`), topics under `topics\{slug}\` with `notes/*.md` + `outputs/`, graph `research:` nodes, promote-to-project, legacy migration
+- `backend/core/research_index.py`: Folder-level NgramIndex/SearchRanker over topic metadata + notes/report/artifact full text (auto-rebuild on store save)
+- `backend/core/report_generator.py`: Markdown report builder + chart JSON generator
+- `backend/functions/research_functions.py`: 12 LLM tools for research (create/resume/list/update_status/add_data_point/add_entity/add_finding/generate_report/generate_chart/add_research_note/list_research_notes/search_research/promote_research_to_project)
+- `backend/api/research.py`: REST endpoints for research records + notes + promote
+- `backend/test_research_store.py`: 10 tests — mocked store/config/op-log, zero repo pollution
+- `backend/test_dispatch_repair.py`: 13 tests — tool-call argument repair (aliases, defaults, unknown-kwarg stripping, actionable errors) via `dispatch_call`
+- `backend/functions/data_import.py`: Excel/CSV parse → structured data → `data_points` LLM tools (import_data, import_data_to_store, list_imported_files, save_uploaded_file)
+- `backend/functions/data_export.py`: `export_research_dataset` → CSV in `uploads/` (+ list_research_outputs)
+- `backend/functions/web_research.py`: `web_search_and_fetch` / `extract_data_from_sources` LLM tools (Exa search + LLM extraction)
+- `backend/core/extraction_pipeline.py`: Web search → extract → structure → store pipeline (schema/column normalization, column type hints)
+- `backend/core/project_index.py`: Folder-level NgramIndex/SearchRanker over all project files (lazy refresh ≤15s, skips heavy dirs)
+- `backend/api/data_import.py`: REST endpoints for Excel/CSV upload, parse, import-to-store, file listing
+- `backend/test_data_pipeline.py`: 13 regression tests — schema normalization, chart numeric robustness, batch value coercion
+- `backend/test_data_export.py` / `backend/test_dup_guard.py` / `backend/test_project_index.py`: dataset export, 3× identical tool-call loop guard, project folder search
+- `frontend/src/components/data/AnalysisPanel.tsx`: Data workspace (Import / Web Research / Data Points / Charts tabs)
+- `frontend/src/components/data/DataImportPanel.tsx`: Excel/CSV drag-drop upload + preview + import-to-store
+- `frontend/src/hooks/useDataAnalysis.ts`: Data analysis state management hook
+- `frontend/src/types/data-import.ts` / `frontend/src/types/project.ts`: Data import + project data_point types
+- `DSPY.txt`: Detailed DSPy Module A (Report Synthesis) / Module B (RL Multi-Hop Research Agent) implementation plan — PLANNED, no code yet

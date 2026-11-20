@@ -121,12 +121,11 @@ class MultiGraph:
         return [e for e in self._kg._edges if e.get("properties", {}).get("subgraph") == subgraph]
 
     def neighbors(self, node_id: str, subgraph: str | None = None) -> list[dict]:
-        out = []
-        for e in self._kg._edges:
-            if e["source"] == node_id or e["target"] == node_id:
-                if subgraph is None or e.get("properties", {}).get("subgraph") == subgraph:
-                    out.append(e)
-        return out
+        adj = self._kg._adj_idx.get(node_id, {})
+        edges = adj.get("out", []) + adj.get("in", [])
+        if subgraph is None:
+            return list(edges)
+        return [e for e in edges if e.get("properties", {}).get("subgraph") == subgraph]
 
     def stats(self) -> dict:
         by_sub = defaultdict(int)

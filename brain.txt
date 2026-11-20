@@ -1,0 +1,128 @@
+Mayday Brain — technical breakdown
+The Brain is a property graph + retrieval layer, not a vector DB or neural memory. It persists to one JSON file and is wrapped by a MAGMA multi-graph abstraction.
+Write paths                          Read paths
+───────────                          ──────────
+todos/events/convs ─┐                chat turn ─► keywords ─► MAGMA retrieve ─► prompt
+documents/projects ─┤                                        (or kg.search fallback)
+research/emails ────┤                        │
+people/preferences ─┘                        ├─► recall() (LLM tool)
+        │                                    ├─► recall_entity() (2-hop BFS)
+        ▼                                    └─► REST /api/memory/*
+  KnowledgeGraph (memory_graph.json)
+        │
+        ├─ 6 in-memory indexes
+        └─ MultiGraph (semantic / temporal / causal / entity edges)
+1. Storage model
+backend/memory/knowledge_graph.py — one singleton (get_graph()) over memory_graph.json.
+Node
+{ "id": "a1b2c3d4e5f6", "type": "person", "label": "Arjun",
+  "properties": { "status": "active", "...": "..." } }
+id = 12-char uuid hex. add_node() injects status: "active" if absent.
+Edge
+{ "id": "...", "source": "<node_id>", "target": "<node_id>",
+  "relation": "is_friend_of", "properties": {} }
+Relations are free-form strings (no schema/enum). Examples live in the file: has_task_result, has_note, has_hypothesis, references, causes, enables, precedes, friend, identity.
+File format — { "nodes": [...], "edges": [...] }, rewritten in full on every mutation (_save()), guarded by a threading.RLock. No WAL, no atomic rename, single-process only.
+Current size (this repo): 1,754 nodes / 932 edges.
+Top types: project 647, concept 451, email 340, conversation 220, build_lesson 34, research 20, person 13, preference 8, event 7, document 5, favorite_song 4, user 1, place 1, todo 1.
+2. In-memory indexes
+Built at load (_rebuild_indexes) and maintained incrementally:
+Index	Key → value	Used for
+_label_idx	lowercase label → node id	exact get_node_by_label() / remember()
+_type_idx	type → set(ids)	get_nodes_by_type()
+_adj_idx	id → {out: [edges], in: [edges]}	O(1) neighbor traversal
+_edge_fp	(source, target, relation) set	edge dedup
+_prop_idx	(type, key, value) → id	idempotent sync (todo/event/conversation/build_lesson/preference/protocol_lesson)
+_text_idx	token → set(ids)	keyword search
+_text_idx is built from label + type + all string properties.
+3. Write path
+A. LLM tools (backend/memory/memory_tools.py)
+remember(entity, relation, value, context, node_type="concept"):
+1. Resolve entity with prefix fallbacks — project:, research:, tag:, date:, concept:
+2. Refuse if properties.status == "scraped" (tombstone)
+3. Create source node if missing; create target as concept if missing
+4. add_edge_if_missing() → returns None if (source,target,relation) already exists
+5. Record in operation log; return "Remembered" or "Already remembered"
+Other tools:
+- recall(query) → top 10 kg.search results
+- recall_entity(name) → exact node + 2-hop BFS subgraph with edge list
+- forget(entity, relation?, value?) → removes matching edges; if relation/value omitted, delegates to soft delete
+- delete_entity(name) → soft delete: sets status="scraped", keeps node and edges, reactivatable via set_status
+- set_status(name, status) → active/scraped
+B. Auto-sync — CRUD elsewhere writes the graph directly:
+sync_todo, sync_event (creates has_tag edges), sync_conversation, sync_document (stores full _text in properties), plus writers in project_store, research_store, scheduler (emails), awareness_observer (people/user), location, maps_functions (places), evolution (build lessons), music (favorite songs).
+Docs/projects/research are synced so the Brain reflects everything without an LLM call.
+4. Read path
+search(query) — AND semantics:
+1. Tokenize query, intersect _text_idx sets for every token
+2. Fallback scan: substring match on label, then on string properties
+3. Returns nodes only (edges empty)
+get_subgraph(node_id, depth=2) — BFS over _adj_idx, following both out and in, max depth 2.
+get_clean_graph() — what the UI sees. Filters:
+- properties.search_result == "true" (internal junk)
+- type == "belief" or label belief:* (legacy awareness mirror)
+- status == "scraped" unless include_scraped=True
+REST (backend/api/memory.py):
+- GET /api/memory/graph → clean graph
+- GET /graph/search?q= → search nodes
+- GET /graph/node/{id} → node + 2-hop subgraph
+- DELETE /graph/node/{id} → hard remove node + incident edges
+- GET /stats, POST /repair (repair_graph() scrapes junk/search_result nodes, retypes research: nodes, deletes belief:*)
+5. Prompt injection (the actual "memory")
+Each chat turn, backend/api/chat.py:1062–1153:
+1. extract_keywords(user_text) — tokens >2 chars, stopword-filtered
+2. If magma.enabled → magma_retrieve(user_text); on exception → legacy kg.search top 8
+3. Add matching todos/events from the data store (top 4)
+4. Add PDF context: pdf_store.search(query, limit=3), inject up to 4,000 chars of _text per doc
+5. Add research index hits: top 12, with up to 5 answer/finding/claim snippets
+6. Append everything as:
+### Relevant memories:
+<t:2026-08-10> [event] TCS exam on Aug 10 (due_date: ...)
+- [todo] Pay rent
+[Document: notes.pdf] ...
+From Mayday's research store ...
+###
+6. MAGMA multi-graph layer
+backend/memory/multigraph.py — additive wrapper, does not change the JSON format. Every typed edge carries properties.subgraph:
+Subgraph	Relation	Source
+temporal	precedes	node insertion order (temporal_chain())
+causal	causes / caused_by / enables	consolidation worker (LLM)
+semantic	similar_to	cosine over hashed-token vectors
+entity	references	consolidation worker (LLM)
+Embedder — _LocalEmbedder, 1024-dim:
+- token → crc32(token) % 1024 bucket, increment, L2-normalize
+- cosine = dot product
+- not a neural embedding — it's hashed bag-of-words; the docstring explicitly marks it as a stand-in for an Ollama embedding model
+Vector index — _vectors: {node_id: [float]}, rebuilt lazily when dirty or size mismatch. Search is a linear scan over all nodes, no ANN.
+RRF anchors — rrf_anchors(query, top_k=20, k=60) fuses dense vector ranks and sparse kg.search ranks:
+score = Σ 1/(60 + rank + 1)
+Retrieval pipeline (backend/memory/retrieval.py, no LLM call):
+1. Intent detection — regex → WHY / WHEN / ENTITY / SEMANTIC, mapping to preferred subgraph order (e.g. WHY → causal, temporal, semantic)
+2. Anchors — RRF top 20, junk search_result nodes filtered
+3. Beam traversal — 2 hops, beam 20, max 12 nodes; score = parent*0.7 + pref_weight*0.3, where pref_weight is 1.0 for a preferred subgraph, 0.3 otherwise
+4. Linearize — <t:timestamp> [type] label (salient_prop), chronological if intent is WHEN, 4,000-token budget with ...N more relevant memories (truncated)
+Consolidation (consolidation.py, slow path):
+- After each engine turn, enqueue up to 20 nodes without properties.consolidated
+- Skips belief, search_result, tombstoned
+- Daemon thread → for each node, build 2-hop neighborhood text and ask the worker model for JSON:
+{ "causal": [{"source":"<label>","target":"<label>","relation":"causes"}],
+  "entity": [{"event":"<label>","entity":"<label>","kind":"person|object|place|concept"}] }
+- Applies edges, creates missing entity nodes, sets consolidated: true
+- Label guard rejects labels containing : or >60 chars (prevents echo of internal belief:* labels)
+7. Frontend
+BrainPanel → useGraph → GraphCanvas (Cytoscape.js, cose force layout, 1,000 iterations) → NodeDetail.
+- Color/shape by type: user green rounded rect, todo yellow, event blue, concept purple ellipse, conversation gray, tag orange diamond, project amber, personality pink, document purple, research cyan
+- Labels truncated to 25 chars for rendering
+- Click → GET /graph/node/{id} → 2-hop subgraph; properties + connected edges are clickable to navigate
+- Search box calls /graph/search
+8. What's live vs latent (code-level caveats)
+1. Semantic + temporal subgraphs are not materialized in production. build_semantic_edges() and ensure_temporal_backbone() are only called in tests. Live edge counts: causal 399, entity 83, semantic/temporal 0. So the intent-preference weighting in retrieval is partly inert — it mostly traverses causal/entity edges.
+2. "Semantic" is lexical hashing, not embeddings. True semantic recall requires swapping _LocalEmbedder._embed for an Ollama embedding call.
+3. build_semantic_edges is O(n²) — ~1.5M cosine comparisons at 1,754 nodes; offline/on-demand only.
+4. _prop_idx doesn't index document, but sync_document() reads ("document","doc_id",...) from it — so the update path looks like it always misses and creates a new node. That's likely why there are only 5 document nodes despite sync calls.
+5. Whole-file rewrite per mutation — every remember/sync writes the entire JSON. Fine at 1.7k nodes; will degrade at 10k+.
+6. add_node doesn't dedupe by label — only remember resolves exact labels. Other writers (add_node("concept", filename), research notes) can create duplicates.
+7. search is AND-only — a multi-word query misses nodes containing only some tokens; the substring fallback only helps exact phrases.
+8. Consolidation costs tokens — up to 20 worker-LLM calls per turn, flag-gated by magma.consolidation_enabled.
+9. Soft deletes accumulate — scraped nodes stay in the file and in _text_idx (hidden from UI only).
+If you want, I can trace one concrete flow end-to-end (e.g. "I met Arjun yesterday" → node/edge creation → next-turn retrieval → consolidation) or map the graph's current polluted areas from the 647 project / 340 email nodes.

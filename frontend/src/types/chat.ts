@@ -1,5 +1,13 @@
+/** Inline OpenUI spec built by backend/core/openui_builder.py. */
+export interface UiPayload {
+  lang: string
+  title?: string
+  fallback_text?: string
+}
+
 export interface WsMessage {
-  type: 'message' | 'new_conversation' | 'load_conversation' | 'confirm_skill' | 'dismiss_skill' | 'music_command'
+  type: 'message' | 'new_conversation' | 'load_conversation' | 'confirm_skill' | 'dismiss_skill' | 'music_command' | 'confirm_phase'
+  phase?: string
   content?: string
   conversation_id?: string
   name?: string
@@ -30,7 +38,10 @@ export interface Conversation {
 }
 
 export interface WsResponse {
-  type: 'token' | 'tool_call' | 'done' | 'error' | 'conversation_loaded' | 'skill_suggested' | 'skill_activated' | 'skill_deactivated' | 'music'
+  type: 'token' | 'tool_call' | 'done' | 'error' | 'conversation_loaded' | 'skill_suggested' | 'skill_activated' | 'skill_deactivated' | 'music' | 'approval_gate'
+  ui?: UiPayload
+  phase?: string
+  message?: string
   content?: string
   voice_content?: string
   name?: string

@@ -10,6 +10,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@openuidev/react-lang": "1.1.1",
     "clsx": "^2.1.1",
     "cytoscape": "^3.34.0",
     "lucide-react": "^1.18.0",
@@ -19,7 +20,8 @@
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
-    "tailwind-merge": "^3.6.0"
+    "tailwind-merge": "^3.6.0",
+    "zod": "4.1.12"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

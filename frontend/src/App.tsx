@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
+import type { UiPayload } from './types/chat'
 import { ChatProvider, useChatContext } from './context/ChatContext'
 import { Sidebar, type Page } from './components/layout/Sidebar'
 import { ChatPanel } from './components/chat/ChatPanel'
-import { TodoPanel } from './components/todos/TodoPanel'
-import { CalendarPanel } from './components/calendar/CalendarPanel'
+import { PlannerPanel } from './components/planner/PlannerPanel'
 import { BrainPanel } from './components/brain/BrainPanel'
 import { DashboardPanel } from './components/dashboard/DashboardPanel'
 import { SearchOverlay } from './components/search/SearchOverlay'
@@ -12,6 +12,7 @@ import { ReminderDialog } from './components/ui/ReminderDialog'
 import { VoiceMode } from './components/voice/VoiceMode'
 import { DocumentPanel } from './components/documents/DocumentPanel'
 import { AnalysisPanel } from './components/data/AnalysisPanel'
+import { ResearchPanel } from './components/research/ResearchPanel'
 import { ArtifactPanel } from './components/research/ArtifactPanel'
 import { PlayerBar } from './components/player/PlayerBar'
 import { PlayerQueue } from './components/player/PlayerQueue'
@@ -27,6 +28,7 @@ function AppContent() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [artifactUrl, setArtifactUrl] = useState<string | null>(null)
   const [artifactTitle, setArtifactTitle] = useState('Artifact')
+  const [artifactUi, setArtifactUi] = useState<UiPayload | null>(null)
   const music = useMusicPlayer()
   const [showQueue, setShowQueue] = useState(false)
   const [showPopouts, setShowPopouts] = useState(false)
@@ -81,8 +83,10 @@ function AppContent() {
   useEffect(() => {
     const handleNavigate = (e: Event) => {
       const detail = (e as CustomEvent).detail
-      if (detail === 'dashboard' || detail === 'chat' || detail === 'todos' || detail === 'calendar' || detail === 'brain' || detail === 'voice' || detail === 'documents' || detail === 'data') {
-        setCurrentPage(detail)
+      // 'todos' / 'calendar' are pre-V2 page names — both live in the Planner now
+      const page = detail === 'todos' || detail === 'calendar' ? 'planner' : detail
+      if (page === 'dashboard' || page === 'chat' || page === 'planner' || page === 'brain' || page === 'voice' || page === 'documents' || page === 'data' || page === 'research') {
+        setCurrentPage(page)
       }
     }
     window.addEventListener('navigate', handleNavigate)
@@ -91,8 +95,9 @@ function AppContent() {
 
   useEffect(() => {
     const handleArtifact = (e: Event) => {
-      const { url, title } = (e as CustomEvent).detail
-      setArtifactUrl(url)
+      const { url, title, ui } = (e as CustomEvent).detail
+      setArtifactUi(ui ?? null)
+      setArtifactUrl(url ?? null)
       setArtifactTitle(title || 'Artifact')
       setCurrentPage('chat')
     }
@@ -128,18 +133,19 @@ function AppContent() {
       <div className="flex-1 overflow-hidden relative">
         {currentPage === 'dashboard' && <DashboardPanel onNavigate={setCurrentPage} />}
         {currentPage === 'chat' && <ChatPanel />}
-        {currentPage === 'todos' && <TodoPanel />}
-        {currentPage === 'calendar' && <CalendarPanel />}
+        {currentPage === 'planner' && <PlannerPanel />}
         {currentPage === 'brain' && <BrainPanel />}
         {currentPage === 'documents' && <DocumentPanel />}
         {currentPage === 'data' && <AnalysisPanel />}
+        {currentPage === 'research' && <ResearchPanel />}
         {currentPage === 'voice' && <VoiceMode onExit={() => setCurrentPage('dashboard')} />}
-        {artifactUrl && currentPage === 'chat' && (
+        {(artifactUrl || artifactUi) && currentPage === 'chat' && (
           <div className="absolute inset-y-0 right-0 w-[520px] max-w-full z-20 border-l border-surface2 shadow-2xl">
             <ArtifactPanel
               url={artifactUrl}
+              ui={artifactUi}
               title={artifactTitle}
-              onClose={() => setArtifactUrl(null)}
+              onClose={() => { setArtifactUrl(null); setArtifactUi(null) }}
             />
           </div>
         )}

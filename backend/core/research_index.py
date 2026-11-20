@@ -12,6 +12,8 @@ Rebuilt on first access and refreshed lazily (max 10s staleness for artifacts) s
 cheap and newly written notes/reports become searchable without a restart.
 Text reads capped at 200k and pdfs <5MB to avoid OOM.
 """
+import math
+import re
 import threading
 
 from backend.core.research_store import get_research_store
@@ -57,6 +59,7 @@ class ResearchIndex:
                 self._ngram.add(topic_id, topic_text)
                 self._ranker.add(topic_id, topic_text)
                 self._meta[topic_id] = {"kind": "topic", "slug": slug, "topic": full["topic"]}
+                self._index_evidence(full, slug)
 
                 topic_dir = store._outputs_dir / slug
                 notes_dir = topic_dir / "notes"
@@ -184,41 +187,110 @@ class ResearchIndex:
             self._built = True
             self._built_at = time.time()
 
+    def _add(self, doc_id: str, text: str, meta: dict):
+        if not text:
+            return
+        self._ngram.add(doc_id, text)
+        self._ranker.add(doc_id, text)
+        self._meta[doc_id] = meta
+
+    def _index_evidence(self, full: dict, slug: str):
+        """Index the evidence model: answers, findings, verified claims, sources, data points."""
+        base = {"slug": slug, "topic": full["topic"], "status": full.get("status", "")}
+        runs = [r for r in full.get("runs", []) if r.get("answers")]
+        if runs:
+            run = runs[-1]
+            for i, a in enumerate(run["answers"]):
+                if a.get("answer"):
+                    self._add(f"answer:{slug}:{run['id']}:{i}", f"{a['question']}\n{a['answer']}",
+                              {**base, "kind": "answer", "id": run["id"], "title": a["question"]})
+        for f in full.get("findings", []):
+            self._add(f"finding:{slug}:{f['id']}", f.get("content", ""),
+                      {**base, "kind": "finding", "id": f["id"], "confidence": f.get("confidence", "")})
+        for c in full.get("claims", []):
+            if c.get("status") not in ("supported", "contested"):
+                continue  # unverified/unsupported claims must not surface as evidence
+            quotes = " ".join(e.get("quote", "") for e in c.get("evidence", []) if e.get("verified"))
+            self._add(f"claim:{slug}:{c['id']}", f"{c['statement']}\n{c.get('entity', '')}\n{quotes}",
+                      {**base, "kind": "claim", "id": c["id"], "claim_status": c["status"],
+                       "confidence": c.get("confidence", 0)})
+        for s in full.get("sources", []):
+            self._add(f"source:{slug}:{s['id']}",
+                      " ".join(str(x) for x in (s.get("title"), s.get("publisher"), s.get("url")) if x),
+                      {**base, "kind": "source", "id": s["id"], "title": s.get("title", ""), "url": s.get("url", "")})
+        for dp in full.get("data_points", [])[:500]:
+            self._add(f"data:{slug}:{dp['id']}",
+                      f"{dp.get('label', '')} {dp.get('value', '')} {dp.get('unit', '')}".strip(),
+                      {**base, "kind": "data_point", "id": dp["id"]})
+
     def force_rebuild(self):
         self._rebuild(force=True)
 
-    def search(self, query: str, limit: int = 10) -> list[dict]:
+    # Higher = more useful as an answer; used to break ties between equally matching docs.
+    _KIND_WEIGHT = {"answer": 6, "finding": 5, "claim": 4, "topic": 3, "report": 3, "note": 3,
+                    "data_point": 2, "artifact": 1, "source": 1}
+    _STOP = frozenset("the and for with from that this what which how are was were has have had about into "
+                      "over under than then their there they them its our your you not but can will all any "
+                      "does did done who why when where".split())
+
+    @classmethod
+    def _tokens(cls, query: str) -> list[str]:
+        toks = re.findall(r"[a-z0-9][a-z0-9$%./\-]*", query.lower())
+        out = []
+        for t in toks:
+            t = t.strip(".-/")
+            if (len(t) >= 3 or t.isdigit()) and t not in cls._STOP and t not in out:
+                out.append(t)
+        return out
+
+    def search(self, query: str, limit: int = 10, kinds: set[str] | None = None) -> list[dict]:
+        """Word-based search: a document matches when it contains enough of the query's words
+        (all of them for 1-2 words, 60% for longer queries), in any order. Ranked by words
+        matched, exact-phrase bonus, document kind, then TF-IDF."""
         if not query or not query.strip():
             return []
         self._rebuild()
+        tokens = self._tokens(query)
         with self._lock:
-            hits = self._ngram.search(query, top_k=limit * 5)
-            results = []
-            for doc_id, _score in hits:
+            if not tokens:
+                matched = {d: 1 for d, _ in self._ngram.search(query, top_k=limit * 5)}
+            else:
+                matched: dict[str, int] = {}
+                for t in tokens:
+                    for doc_id, _ in self._ngram.search(t, top_k=100_000):
+                        matched[doc_id] = matched.get(doc_id, 0) + 1
+                need = len(tokens) if len(tokens) <= 2 else math.ceil(0.6 * len(tokens))
+                matched = {d: n for d, n in matched.items() if n >= need}
+            phrase = {d for d, _ in self._ngram.search(query, top_k=limit * 10)} if len(tokens) > 1 else set()
+            scored = []
+            for doc_id, n in matched.items():
                 meta = self._meta.get(doc_id)
-                if not meta:
+                if not meta or (kinds and meta["kind"] not in kinds):
                     continue
+                scored.append(((n, doc_id in phrase, self._KIND_WEIGHT.get(meta["kind"], 0),
+                                self._ranker.score(query, doc_id)), doc_id, meta))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            results = []
+            for _, doc_id, meta in scored[:limit]:
                 text = self._ngram._docs.get(doc_id, "")
-                snippet = self._snippet(text, query)
                 results.append({
                     "kind": meta["kind"],
                     "topic": meta["topic"],
                     "slug": meta["slug"],
                     "filename": meta.get("filename", ""),
-                    "snippet": snippet,
-                    "_doc_id": doc_id,
+                    "snippet": self._snippet(text, query, tokens=tokens),
+                    "status": meta.get("status", ""),
+                    **{k: meta[k] for k in ("id", "title", "url", "confidence", "claim_status") if k in meta},
                 })
-                if len(results) >= limit:
-                    break
-            results.sort(key=lambda r: self._ranker.score(query, r["_doc_id"]), reverse=True)
-            for r in results:
-                r.pop("_doc_id", None)
             return results
 
-    def _snippet(self, text: str, query: str, max_len: int = 120) -> str:
+    def _snippet(self, text: str, query: str, max_len: int = 160, tokens: list[str] | None = None) -> str:
         if not text or not query:
             return (text or "")[:max_len]
-        idx = text.lower().find(query.lower())
+        low = text.lower()
+        idx = low.find(query.lower())
+        if idx == -1 and tokens:
+            idx = min((i for i in (low.find(t) for t in tokens) if i != -1), default=-1)
         if idx == -1:
             return text[:max_len]
         start = max(0, idx - 50)

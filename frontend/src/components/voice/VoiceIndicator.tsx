@@ -1,99 +1,76 @@
+import { Loader2, Mic, MicOff } from 'lucide-react'
 import type { VoiceState } from '../../hooks/useVoice'
 import { cn } from '../../lib/utils'
 
-interface VoiceIndicatorProps {
+export const VOICE_LABEL: Record<VoiceState, string> = {
+  idle: 'Tap to talk',
+  listening: 'Listening',
+  processing: 'Thinking',
+  speaking: 'Speaking',
+  proactive: 'Mayday has something',
+}
+
+interface VoiceOrbProps {
   state: VoiceState
+  /** idle → start, active → stop */
+  onToggle?: () => void
+  disabled?: boolean
 }
 
-const stateConfig: Record<VoiceState, { label: string; color: string; glow: string }> = {
-  idle: { label: '', color: 'border-overlay0', glow: '' },
-  listening: { label: 'Listening', color: 'border-green', glow: 'shadow-green/40' },
-  processing: { label: 'Processing', color: 'border-yellow', glow: 'shadow-yellow/40' },
-  speaking: { label: 'Speaking', color: 'border-blue', glow: 'shadow-blue/40' },
-  proactive: { label: 'Mayday', color: 'border-amber', glow: 'shadow-amber/40' },
-}
-
-export function VoiceIndicator({ state }: VoiceIndicatorProps) {
-  if (state === 'idle') return null
-  const cfg = stateConfig[state]
-
+/**
+ * Animated orb that doubles as the session button.
+ * listening = ripples · thinking = spinning ring · speaking = live bars · idle = calm.
+ */
+export function VoiceIndicator({ state, onToggle, disabled }: VoiceOrbProps) {
+  const active = state !== 'idle'
   return (
-    <div className="flex flex-col items-center gap-6">
-      <div className="relative">
-        <div
-          className={cn(
-            'w-28 h-28 rounded-full border-2 transition-all duration-500',
-            cfg.color,
-            'shadow-2xl',
-            cfg.glow,
-          )}
-        >
-          <div
-            className={cn(
-              'w-full h-full rounded-full flex items-center justify-center',
-              'bg-gradient-to-br from-transparent via-white/[0.03] to-transparent',
-              state === 'listening' && 'animate-pulse shadow-inner',
-              state === 'speaking' && 'animate-pulse shadow-inner',
-              state === 'processing' && 'animate-pulse shadow-inner',
-              state === 'proactive' && 'animate-pulse shadow-inner',
-            )}
-          >
-            <div
-              className={cn(
-                'w-20 h-20 rounded-full transition-all duration-500',
-                'flex items-center justify-center',
-                state === 'listening' && 'bg-green/10',
-                state === 'speaking' && 'bg-blue/10',
-                state === 'processing' && 'bg-yellow/10',
-                state === 'proactive' && 'bg-amber/10',
-              )}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                className={cn(
-                  'w-10 h-10 transition-colors duration-500',
-                  state === 'listening' && 'text-green',
-                  state === 'speaking' && 'text-blue',
-                  state === 'processing' && 'text-yellow',
-                  state === 'proactive' && 'text-amber',
-                )}
-              >
-                <path
-                  d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"
-                  fill="currentColor"
-                />
-                <path
-                  d="M19 10v2a7 7 0 0 1-14 0v-2"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-                <line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-            </div>
-          </div>
-        </div>
+    <div className="relative w-56 h-56 sm:w-64 sm:h-64 flex items-center justify-center">
+      {/* ambient glow */}
+      <span aria-hidden className={cn('absolute inset-6 rounded-full blur-3xl transition-opacity duration-700',
+        state === 'processing' ? 'bg-white/10' : 'bg-green/25', active ? 'opacity-100' : 'opacity-40')} />
 
-        {state === 'listening' && (
-          <>
-            <span className="absolute -top-1 -right-1 w-4 h-4 bg-green rounded-full animate-ping opacity-75" />
-            <span className="absolute -top-1 -right-1 w-4 h-4 bg-green rounded-full" />
-          </>
-        )}
-      </div>
+      {(state === 'listening' || state === 'proactive') && [0, 0.8, 1.6].map(d => (
+        <span key={d} aria-hidden className="orb-ripple absolute inset-10 rounded-full border border-green/50"
+              style={{ animationDelay: `${d}s` }} />
+      ))}
 
-      <span
+      {state === 'processing' && (
+        <span aria-hidden className="absolute inset-7 rounded-full animate-spin [animation-duration:1.6s]"
+              style={{ background: 'conic-gradient(from 0deg, transparent 0deg, rgba(74,222,128,0.9) 80deg, transparent 160deg)', mask: 'radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px))', WebkitMask: 'radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px))' }} />
+      )}
+
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={disabled || !onToggle}
+        aria-label={active ? 'End voice session' : 'Start voice session'}
+        aria-pressed={active}
         className={cn(
-          'text-lg font-semibold tracking-wide',
-          state === 'listening' && 'text-green',
-          state === 'speaking' && 'text-blue',
-          state === 'processing' && 'text-yellow',
-          state === 'proactive' && 'text-amber',
+          'relative w-36 h-36 sm:w-40 sm:h-40 rounded-full flex items-center justify-center transition-all duration-500',
+          'bg-[radial-gradient(circle_at_35%_30%,#4ade80_0%,#16a34a_45%,#052e16_100%)]',
+          'shadow-[inset_0_-12px_30px_rgba(0,0,0,0.45),0_0_60px_rgba(34,197,94,0.25)]',
+          !active && 'orb-breathe saturate-[0.55] brightness-75 hover:saturate-100 hover:brightness-100',
+          state === 'processing' && 'saturate-[0.4] brightness-90',
+          'disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green focus-visible:ring-offset-4 focus-visible:ring-offset-crust',
         )}
       >
-        {cfg.label}
-      </span>
+        <span aria-hidden className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_30%_22%,rgba(255,255,255,0.35),transparent_40%)]" />
+        {state === 'speaking' ? (
+          <span className="relative flex items-center gap-1.5 h-12" aria-hidden>
+            {[0.1, 0.35, 0, 0.5, 0.2, 0.4, 0.05].map((d, i) => (
+              <span key={i} className="orb-bar w-1.5 h-full rounded-full bg-black/70" style={{ animationDelay: `${d}s` }} />
+            ))}
+          </span>
+        ) : state === 'processing' ? (
+          <Loader2 className="relative h-10 w-10 text-black/70 animate-spin" aria-hidden />
+        ) : active ? (
+          <Mic className="relative h-11 w-11 text-black/75" aria-hidden />
+        ) : disabled ? (
+          <MicOff className="relative h-10 w-10 text-black/60" aria-hidden />
+        ) : (
+          <Mic className="relative h-10 w-10 text-black/70" aria-hidden />
+        )}
+      </button>
     </div>
   )
 }

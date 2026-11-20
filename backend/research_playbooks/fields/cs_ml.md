@@ -1,0 +1,5 @@
+- Results usually live in tables and "Experiments" sections: record the benchmark/dataset, metric, the compared baselines, and the model size or compute when stated.
+- A benchmark gain is design "benchmark". Note whether numbers come from the authors' own runs or are copied from other papers.
+- Look for code, data and model release (reproducibility), and for ablations that isolate what caused the gain.
+- Prefer the peer-reviewed venue version (NeurIPS, ICML, ICLR, ACL, CVPR, journals) over the arXiv preprint when both exist; mention arXiv-only results as preprints.
+- Be careful with leaderboard claims: different evaluation settings, data contamination and prompt choices change numbers.

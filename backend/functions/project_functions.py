@@ -1,4 +1,6 @@
 import json
+
+from backend.core.openui_builder import chart_from_chartjs
 import os
 from pathlib import Path
 
@@ -425,4 +427,5 @@ def generate_project_chart(name: str = "", chart_type: str = "auto", metric: str
             "url": url,
             "title": f"{project_obj['name']} — {result['chart_type'].title()} Chart",
         },
+        "ui": chart_from_chartjs(result.get("chart_json") or {}, f"{project_obj['name']} — {result['chart_type'].title()} chart"),
     })

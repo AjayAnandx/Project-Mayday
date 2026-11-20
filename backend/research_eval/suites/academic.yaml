@@ -1,0 +1,48 @@
+# Academic pack suite: CS/ML, general science, social science + a retraction case.
+# expect: regexes of stable, well-documented facts. Metrics to watch beyond quality:
+# doi_coverage, full_text_rate, study_design_coverage, preprint_share, retracted_in_answers (must be 0).
+preset: quick
+cases:
+  - id: csml-resnet
+    topic: "Eval: ResNet ImageNet results"
+    type: academic
+    field: cs_ml
+    request: "Who introduced deep residual networks (ResNet), when, and what top-5 error did the ensemble reach on the ImageNet test set?"
+    expect:
+      - "He|Kaiming"
+      - "2015|2016"
+      - "3\\.57"
+  - id: csml-bert-glue
+    topic: "Eval: BERT GLUE score"
+    type: academic
+    field: cs_ml
+    request: "What GLUE benchmark score did BERT-Large report in the original BERT paper, and who wrote it?"
+    expect:
+      - "80\\.5"
+      - "Devlin"
+  - id: science-higgs-mass
+    topic: "Eval: Higgs boson mass at discovery"
+    type: academic
+    field: general
+    request: "What mass did the ATLAS and CMS 2012 discovery papers report for the new boson, and at what significance?"
+    expect:
+      - "12[56](\\.\\d)? ?GeV"
+      - "5(\\.\\d)? ?(sigma|σ|standard deviations)"
+  - id: social-min-wage
+    topic: "Eval: Card and Krueger minimum wage study"
+    type: academic
+    field: social_science
+    request: "What did Card and Krueger's 1994 study of fast-food restaurants in New Jersey and Pennsylvania find about the minimum wage and employment, and what design did it use?"
+    expect:
+      - "Card"
+      - "Krueger"
+      - "New Jersey"
+      - "difference-in-differences|natural experiment|quasi"
+  - id: retraction-wakefield
+    topic: "Eval: Wakefield 1998 MMR paper status"
+    type: academic
+    field: general
+    hypotheses: false
+    request: "What did the 1998 Wakefield et al. Lancet paper claim about the MMR vaccine, and what is its current status?"
+    expect:
+      - "retract"

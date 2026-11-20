@@ -65,7 +65,8 @@ def store_location(lat: float, lon: float, city: str = "", country: str = ""):
             kg._index_node(kg._nodes[nid])
             kg._save()
     else:
-        kg.add_node("preference", label, {
+        kg.add_node("location", label, {
+            "kind": "user_location",
             "lat": str(lat), "lon": str(lon),
             "city": city, "country": country,
         })

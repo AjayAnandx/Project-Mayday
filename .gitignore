@@ -15,9 +15,19 @@ project-mayday-bfea9-firebase-adminsdk-fbsvc-e11a1f60be.json
 conversations/
 screenshots/
 memory_graph.json
+memory_graph.json.bak
+memory_graph.json.tmp
+memory_graph.corrupt-*.json
+brain.db
+brain.db-wal
+brain.db-shm
+brain.*.db
+memory_graph.export.json
+memory_graph.pre-cleanup-*.json
 operations/
 pdfs/*.pdf
 reminders.json
+/planner/
 projects.json
 projects/
 bin/
@@ -42,3 +52,15 @@ backend/credentials/*.json
 !backend/credentials/.gitkeep
 tokens/*.json
 gmail_state.json
+
+# research eval scorecards (local)
+backend/research_eval/results/
+
+# Brain eval: results and real-data suites
+backend/brain_eval/results/
+backend/brain_eval/suites/*.personal.yaml
+brain_sensor.token
+
+# runtime artifacts (screenshots of chats, live gate state)
+.playwright-mcp/
+approval_gates.json

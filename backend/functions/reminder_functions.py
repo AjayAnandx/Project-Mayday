@@ -7,8 +7,8 @@ def create_reminder(message: str, datetime: str) -> str:
     get_operation_log().record("create", "reminder", rid, message,
                                 details={"datetime": stored_dt})
     if adjusted:
-        return f"Reminder adjusted to 1 minute from now: '{message}' at {stored_dt} UTC (id: {rid}) — the requested time {datetime} was already in the past."
-    return f"Reminder set: '{message}' at {stored_dt} UTC (id: {rid})"
+        return f"Reminder adjusted to 1 minute from now: '{message}' at {stored_dt} (id: {rid}) — the requested time {datetime} was already in the past."
+    return f"Reminder set: '{message}' at {stored_dt} local time (id: {rid})"
 
 
 def list_reminders() -> str:
@@ -17,7 +17,7 @@ def list_reminders() -> str:
         return "No pending reminders."
     lines = [f"Pending reminders ({len(reminders)}):"]
     for r in reminders:
-        lines.append(f"  - [{r['id']}] {r['message']} at {r['datetime']} UTC")
+        lines.append(f"  - [{r['id']}] {r['message']} at {r['datetime']}")
     return "\n".join(lines)
 
 

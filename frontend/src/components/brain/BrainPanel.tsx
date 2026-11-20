@@ -3,9 +3,12 @@ import { Search, RefreshCw, BrainCircuit } from 'lucide-react'
 import { useGraph } from '../../hooks/useGraph'
 import { GraphCanvas } from './GraphCanvas'
 import { NodeDetail } from './NodeDetail'
+import { LearnedFeed } from './LearnedFeed'
+import { ThoughtsView } from './ThoughtsView'
 import type { GraphNode, GraphData } from '../../types/graph'
 
 export function BrainPanel() {
+  const [view, setView] = useState<'graph' | 'learned' | 'thoughts'>('graph')
   const { graphData, loading, error, fetchGraph, searchGraph, fetchNode } = useGraph()
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedNode, setSelectedNode] = useState<{ node: GraphNode; subgraph: GraphData } | null>(null)
@@ -39,9 +42,22 @@ export function BrainPanel() {
             <BrainCircuit className="h-3.5 sm:h-4 w-3.5 sm:w-4 text-green" />
           </div>
           <h2 className="text-xs sm:text-sm font-semibold text-text">Brain</h2>
+          <div className="ml-2 flex items-center rounded-full bg-surface0 p-0.5" role="tablist">
+            {(['graph', 'learned', 'thoughts'] as const).map((v) => (
+              <button
+                key={v}
+                role="tab"
+                aria-selected={view === v}
+                onClick={() => setView(v)}
+                className={`px-3 py-1 text-xs rounded-full transition-colors ${view === v ? 'bg-surface1 text-text' : 'text-overlay1 hover:text-text'}`}
+              >
+                {v === 'graph' ? 'Graph' : v === 'learned' ? 'Learned' : 'Thoughts'}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+        {view === 'graph' && <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
           <form onSubmit={handleSearch} className="relative flex-1 sm:flex-none">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-overlay0" />
             <input
@@ -59,9 +75,14 @@ export function BrainPanel() {
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">Refresh</span>
           </button>
-        </div>
+        </div>}
       </div>
 
+      {view === 'learned' ? (
+        <div className="flex-1 min-h-0"><LearnedFeed /></div>
+      ) : view === 'thoughts' ? (
+        <div className="flex-1 min-h-0"><ThoughtsView /></div>
+      ) : (
       <div className="flex-1 relative">
         {loading && !graphData && (
           <div className="absolute inset-0 flex items-center justify-center">
@@ -118,6 +139,7 @@ export function BrainPanel() {
           />
         )}
       </div>
+      )}
     </div>
   )
 }

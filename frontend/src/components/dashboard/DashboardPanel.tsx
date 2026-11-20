@@ -1,4 +1,4 @@
-import { RefreshCw, CalendarDays, ListTodo, Activity, ChevronDown } from 'lucide-react'
+import { RefreshCw, CalendarDays, ListTodo, Hourglass, ChevronDown } from 'lucide-react'
 import { useChatContext } from '../../context/ChatContext'
 import { useDashboard } from '../../hooks/useDashboard'
 import type { Page } from '../layout/Sidebar'
@@ -9,7 +9,6 @@ import { AINewsWidget } from './AINewsWidget'
 import { MusicWidget } from './MusicWidget'
 import { GmailBadge } from './GmailBadge'
 import { KpiCard } from './KpiCard'
-import { DeltaPill, compact } from './DashCard'
 import { ActivityChart } from './ActivityChart'
 import { ActivityHeatmap } from './ActivityHeatmap'
 import { TaskHealth } from './TaskHealth'
@@ -30,9 +29,6 @@ export function DashboardPanel({ onNavigate }: { onNavigate?: (p: Page) => void 
   const a = data?.analytics
   const go = (p: Page) => (onNavigate ? () => onNavigate(p) : undefined)
 
-  const actionsDelta = a && a.prev_total > 0
-    ? Math.round(((a.total - a.prev_total) / a.prev_total) * 100)
-    : null
   const completion = a && a.todos.total ? Math.round((a.todos.completed / a.todos.total) * 100) : 0
 
   return (
@@ -87,21 +83,25 @@ export function DashboardPanel({ onNavigate }: { onNavigate?: (p: Page) => void 
                   badge={data.stats.overdue_todos > 0
                     ? <span className="rounded-md bg-red px-1.5 py-0.5 text-[11px] font-semibold text-white">▼ {data.stats.overdue_todos} overdue</span>
                     : <span className="rounded-md bg-green px-1.5 py-0.5 text-[11px] font-semibold text-black">▲ on track</span>}
-                  onOpen={go('todos')}
+                  onOpen={go('planner')}
                 />
                 <KpiCard
                   label="Upcoming Events"
                   icon={CalendarDays}
                   value={data.stats.upcoming_events_count}
                   badge={<span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[11px] font-semibold text-subtext1">{data.stats.today_events} today</span>}
-                  onOpen={go('calendar')}
+                  onOpen={go('planner')}
                 />
                 <KpiCard
-                  label="Actions · 30d"
-                  icon={Activity}
-                  value={compact(a?.total ?? 0)}
-                  badge={actionsDelta !== null ? <DeltaPill value={actionsDelta} /> : undefined}
-                  onOpen={go('chat')}
+                  label="Waiting on others"
+                  icon={Hourglass}
+                  value={data.stats.waiting_on ?? 0}
+                  badge={(data.stats.follow_ups_due ?? 0) > 0
+                    ? <span className="rounded-md bg-yellow px-1.5 py-0.5 text-[11px] font-semibold text-black">{data.stats.follow_ups_due} to chase</span>
+                    : (data.stats.waiting_on ?? 0) > 0
+                      ? <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[11px] font-semibold text-subtext1">all on track</span>
+                      : undefined}
+                  onOpen={go('planner')}
                 />
                 {a && <ActivityHeatmap analytics={a} className="xl:row-span-2" />}
 
@@ -110,11 +110,11 @@ export function DashboardPanel({ onNavigate }: { onNavigate?: (p: Page) => void 
 
                 {a && <InsightCard analytics={a} />}
                 {a && <ActivityMix analytics={a} className="md:col-span-1 xl:col-span-2" />}
-                {a && <CompletionGauge value={completion} label="Tasks completed" onOpen={go('todos')} />}
+                {a && <CompletionGauge value={completion} label="Tasks completed" onOpen={go('planner')} />}
 
                 {/* Life row — same grid, same card language */}
                 <WeatherWidget weather={weather} />
-                <UpcomingEvents events={data.upcoming_events} onOpen={go('calendar')} />
+                <UpcomingEvents items={data.agenda ?? []} onOpen={go('planner')} />
                 {data.music ? (
                   <MusicWidget
                     className="md:col-span-2"

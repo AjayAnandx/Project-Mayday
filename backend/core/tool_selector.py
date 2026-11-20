@@ -188,17 +188,28 @@ class ToolSelector:
         # is NEVER returned: it matches almost any query and would defeat
         # routing by dumping the full set into selector hits (seen live:
         # "play me the radhima song" selected core -> 118 routed -> cap 100).
-        active: set[str] = set()
-        for group_name, total_score in scores.items():
-            if group_name == "core":
-                continue
-            if total_score >= self._threshold:
-                active.add(group_name)
+        return {g for g, _ in self.select_ranked(query, _scores=scores)}
 
-        return active
+    def select_ranked(self, query: str, _scores: dict | None = None) -> list[tuple[str, float]]:
+        """Active groups (score >= threshold, never 'core'), best first."""
+        if _scores is None:
+            _scores = defaultdict(float)
+            for token in self._tokenize(query):
+                for group_name, score in self._index.get(token, {}).items():
+                    _scores[group_name] += score
+        ranked = [(g, s) for g, s in _scores.items()
+                  if g != "core" and s >= self._threshold]
+        ranked.sort(key=lambda x: (-x[1], x[0]))
+        return ranked
 
-    def select_tool_names(self, query: str) -> set[str]:
-        active_groups = self.select(query)
+    def select_tool_names(self, query: str, max_groups: int | None = None) -> set[str]:
+        """Tool names of the selected groups. ``max_groups`` keeps only the
+        best-scoring groups (used for `general` turns so a vague message cannot
+        pull in several large groups)."""
+        ranked = self.select_ranked(query)
+        if max_groups:
+            ranked = ranked[:max_groups]
+        active_groups = {g for g, _ in ranked}
         names: set[str] = set()
         for group_name in active_groups:
             if group_name in self._group_sets:

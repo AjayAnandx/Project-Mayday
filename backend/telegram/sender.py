@@ -347,7 +347,9 @@ class TelegramSender:
         # 3) Check result JSON for file paths (pdf_path, artifact, files)
         file_paths: list[Path] = []
         # from result JSON text
-        file_paths.extend(_extract_files_from_json_text(result_text))
+        # tool_calls carrying an inline OpenUI spec have a flattened `result`; the original JSON
+        # (with file_path / pdf_path) travels in raw_result.
+        file_paths.extend(_extract_files_from_json_text(str(data.get("raw_result") or result_text)))
         # from artifact_url local file (if not already handled as chart image)
         if artifact_local and not is_chart_png_sent:
             # if artifact is not chart html, treat as file to send

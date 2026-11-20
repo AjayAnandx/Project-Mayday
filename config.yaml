@@ -75,6 +75,154 @@ openrouter:
 # MAGMA multi-graph memory substrate (R2+). Additive; retrieval stays on the
 # flat graph until R3 wires it into the engine. Local embedder is a stand-in
 # for an Ollama embedding model (swap _LocalEmbedder._embed later).
+memory:
+  # Brain V2 P2: knowledge graph persisted in SQLite (brain.db, WAL). On the first
+  # start it imports memory_graph.json once and never writes the JSON again.
+  # Roll back: set backend: json (the JSON file is the pre-migration state;
+  # export the current graph first with python -m backend.brain.cli export).
+  backend: sqlite
+  db_path: brain.db
+
+brain:
+  # Brain V2 P3: after each non-trivial user turn, ONE worker-model call proposes
+  # facts / commitments / ideas / aliases, each with a verbatim quote. The validator
+  # checks the quote is in the message. >= auto_threshold is written, >= ask_threshold
+  # waits in the Learned feed (Brain tab) for confirmation, lower is dropped.
+  capture:
+    enabled: true
+    auto_threshold: 0.8
+    ask_threshold: 0.5
+    max_ops: 8
+  # Brain V2 P4: "Relevant memories" = FTS5 BM25 + IDF search + local embeddings
+  # + graph neighbours, fused (RRF), with pronouns resolved from recent messages.
+  # enabled: false falls back to MAGMA.
+  recall:
+    enabled: true
+    token_budget: 1200        # max tokens of memories per turn
+    max_items: 8
+    use_embeddings: true
+    embed_model: nomic-embed-text
+    embed_url: http://localhost:11434/api/embed
+    embed_timeout: 3.0
+  # Brain V2 P5: per turn, the routed tools are ordered by relevance and capped at
+  # max_tools; the model can fetch others with the tool_search meta-tool. Names or
+  # pronouns in gmail_send/gmail_draft "to" are resolved from memory/Planner people.
+  # Each turn's offered/used/searched tools go to brain.db tool_log
+  # (GET /api/brain/tools/stats).
+  tools:
+    enabled: true
+    max_tools: 30
+    search_k: 6
+    exempt_intents: [build]   # autonomous builds keep the full routed set
+    log: true
+  # Brain V2 P6: nightly at nightly_at: fix contradictions, expire unreviewed pending
+  # items, merge duplicates, summarise the last days' conversations into episodes
+  # (1 worker call per day). Weekly (weekly_day, 0=Mon..6=Sun): evidence-cited persona
+  # shown in the profile. Open loops appear in the morning digest.
+  # Brain V3 P8: sensory layer. Signals go to brain.db `signals` (raw, retention_days)
+  # and `signal_stats` (hourly roll-ups). Window titles, URLs, text and coordinates are
+  # never stored. The desktop sensor runs in your user session:
+  #   scripts/install_brain_sensor.ps1  (Task Scheduler, at logon)
+  sensors:
+    enabled: true
+    pause: false            # true = stop all sensing
+    desktop: true           # app category + switches + idle/lock (no titles)
+    ui: true                # response latency, dismissals, edits, tab visibility
+    location: false         # phone/browser location -> place label (opt-in)
+    retention_days: 14
+    backend_url: http://127.0.0.1:8771
+    categories: {}          # extra exe -> category, e.g. {code: [rider64.exe]}
+  # Brain V3 P9: habits mined nightly (>= min_count times across >= min_weeks weeks);
+  # decay archives weak, unconnected, unconfirmed generic memories (restorable for archive_days).
+  habits:
+    min_count: 3
+    min_weeks: 2
+    lookback_days: 42
+  decay:
+    enabled: true
+    floor: 0.08
+    max_archive_per_night: 200
+    archive_days: 90
+  # Brain V3 P10: lessons from mistakes (frustrated/correcting turns, repeated tool errors).
+  # One worker call per mistake, capped per day; active after a 2nd occurrence or your OK.
+  lessons:
+    enabled: true
+    max_per_day: 6
+    min_dissatisfaction: 0.5
+    inject: 3                # top relevant lessons added to the prompt
+  # Brain V3 P11: decision gate + graduated agency. dial: off | quiet (1/day) | balanced (3/day)
+  # | eager (6/day); the Brain tab can override it. Autonomous actions only for pre-authorised,
+  # reversible, internal kinds (never send/pay/book/delete); Undo for 7 days.
+  proactive:
+    enabled: true
+    dial: balanced
+    quiet_hours: "22:30-07:00"
+    urgent_cap: 3
+    cooldown_min: 30
+    preauthorized: [planner_move_own_block]
+    earned_autonomy_after: 5
+    min_sample: 0.2          # Thompson-sampled acceptance below this -> morning digest
+  # Brain V3 P12: 72-hour look-ahead (conflicts, overload, unscheduled important tasks,
+  # missing prep before exams/interviews/pitches, overdue waiting-on) and prep packs
+  # (one worker call per event/exam/deadline, every line cited, max_per_day).
+  friction:
+    horizon_hours: 72
+    focus_factor: 0.6
+    default_task_min: 45
+    important_priority: 2
+  prep:
+    enabled: true
+    lead_hours: 18
+    show_before_min: 30
+    max_per_day: 3
+    use_gmail: true
+  # Brain V3 P13: latent goals (1 worker call at most every min_interval_h, max_per_day)
+  # and a state estimate (focus/load/fatigue/stress vs YOUR baseline; adapts tone and timing,
+  # never labels you; correct it in Brain -> Thoughts).
+  intents:
+    enabled: true
+    min_interval_h: 2
+    max_per_day: 4
+    decay: 0.85
+    working_p: 0.8
+    drop_p: 0.2
+  state:
+    enabled: true
+    min_baseline_days: 7
+    cache_s: 60
+  # Brain V3 P14 (nightly): drift (your rhythms vs 4 weeks before; stale goals/values asked),
+  # routines (repeated multi-tool tasks -> named, verified workflows; offered at their usual
+  # time) and curiosity (recurring new topics -> quick research, max_per_day).
+  drift:
+    enabled: true
+    window_weeks: 4
+    js_threshold: 0.2
+    min_events: 20
+    stale_days: 45
+  routines:
+    enabled: true
+    min_count: 3
+    min_days: 2
+    lookback_days: 42
+    max_induce_per_night: 2
+  curiosity:
+    enabled: true
+    max_per_day: 2
+    lookback_days: 14
+  timing:
+    focus_minutes: 20       # one work category for this long = deep focus
+    focus_share: 0.75
+    max_switches_per_min: 1.5
+    idle_minutes: 5
+    session_gap_minutes: 15 # away this long -> "back after a break" transition
+  reflection:
+    enabled: true
+    nightly_at: "03:00"
+    weekly_day: 6
+    pending_days: 14
+    max_day_chars: 12000
+    skip_pattern: '\bZZTEST|\bZZTester'   # conversations from scripted smoke tests
+
 magma:
   enabled: true
   vector_dim: 1024
@@ -83,7 +231,9 @@ magma:
   token_budget: 4000
   # Slow-path consolidation (R4): worker model infers latent causal/entity edges
   # for un-consolidated nodes, asynchronously, off the response path.
-  consolidation_enabled: true
+  # Disabled by Brain V2 P6: it spent up to 20 worker calls per turn linking
+  # bookkeeping nodes; brain.reflection does nightly consolidation instead.
+  consolidation_enabled: false
   consolidation_batch: 20
 
 # DSPy (R5): compiles the interactive tier's HumanSynthesizer + IntentRouter on
@@ -101,6 +251,51 @@ data:
   projects_dir: C:\Users\hp\Projects\madays projects
   research_path: C:\Users\hp\Projects\Mayday Research\research.json
   research_outputs_dir: C:\Users\hp\Projects\Mayday Research\topics
+
+# Evidence-based research runs (backend/core/research_flow.py).
+# Flow: scope → plan → gather → extract → verify → synthesize → review → deliver.
+research:
+  budget:                     # default per run; research_start can override each value
+    max_minutes: 10
+    max_sources: 40
+    max_cost_usd: 0.5
+  models:                     # cheap model for bulk extraction, stronger one for judgement
+    scope: gpt-4o-mini
+    extract: gpt-4o-mini
+    synthesize: gpt-4o
+    review: gpt-4o
+  pricing:                    # USD per 1M tokens [input, output], used for the cost budget
+    gpt-4o-mini: [0.15, 0.6]
+    gpt-4o: [2.5, 10.0]
+  limits:
+    queries_per_question: 2
+    results_per_query: 6
+    fetch_chars: 20000        # full text saved per source
+    extract_chars: 12000      # text sent to the extractor per source
+    claims_per_source: 8
+    min_sources: 4            # gather gate
+    min_domains: 2            # gather gate
+    synthesis_claims: 120
+    review_loops: 1           # extra gather→synthesize rounds driven by the reviewer
+    workers: 4
+  # Stage + category playbooks live in backend/research_playbooks (see its README).
+  # Skills add named sections only ("skill#Section|Section"); a whole skill is never injected.
+  skills:
+    plan: "deep-research#Critical rules|Pitfalls"
+    synthesize: "deep-research#Critical rules|Pitfalls"
+  # Contact URL sent in the User-Agent to Wikipedia/Crossref/PubMed (their API etiquette).
+  # Use a page you control; no personal details are sent unless you put them here.
+  contact_url: "https://github.com/"
+  # Extra search sources backed by MCP servers from the mcp: section below.
+  mcp_adapters:
+    github_repos:
+      enabled: false          # turn on after refreshing GITHUB_PERSONAL_ACCESS_TOKEN (currently 401)
+      server: github
+      tool: search_repositories
+      query_arg: query
+      limit_arg: perPage
+      type: web
+      description: "Open-source repositories on GitHub (stars, activity). Use for technical research on tools and libraries."
 
 server:
   host: 0.0.0.0
@@ -246,13 +441,23 @@ openalex:
 maps:
   enabled: true
   api_key: ""  # Set via GOOGLE_MAPS_API_KEY env var or .env (restricted to Places New + Routes + Geocoding + Address Validation + Time Zone)
-  home: ""
+  home: ""  # set MAYDAY_HOME_ADDRESS in .env (kept out of the public repo)
   home_latlng: ""  # filled by validate step, e.g. "13.0282,80.2102" — avoids a geocode call per route
   work: ""
   work_latlng: ""
   default_modes: [drive, two-wheeler]  # travel modes Mayday compares (drive | two-wheeler | transit | walk)
   avoid: []                            # e.g. [tolls, highways] passed to Routes
   cache_ttl_hours: 24
+
+planner:
+  # Mayday V2 Planner — unified tasks / events / reminders / waiting-on (data in planner/)
+  app_url: "http://localhost:8771"   # link used in digest emails
+  nudge_signature: "Thanks"          # sign-off on drafted follow-up emails (drafts only, never auto-sent)
+  digest:
+    enabled: true
+    morning: "07:30"                 # today's plan: schedule, due, overdue, follow-ups, top 3
+    evening: "21:00"                 # day review: done, carried over, tomorrow, waiting on
+    to: ""                           # your address; empty = gmail.user_email
 
 gmail:
   enabled: true

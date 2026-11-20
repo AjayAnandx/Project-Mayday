@@ -42,6 +42,19 @@ class KnowledgeGraph:
         if not path.is_absolute():
             path = Path(__file__).resolve().parent.parent.parent / path
         self._path = path
+        # Persistence backend (Brain V2 P2): "sqlite" writes changed rows to
+        # brain.db; "json" keeps the legacy whole-file rewrite (rollback switch).
+        mem_cfg = cfg.get("memory", {}) or {}
+        self._backend = str(mem_cfg.get("backend", "json")).lower()
+        self._store = None
+        if self._backend == "sqlite":
+            # A relative db_path lives next to the graph file, so anything that
+            # redirects graph_path (tests, eval harnesses) also redirects the db.
+            db = Path(mem_cfg.get("db_path") or "brain.db")
+            if not db.is_absolute():
+                db = path.parent / db
+            from backend.brain.store import BrainStore
+            self._store = BrainStore(db)
         self._lock = threading.RLock()
         self._nodes: dict[str, dict] = {}
         self._edges: list[dict] = []
@@ -89,7 +102,7 @@ class KnowledgeGraph:
                 if val:
                     self._prop_idx[(node["type"], key, val)] = nid
 
-        if node["type"] in ("build_lesson", "preference", "protocol_lesson"):
+        if node["type"] in ("build_lesson", "preference", "build_preference", "protocol_lesson"):
             props = node.get("properties", {})
             for key in ("build_id", "pref_id", "protocol_id"):
                 val = props.get(key)
@@ -121,7 +134,7 @@ class KnowledgeGraph:
                 if val:
                     self._prop_idx.pop((node["type"], key, val), None)
 
-        if node["type"] in ("build_lesson", "preference", "protocol_lesson"):
+        if node["type"] in ("build_lesson", "preference", "build_preference", "protocol_lesson"):
             props = node.get("properties", {})
             for key in ("build_id", "pref_id", "protocol_id"):
                 val = props.get(key)
@@ -145,21 +158,84 @@ class KnowledgeGraph:
         self._edge_fp.discard((edge["source"], edge["target"], edge["relation"]))
 
     def _load(self):
+        if self._store is None:
+            return self._load_json()
+        if self._store.is_empty() and self._path.exists():
+            # One-time migration: read the JSON graph (left untouched as a
+            # backup) and import it. Idempotent: the store is only filled once.
+            import logging
+            self._load_json()
+            stats = self._store.import_graph(
+                {"nodes": list(self._nodes.values()), "edges": self._edges}, source=str(self._path))
+            logging.getLogger(__name__).warning(
+                "memory graph migrated from %s to %s (%s)", self._path, self._store.path, stats)
+        self._nodes, self._edges = self._store.load()
+        self._rebuild_indexes()
+
+    def _save(self):
+        if self._store is None:
+            return self._save_json()
+        self._store.sync(self._nodes, self._edges)
+
+    def export_json(self, dest: Path | None = None) -> Path:
+        """Write a JSON snapshot of the graph (backup / visualisation)."""
+        dest = Path(dest) if dest else self._path.with_name("memory_graph.export.json")
+        with self._lock:
+            data = {"nodes": list(self._nodes.values()), "edges": self._edges}
+            tmp = dest.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(dest)
+        return dest
+
+    def _load_json(self):
         if self._path.exists():
             try:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
                 self._nodes = {n["id"]: n for n in data.get("nodes", [])}
                 self._edges = data.get("edges", [])
                 self._rebuild_indexes()
-            except (json.JSONDecodeError, OSError):
-                pass
+            except (json.JSONDecodeError, OSError, KeyError, TypeError) as exc:
+                # Never silently start empty over a damaged brain: keep a copy
+                # first so the next _save() cannot destroy the only data.
+                import shutil, time, logging
+                backup = self._path.with_suffix(f".corrupt-{int(time.time())}.json")
+                try:
+                    shutil.copy2(self._path, backup)
+                except OSError:
+                    pass
+                logging.getLogger(__name__).error(
+                    "memory graph unreadable (%s); copy kept at %s", exc, backup)
+                bak = self._path.with_suffix(".json.bak")
+                if bak.exists():
+                    try:
+                        data = json.loads(bak.read_text(encoding="utf-8"))
+                        self._nodes = {n["id"]: n for n in data.get("nodes", [])}
+                        self._edges = data.get("edges", [])
+                        self._rebuild_indexes()
+                        logging.getLogger(__name__).warning("memory graph restored from %s", bak)
+                    except (json.JSONDecodeError, OSError, KeyError, TypeError):
+                        self._nodes, self._edges = {}, []
 
-    def _save(self):
+    def _save_json(self):
         data = {
             "nodes": list(self._nodes.values()),
             "edges": self._edges,
         }
-        self._path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Atomic write: temp file + fsync + os.replace, so a crash mid-save
+        # leaves either the old or the new file, never a truncated one.
+        # The previous good file is kept as .bak.
+        import os
+        tmp = self._path.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2, ensure_ascii=False))
+            f.flush()
+            os.fsync(f.fileno())
+        if self._path.exists():
+            try:
+                os.replace(self._path, self._path.with_suffix(".json.bak"))
+            except OSError:
+                pass
+        os.replace(tmp, self._path)
 
     def add_node(self, type: str, label: str, properties: dict | None = None) -> str:
         with self._lock:
@@ -214,22 +290,38 @@ class KnowledgeGraph:
         with self._lock:
             q = query.lower()
             tokens = _tokenize(q)
-            matching_ids: set[str] | None = None
+            # Callers often pass raw sentences ("who is kiran rao"); stop words
+            # would otherwise match most of the graph.
+            content = {t for t in tokens if t not in _STOP_WORDS and len(t) > 1}
+            if content:
+                tokens = content
 
-            if tokens:
-                for t in tokens:
-                    s = self._text_idx.get(t, set())
-                    if matching_ids is None:
-                        matching_ids = set(s)
-                    else:
-                        matching_ids &= s
-                        if not matching_ids:
-                            break
+            # Ranked OR search. Each matched token adds its IDF, so rare words
+            # (names, places) count more than common ones. Nodes that match every
+            # token come first (the old AND result, unchanged in order of
+            # relevance); partial matches follow if they cover at least half of
+            # the query's total IDF, so one rare word can still find a memory
+            # when the rest of the phrasing differs.
+            import math
+            n_docs = max(len(self._nodes), 1)
+            idf = {t: math.log(1 + n_docs / (1 + len(self._text_idx.get(t, ())))) for t in tokens}
+            # Words that occur nowhere in the graph carry no signal, so they do not
+            # count against coverage ("tell me about coorg plans" -> coorg).
+            total_idf = sum(v for t, v in idf.items() if self._text_idx.get(t)) or 1.0
+            scores: dict[str, float] = {}
+            hits: dict[str, int] = {}
+            for t in tokens:
+                for nid in self._text_idx.get(t, ()):
+                    scores[nid] = scores.get(nid, 0.0) + idf[t]
+                    hits[nid] = hits.get(nid, 0) + 1
+            full = [nid for nid, h in hits.items() if h == len(tokens)]
+            partial = [nid for nid, h in hits.items()
+                       if h < len(tokens) and scores[nid] >= 0.5 * total_idf]
+            full.sort(key=lambda n: -scores[n])
+            partial.sort(key=lambda n: -scores[n])
+            matching_ids = set(full)
 
-            if matching_ids is None:
-                matching_ids = set()
-
-            results = [self._nodes[nid] for nid in matching_ids if nid in self._nodes]
+            results = [self._nodes[nid] for nid in full if nid in self._nodes]
 
             seen = set(matching_ids)
             for node in self._nodes.values():
@@ -244,6 +336,11 @@ class KnowledgeGraph:
                         results.append(node)
                         seen.add(node["id"])
                         break
+
+            for nid in partial[:50]:
+                if nid not in seen and nid in self._nodes:
+                    results.append(self._nodes[nid])
+                    seen.add(nid)
 
             return results
 

@@ -1,6 +1,8 @@
 import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from typing import Optional
+
 from pydantic import BaseModel
 
 from backend.core.scheduler import get_scheduler
@@ -54,5 +56,9 @@ async def notification_ws(websocket: WebSocket):
 
 
 @router.get("/fired")
-def get_fired_notifications():
+def get_fired_notifications(since: Optional[int] = None):
+    """With ?since=N: broadcast mode, every tab/device gets every notification
+    ({"seq", "items"}). Without it: legacy drain-on-read list."""
+    if since is not None:
+        return get_scheduler().get_fired_since(since)
     return get_scheduler().get_fired_notifications()

@@ -31,6 +31,7 @@ REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls"
 # Must stay << OpenAI's 128-tool limit (11 interactive + 3 worker-control).
 INTERACTIVE_TOOL_NAMES = frozenset({
     "get_weather",
+    "plan_list",
     "list_todos",
     "list_events",
     "query_events",
@@ -41,6 +42,10 @@ INTERACTIVE_TOOL_NAMES = frozenset({
     "get_active_window",
     "list_projects",
     "suggest_skill",
+    # research runs in the background flow; starting/checking it is instant, so no worker
+    "research_start",
+    "research_status",
+    "research_claims",
 })
 
 # Worker-control tools: advertised in EVERY realtime session (relay + WebRTC)

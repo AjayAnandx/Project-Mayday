@@ -114,7 +114,7 @@ async def _handle_free_text(update, context):
     # Fire-and-forget LLM fact extraction (background)
     try:
         from backend.api.chat import _background_remember
-        asyncio.create_task(_background_remember(llm, text, sess.conv.current_id))
+        asyncio.create_task(_background_remember(llm, text, sess.conv.current_id, channel="telegram"))
     except Exception:
         pass
 

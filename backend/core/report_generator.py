@@ -35,6 +35,23 @@ def _normalize_source_for_display(s):
         return url or s.get("title", "") or str(s)
     return str(s)
 
+def source_labels(sources, limit: int | None = None) -> list[str]:
+    """Display strings for a list of sources (dicts or bare strings)."""
+    items = list(sources or [])
+    if limit is not None:
+        items = items[:limit]
+    return [_normalize_source_for_display(s) for s in items]
+
+
+class SafePDF(FPDF):
+    """FPDF whose core (Latin-1) fonts replace unencodable characters instead of raising."""
+
+    def normalize_text(self, text: str) -> str:
+        if not self.is_ttf_font and self.core_fonts_encoding:
+            return text.encode(self.core_fonts_encoding, errors="replace").decode("latin-1")
+        return super().normalize_text(text)
+
+
 def _is_trusted_source(s) -> bool:
     if isinstance(s, dict):
         # dict source trusted if score>0.7 or citationCount>10 or explicit trusted tag
@@ -285,7 +302,7 @@ def generate_report(topic: str, fmt: str = "md") -> dict:
 
 
 def _generate_pdf(projects: list[dict], title: str, outputs_dir: Path) -> dict:
-    pdf = FPDF()
+    pdf = SafePDF()
     pdf.set_auto_page_break(auto=True, margin=20)
 
     _pdf_cover(pdf, projects, title)
@@ -420,14 +437,14 @@ def _pdf_section(pdf: FPDF, project: dict, index: int):
                 pdf.set_text_color(229, 229, 229)
                 pdf.set_font("Helvetica", "", 7)
 
-            src_text = ", ".join(dp.get("sources", [])[:1]) if dp.get("sources") else "-"
+            src_text = ", ".join(source_labels(dp.get("sources"), 1)) or "-"
             if len(src_text) > 32:
                 src_text = src_text[:30] + ".."
 
             unit_str = dp.get("unit", "") or "-"
             conf = (dp.get("confidence") or "medium").title()
 
-            vals = [str(i_dp), dp["label"], dp["value"], unit_str, conf, src_text]
+            vals = [str(i_dp), str(dp.get("label", "")), str(dp.get("value", "")), unit_str, conf, src_text]
             for j, v in enumerate(vals):
                 pdf.cell(col_w[j], 6, v, border=0, align="C" if j == 0 else "L")
             pdf.ln()
@@ -448,7 +465,7 @@ def _pdf_section(pdf: FPDF, project: dict, index: int):
             if ent.get("description"):
                 pdf.multi_cell(0, 5, ent["description"])
             if ent.get("sources"):
-                src_text = "; ".join(ent["sources"])
+                src_text = "; ".join(source_labels(ent["sources"]))
                 pdf.set_text_color(115, 115, 115)
                 pdf.cell(0, 5, f"Source: {src_text[:100]}", new_x="LMARGIN", new_y="NEXT")
                 pdf.set_text_color(229, 229, 229)
@@ -472,7 +489,7 @@ def _pdf_section(pdf: FPDF, project: dict, index: int):
             pdf.multi_cell(0, 6, f"{i_f}. {fin['content']} [{conf}]")
             if fin.get("sources"):
                 pdf.set_text_color(115, 115, 115)
-                src_text = "; ".join(fin["sources"][:2])
+                src_text = "; ".join(source_labels(fin["sources"], 2))
                 if len(fin["sources"]) > 2:
                     src_text += f" (+{len(fin['sources'])-2} more)"
                 pdf.set_font("Helvetica", "", 7)
@@ -764,7 +781,7 @@ def generate_chart(topic: str, chart_type: str = "auto", metric: str | None = No
         "json_path": str(json_path),
         "html_path": str(html_path),
         "chart_dir": str(chart_dir),
-        "relative_url": f"/research/{relative_path}",
+        "relative_url": f"/research/{relative_path}",    "chart_json": chart_json,  # for the inline OpenUI chart
     }
 
 
@@ -822,6 +839,7 @@ def generate_project_chart(project_id: str, chart_type: str = "auto", metric: st
         "html_path": str(html_path),
         "chart_dir": str(chart_dir),
         "relative_url": f"/projects/{relative_path}",
+        "chart_json": chart_json,  # for the inline OpenUI chart
     }
 
 

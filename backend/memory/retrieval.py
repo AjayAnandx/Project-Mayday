@@ -84,32 +84,58 @@ def _traverse(mg, anchors, preferred, beam_width=20, max_nodes=12, max_depth=2):
         if not next_frontier:
             break
         frontier = next_frontier
-    return visited
+    return sorted(visited, key=lambda n: -scored.get(n, 0.0))
+
+
+# Bookkeeping relations that say nothing about the user.
+_NOISE_RELATIONS = {"precedes", "has_task_result", "references", "has_note"}
+
+
+def _relation_facts(kg, nid: str, limit: int = 4) -> list[str]:
+    """Direct relations of a node as readable facts: 'Kiran Rao -lives_in-> Bengaluru'."""
+    adj = kg._adj_idx.get(nid, {})
+    facts = []
+    for e in adj.get("out", []) + adj.get("in", []):
+        rel = e.get("relation", "")
+        if rel in _NOISE_RELATIONS:
+            continue
+        src, tgt = kg.get_node(e["source"]), kg.get_node(e["target"])
+        if not src or not tgt:
+            continue
+        facts.append(f"    {src['label']} -{rel}-> {tgt['label']}")
+        if len(facts) >= limit:
+            break
+    return facts
 
 
 def _linearize(mg, node_ids, intent, token_budget=4000):
     kg = mg._kg
+    # node_ids arrive best-first; WHEN questions are re-ordered chronologically.
     nodes = [kg.get_node(nid) for nid in node_ids if kg.get_node(nid)]
-    # Order: WHEN -> chronological; otherwise by traversal score (stable insertion fallback)
     if intent == "WHEN":
         nodes.sort(key=lambda n: _node_timestamp(n) or "9999")
     nodes = nodes[:12]
 
     lines = []
     total = 0
+    shown_facts: set[str] = set()
     for n in nodes:
         ts = _node_timestamp(n)
         label = n.get("label", "")
         ntype = n.get("type", "")
-        # pull one salient property as context
         extra = ""
         for k, v in n.get("properties", {}).items():
-            if k in ("subgraph", "status", "search_result", "message_count"):
+            if k in ("subgraph", "status", "search_result", "message_count", "context"):
                 continue
             if isinstance(v, (str, int, float)) and v not in (None, ""):
                 extra = f" ({k}: {v})"
                 break
-        block = f"<t:{ts}> [{ntype}] {label}{extra}"
+        facts = [f for f in _relation_facts(kg, n["id"]) if f not in shown_facts]
+        shown_facts.update(facts)
+        header = f"<t:{ts}> [{ntype}] {label}{extra}"
+        while facts and total + len(header) + sum(len(f) + 1 for f in facts) + 1 > token_budget:
+            facts.pop()
+        block = "\n".join([header] + facts)
         if total + len(block) + 1 > token_budget and lines:
             lines.append(f"...{len(nodes) - len(lines)} more relevant memories (truncated)")
             break
@@ -134,5 +160,7 @@ def magma_retrieve(user_text: str, token_budget: int = 4000, beam_width: int = 2
     if not anchors:
         return ""
 
+    # Only the strongest anchors; leave room in max_nodes for their neighbours.
+    anchors = anchors[:6]
     selected = _traverse(mg, anchors, preferred, beam_width=beam_width, max_nodes=12)
-    return _linearize(mg, list(selected), intent, token_budget=token_budget)
+    return _linearize(mg, selected, intent, token_budget=token_budget)

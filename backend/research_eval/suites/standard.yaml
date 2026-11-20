@@ -1,0 +1,65 @@
+# Standard suite: one case per major research category. Run before/after tuning prompts,
+# models, playbooks or adapters, and compare the scorecards.
+# expect: regexes of stable, well-documented facts that a correct answer must contain.
+preset: standard
+cases:
+  - id: health-anaphylaxis
+    topic: "Eval: anaphylaxis first-line treatment"
+    type: academic
+    request: "What is the first-line treatment for anaphylaxis, how is it given, and what dose is used for adults?"
+    expect:
+      - "epinephrine|adrenaline"
+      - "intramuscular|\\bIM\\b|thigh"
+      - "0\\.5\\s?mg|0\\.3\\s?mg|0\\.01\\s?mg/kg"
+  - id: technical-postgres
+    topic: "Eval: PostgreSQL defaults and license"
+    type: technical
+    request: "What is PostgreSQL's default port, its license, and its current major release line?"
+    expect:
+      - "5432"
+      - "PostgreSQL License|permissive|BSD|MIT"
+  - id: legal-gdpr
+    topic: "Eval: GDPR application date and fines"
+    type: legal
+    request: "When did the EU GDPR start to apply, and what are the maximum administrative fines?"
+    expect:
+      - "2018"
+      - "4\\s?%"
+      - "20 million|€20"
+  - id: academic-transformer
+    topic: "Eval: origin of the transformer architecture"
+    type: academic
+    request: "Who introduced the transformer neural network architecture, in which paper and year?"
+    expect:
+      - "2017"
+      - "Attention Is All You Need"
+      - "Vaswani"
+  - id: financial-apple
+    topic: "Eval: Apple fiscal 2024 revenue"
+    type: financial
+    request: "What were Apple's total net sales in fiscal year 2024, and how did iPhone contribute?"
+    expect:
+      - "391|390\\.\\d|\\$391"
+      - "iPhone"
+  - id: trend-ev-sales
+    topic: "Eval: global EV sales 2024"
+    type: trend
+    request: "How many electric cars were sold worldwide in 2024 according to the IEA, and which country led?"
+    expect:
+      - "17 million|17\\.\\d million|more than 17"
+      - "China"
+  - id: market-semiconductors
+    topic: "Eval: semiconductor market size 2024"
+    type: market
+    request: "How large was the global semiconductor market in 2024 and what drove its growth?"
+    expect:
+      - "6\\d\\d(\\.\\d)?\\s?(billion|bn|B)|\\$6\\d\\d"
+      - "AI|artificial intelligence|memory|data cent"
+  - id: person-org-wikipedia
+    topic: "Eval: Wikimedia Foundation basics"
+    type: person_org
+    request: "When was the Wikimedia Foundation founded, by whom, and where is it headquartered?"
+    expect:
+      - "2003"
+      - "Jimmy Wales|Wales"
+      - "San Francisco"

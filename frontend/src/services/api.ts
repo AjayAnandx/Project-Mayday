@@ -6,8 +6,13 @@ import type { DashboardData, DashboardWeather, AiNewsResponse } from '../types/d
 import type { DocumentMeta } from '../types/document'
 import type { DataImportFile, DataImportParseResult, ChartOutput } from '../types/data-import'
 import type { ResearchProject, ResearchDataPoint } from '../types/research'
+import type { Claim, Preset, RunBudget, RunDetail, RunSummary, Source } from '../types/research-run'
 import type { Project, ProjectDataPoint } from '../types/project'
 import type { GmailMessages, GmailStatus } from '../types/gmail'
+import type {
+  PlannerItem, PlannerItemInput, PlannerView, Person, PersonDetail, PlannerSummary,
+  QuickAddParse, DayPlan, NudgeResult, DigestPreview,
+} from '../types/planner'
 
 const BASE = '/api'
 
@@ -24,6 +29,45 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // Planner (V2) — unified tasks / events / reminders / waiting-on
+  planner: {
+    list: (params: { view?: PlannerView; start?: string; end?: string; list?: string; tag?: string; q?: string; kind?: string; person_id?: string; include_done?: boolean; days?: number } = {}) => {
+      const qs = new URLSearchParams()
+      Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
+      return request<PlannerItem[]>(`/planner/items?${qs}`)
+    },
+    get: (id: string) => request<PlannerItem>(`/planner/items/${id}`),
+    create: (data: PlannerItemInput) =>
+      request<PlannerItem>('/planner/items', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: PlannerItemInput) =>
+      request<PlannerItem>(`/planner/items/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    remove: (id: string) => request<{ deleted: boolean }>(`/planner/items/${id}`, { method: 'DELETE' }),
+    complete: (id: string, done = true) =>
+      request<PlannerItem>(`/planner/items/${id}/complete`, { method: 'POST', body: JSON.stringify({ done }) }),
+    snooze: (id: string, opts: { minutes?: number; until?: string }) =>
+      request<PlannerItem>(`/planner/items/${id}/snooze`, { method: 'POST', body: JSON.stringify(opts) }),
+    schedule: (id: string, start: string | null, end?: string | null) =>
+      request<PlannerItem>(`/planner/items/${id}/schedule`, { method: 'POST', body: JSON.stringify({ start, end: end ?? null }) }),
+    nudge: (id: string) => request<NudgeResult>(`/planner/items/${id}/nudge`, { method: 'POST' }),
+    quickAdd: (text: string, commit = true) =>
+      request<{ parsed: QuickAddParse; item?: PlannerItem }>('/planner/quick-add', { method: 'POST', body: JSON.stringify({ text, commit }) }),
+    delegate: (data: { title: string; person: string; due_at?: string; follow_up_at?: string; notes?: string; email?: string }) =>
+      request<PlannerItem>('/planner/delegate', { method: 'POST', body: JSON.stringify(data) }),
+    summary: () => request<PlannerSummary>('/planner/summary'),
+    planDay: (date = '', dayStart = '09:00', dayEnd = '18:00') =>
+      request<DayPlan>(`/planner/plan-day?date=${date}&day_start=${dayStart}&day_end=${dayEnd}`),
+    people: () => request<Person[]>('/planner/people'),
+    person: (id: string) => request<PersonDetail>(`/planner/people/${id}`),
+    createPerson: (data: { name: string; email?: string; phone?: string; relation?: string; notes?: string }) =>
+      request<Person>('/planner/people', { method: 'POST', body: JSON.stringify(data) }),
+    updatePerson: (id: string, data: Partial<Person>) =>
+      request<Person>(`/planner/people/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    deletePerson: (id: string) => request<{ deleted: boolean }>(`/planner/people/${id}`, { method: 'DELETE' }),
+    digest: (kind: 'morning' | 'evening') => request<DigestPreview>(`/planner/digest?kind=${kind}`),
+    sendDigest: (kind: 'morning' | 'evening') =>
+      request<{ sent: boolean; reason?: string; subject?: string }>(`/planner/digest/send?kind=${kind}`, { method: 'POST' }),
+  },
+
   // Documents
   listDocuments: () =>
     request<DocumentMeta[]>('/documents'),
@@ -120,6 +164,26 @@ export const api = {
 
   listResearchOutputs: (topic: string) =>
     request<ChartOutput[]>(`/research/${encodeURIComponent(topic)}/outputs`),
+
+  // Evidence-based research runs
+  startResearchRun: (data: { topic: string; request?: string; type?: string; preset?: Preset; questions?: string[]
+                             field?: string; hypotheses?: string[]; snowball?: boolean; sources?: string[] }) =>
+    request<{ run_id: string; topic: string; status: string; budget: RunBudget }>('/research/runs', { method: 'POST', body: JSON.stringify(data) }),
+  listResearchRuns: (topic: string) =>
+    request<RunSummary[]>(`/research/${encodeURIComponent(topic)}/runs`),
+  getResearchRun: (topic: string, runId: string) =>
+    request<RunDetail>(`/research/${encodeURIComponent(topic)}/runs/${encodeURIComponent(runId)}`),
+  getResearchRunReport: (topic: string, runId: string) =>
+    request<{ markdown: string; url: string }>(`/research/${encodeURIComponent(topic)}/runs/${encodeURIComponent(runId)}/report`),
+  listResearchAdapters: () => request<{ name: string; description: string }[]>('/research/meta/adapters'),
+  getResearchCite: (topic: string, style: 'bibtex' | 'apa' | 'ieee' | 'csl' = 'bibtex') =>
+    request<{ style: string; text: string }>(`/research/${encodeURIComponent(topic)}/cite?style=${style}`),
+  exportResearchRun: (topic: string, runId: string, format: 'docx' | 'xlsx' | 'bib' | 'tex') =>
+    request<{ url: string; path: string; format: string }>(`/research/${encodeURIComponent(topic)}/runs/${encodeURIComponent(runId)}/export`, { method: 'POST', body: JSON.stringify({ format }) }),
+  listResearchClaims: (topic: string, status = '') =>
+    request<Claim[]>(`/research/${encodeURIComponent(topic)}/claims${status ? `?status=${status}` : ''}`),
+  listResearchSources: (topic: string) =>
+    request<Source[]>(`/research/${encodeURIComponent(topic)}/sources`),
 
   // Projects
   listProjects: (status = '') =>

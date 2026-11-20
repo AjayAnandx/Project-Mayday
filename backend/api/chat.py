@@ -103,7 +103,35 @@ def _proactive_followup_section() -> str:
     return "\n".join(lines)
 
 
-async def _background_remember(llm, text: str, conv_id: str):
+def _emit_turn_signals(text: str, conv_id: str, recent_user_texts: list[str] | None,
+                       channel: str) -> tuple[float, list[str]]:
+    """Brain V3 P8: every user turn is an explicit signal; frustration is an implicit one."""
+    try:
+        from backend.brain.signals import publish
+        from backend.brain.timing import dissatisfaction
+        publish("message", "backend", {"channel": channel, "chars": len(text or ""),
+                                       "hour": datetime.now().hour}, subject=conv_id)
+        from backend.brain.working import get_working
+        get_working().set_topic(text)          # in-process only, never stored
+        score, reasons = dissatisfaction(text, recent_user_texts or [])
+        if score >= 0.4:
+            publish("dissatisfaction", "backend", {"score": round(score, 2), "reasons": reasons},
+                    subject=conv_id)
+        return score, reasons
+    except Exception as e:
+        logger.debug("turn signals failed: %s", e)
+        return 0.0, []
+
+
+async def _background_remember(llm, text: str, conv_id: str, previous_assistant: str = "",
+                               recent_user_texts: list[str] | None = None, channel: str = "chat"):
+    _score, _reasons = _emit_turn_signals(text, conv_id, recent_user_texts, channel)
+    try:  # Brain V3 P10: a correcting/frustrated turn becomes a lesson candidate
+        from backend.brain.lessons import get_queue
+        get_queue().observe_turn(text, conv_id, recent_user_texts, previous_assistant, _score, _reasons)
+        get_queue().process_async()
+    except Exception as e:
+        logger.debug("lesson queue: %s", e)
     """Fire-and-forget: LLM extractor catches facts the regex scan misses.
 
     Runs the (synchronous, blocking) LLM call in a thread executor so it never
@@ -111,6 +139,19 @@ async def _background_remember(llm, text: str, conv_id: str):
     """
     from backend.core import awareness_observer as ao
     loop = asyncio.get_running_loop()
+    # Brain V2 capture (evidence-checked) replaces the unchecked extractor when
+    # enabled and the graph is on SQLite. Uses the worker model, off the loop.
+    try:
+        from backend.brain import capture as brain_capture
+        from backend.memory.knowledge_graph import get_graph as _gg
+        if brain_capture._cfg()["enabled"] and _gg()._store is not None:
+            from backend.assistant.llm_client import get_worker_client
+            prev = previous_assistant or ""
+            await loop.run_in_executor(
+                None, brain_capture.capture_turn, get_worker_client(), text, prev, f"conv:{conv_id}")
+            return
+    except Exception as e:
+        logger.warning("brain capture failed, falling back to legacy extractor: %s", e)
     try:
         content = await loop.run_in_executor(None, ao.extract_facts_via_llm, llm, text)
     except Exception:
@@ -174,7 +215,7 @@ def _personal_recall_section(user_text: str) -> str:
 router = APIRouter()
 
 SYSTEM_PROMPT = """You are Mayday, an AI personal assistant running on the user's desktop.
-You help manage todos, calendar events, and answer questions conversationally.
+You are the user's personal assistant for tasks, calendar, reminders and follow-ups (the Planner), and you answer questions conversationally.
 You have git tools (git_log, git_status, git_diff, git_branch, git_commit, git_add, git_checkout) that call the local git CLI. ALWAYS pass "repo_path": "." for those.
 You also have GitHub API tools — you can search repositories, list commits, read file contents, and get repo info on ANY public GitHub repo. Use owner/repo format (e.g. "facebook/react").
 You also have web search tools available:
@@ -214,6 +255,15 @@ You have Google Maps tools (server-side key, traffic-aware):
 - maps_save_place(place_id, note): remember liked spots (ask first: "save this as a liked spot?").
 - maps_autocomplete(text): type-ahead for partial names.
 Answer with rating + drive time + one line on traffic; never expose raw tool JSON. If Maps key is missing, tell the user to add GOOGLE_MAPS_API_KEY to .env (billing enabled on the GCP project).
+PLANNER (tasks, events, reminders, waiting-on — one system; use the plan_* tools, never the old todo/event tools):
+- plan_add: things the USER does (kind=task), fixed-time calendar entries (kind=event), or a ping at a time (kind=reminder). For relative dates pass the user's words ('friday', 'tomorrow 6pm') — the server resolves them; priority high/urgent = 1. Put repeats in `recurrence` ("every weekday" = weekly byweekday [0,1,2,3,4]; "3 days after I do it" = repeat_from completion).
+- plan_delegate: things SOMEONE ELSE owes the user ("Ravi will send the deck Friday", "waiting on the landlord"). Mayday reminds the user on the follow-up date and can draft a chase email.
+- plan_nudge drafts that chase email — it never sends. Show the draft; send with gmail_send ONLY after the user approves.
+- plan_list(view=today|upcoming|inbox|waiting|done|calendar) to answer "what's on my plate / what do I have tomorrow / who owes me what".
+- plan_complete / plan_update / plan_snooze / plan_delete take an item id (from plan_list) or exact title.
+- plan_day proposes time blocks for today's tasks; confirm with the user, then plan_schedule each accepted block.
+- plan_people to save contacts (with email) and see what each person owes / is owed.
+After any planner write, confirm in one line what changed (title, when, repeat, who).
 Current date and time (your local timezone): {date}"""
 
 PERSONALITY_INSTRUCTIONS = """
@@ -489,25 +539,17 @@ D4. PRESERVE IMPORTS: When editing a file, keep existing imports unless they're 
 D5. BUILD & VERIFY: Same as R4-R7 in REBUILD protocol above."""
 
 RESEARCH_MODE_INSTRUCTIONS = """
-### Research Mode — Comprehensive Multi-Source Investigation
-When the user says "research &lt;topic&gt;", "investigate", "find out about", "look into", or asks a complex factual question:
+### Research Mode — evidence-based research runs
+For any real research request ("research X", "investigate", "find out about", "deep dive", "compare the market for ...", a complex factual question that needs several sources):
 
-1. DEFINE — Create a project (or resume if exists) and add a research task with a clear "description" field that captures the problem/goal.
-2. BREAK DOWN — For complex topics, split into sub-tasks with dependencies (depends_on). Each sub-task gets its own goal definition.
-3. SEARCH WIDELY — Run multiple search queries to cover different angles, terminology, and perspectives. Do NOT stop after one search — use 3-5 different queries to surface diverse sources. Search across documentation, news, articles, forums, academic sources, and competitor analysis.
-4. FOLLOW LEADS — When you find a promising source, use web_fetch_exa to read it in full. Extract key findings, citations, and references. Follow those references too (snowball search).
-5. FIND RELATED CONCEPTS — Actively look for related technologies, alternatives, dependencies, and context around the topic. The user wants the complete picture, not just a direct answer.
-6. DOCUMENT — Save structured findings via add_project_note (creates .md files in the project folder). Each major subtopic gets its own note.
-7. ANALYZE — Connect insights across sources. Identify patterns, contradictions, gaps, and open questions. Note what's well-established vs what's disputed.
-8. CONCLUDE — Summarize all findings. Update the task as completed with a result summary that covers key discoveries and any remaining open questions.
-9. ITERATE — If new questions or leads emerge during research, add follow-up tasks automatically.
+1. Call research_start(topic, request=<the user's words>, type=<category>). Pass questions only if the user listed them. Pick the closest type: market, technical, financial, sales, business, academic, competitive, product, domain, person_org, legal, trend, community.
+2. Tell the user in one or two sentences that the run started in the background, its budget, and that they will be notified. Do not run your own searches in parallel.
+3. When asked about progress or results, call research_status(topic). To show the evidence, use research_claims(topic) and research_sources(topic).
+4. When presenting results, only repeat answers from research_status. Keep the citations, mention evidence strength, and state the gaps it lists. Never add facts that are not in the run's answers.
 
-- Always include a description (goal/problem statement) when creating research tasks.
-- create_research(type=...) accepts: market, technical, financial, sales, business, academic, competitive, product, domain, person_org, legal, trend, community. Omit type for a general market-style research.
-- For complex research: break into multiple sub-tasks with depends_on so each piece can be tackled in order.
-- After each sub-task completes, check what's next via list_project_tasks or get_active_task.
-- Document findings as .md files in the project folder so results persist.
-- CRITICAL: Thorough research means multiple queries, multiple sources, following cross-references. A single search is never enough."""
+Budget overrides: "quick" → max_minutes=3, max_sources=15, max_cost_usd=0.1; "deep/thorough" → max_minutes=30, max_sources=120, max_cost_usd=2.
+For a quick single-fact lookup, a plain web search is fine; do not start a run.
+For notes on an existing topic use add_research_note / search_research. Do not file research under projects (add_project_note) unless the user asks."""
 
 DATA_ANALYSIS_PROTOCOL = """
 ### Data Analysis Pipeline — Trends, Comparisons & Structured Data
@@ -543,15 +585,22 @@ SKILL_DESCRIPTIONS_TEMPLATE = """
 When a user's request matches one of the skills below, call suggest_skill() to offer it:
 {descriptions}"""
 
+PLANNER_CORE_TOOLS = {
+    "plan_add", "plan_update", "plan_complete", "plan_delete", "plan_list",
+    "plan_snooze", "plan_delegate",
+}
+
+PLANNER_TOOL_NAMES = PLANNER_CORE_TOOLS | {
+    "plan_schedule", "plan_people", "plan_nudge", "plan_day",
+}
+
 CORE_TOOL_NAMES = {
-    "create_todo", "update_todo", "delete_todo", "list_todos",
-    "create_event", "update_event", "delete_event", "list_events", "query_events",
+    *PLANNER_CORE_TOOLS,
     "remember", "recall", "recall_entity", "forget", "delete_entity", "set_status",
     "get_conversations", "get_conversation_history",
     "list_screenshots", "get_screenshot", "delete_screenshot",
     "query_operations",
     "unified_search",
-    "create_reminder", "list_reminders", "delete_reminder",
     "web_search_exa", "web_fetch_exa", "web_search_advanced_exa",
     # Project tools (always available)
     "create_project", "resume_project", "list_projects",
@@ -612,13 +661,10 @@ BASIC_TOOL_NAMES = {
     "web_search_exa", "web_fetch_exa", "web_search_advanced_exa",
 }
 
-TODO_TOOL_NAMES = {
-    "create_todo", "update_todo", "delete_todo", "list_todos",
-}
+# The todo and calendar intents both route to the unified Planner tools.
+TODO_TOOL_NAMES = set(PLANNER_TOOL_NAMES)
 
-CALENDAR_TOOL_NAMES = {
-    "create_event", "update_event", "delete_event", "list_events", "query_events",
-}
+CALENDAR_TOOL_NAMES = set(PLANNER_TOOL_NAMES)
 
 MEMORY_TOOL_NAMES = {
     "remember", "recall", "recall_entity", "forget", "delete_entity", "set_status",
@@ -670,6 +716,11 @@ RESEARCH_TOOL_NAMES = {
     "add_research_note", "list_research_notes",
     "search_research", "promote_research_to_project",
     "list_research_outputs",
+    # evidence-based research flow
+    "research_start", "research_status", "research_claims", "research_sources", "research_export", "research_add_pdf", "research_cite", "research_hypotheses",
+    # previously unrouted research tools
+    "search_academic", "fan_hypothesis", "update_research_task_status",
+    "freeze_research_task", "list_research_tasks",
 }
 
 DATA_TOOL_NAMES = {
@@ -700,7 +751,7 @@ SCREENSHOT_TOOL_NAMES = {
 }
 
 NOTIFICATION_TOOL_NAMES = {
-    "create_reminder", "list_reminders", "delete_reminder",
+    "plan_add", "plan_list", "plan_snooze", "plan_delete",
     "capture_page_screenshot",
 }
 
@@ -760,6 +811,7 @@ GROUP_SETS = {
 
 
 MAX_TOOL_RESULT_LENGTH = 50000
+GENERAL_MAX_SELECTOR_GROUPS = 2
 
 _BUILD_REQUEST_KEYWORDS = re.compile(r"\b(build|create|make|scaffold|init|set up)\b", re.I)
 
@@ -769,8 +821,17 @@ CONNECTION_HINT = (
 )
 
 
+def _upcoming_days(now) -> str:
+    """Weekday->date lookup so the model never does weekday arithmetic itself."""
+    from datetime import timedelta
+    days = [now + timedelta(days=k) for k in range(1, 8)]
+    return ("\nNext 7 days (use these exact dates; 'Friday' = the first Friday listed): "
+            + ", ".join(d.strftime("%a %Y-%m-%d") for d in days))
+
+
 class WebSocketSender:
     """Thin adapter so _run_engine can work with WebSocket or Telegram sender."""
+
     def __init__(self, ws: WebSocket):
         self.ws = ws
     async def send_json(self, data: dict):
@@ -784,6 +845,11 @@ class WebSocketSender:
 
 async def _send_json(sender, data: dict):
     # Polymorphic: accepts WebSocket, WebSocketSender, or TelegramSender
+    if (data.get("type") == "approval_gate" and data.get("phase") and "ui" not in data
+            and not str(data.get("message", "")).startswith("Approved")):
+        # Pause notices get an Approve / Stop card (actions → confirm_phase / a stop message).
+        from backend.core.openui_builder import approval_ui
+        data = {**data, "ui": approval_ui(str(data["phase"]), str(data.get("message", "")))}
     try:
         if hasattr(sender, "send_json"):
             await sender.send_json(data)  # type: ignore
@@ -847,6 +913,7 @@ def _make_voice_text(text: str) -> str:
     stripped = re.sub(r'`([^`]+)`', r'\1', stripped)
     stripped = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', stripped)
     stripped = re.sub(r'\[([^\]]*)\]\([^)]+\)', r'\1', stripped)
+    stripped = re.sub(r'(?:\s*\[C?\d+(?:\s*[,–-]\s*C?\d+)*\])+', '', stripped)  # [1] [C3] citations
     stripped = re.sub(r'^#{1,6}\s+', '', stripped, flags=re.M)
     stripped = re.sub(r'\*\*([^*]+)\*\*', r'\1', stripped)
     stripped = re.sub(r'\*([^*]+)\*', r'\1', stripped)
@@ -954,6 +1021,9 @@ async def _run_engine(
     humanize_output: bool = False,
 ):
     now = datetime.now(timezone.utc).astimezone()
+    # Research tools read the user's own words (budget presets, listed questions).
+    from backend.functions.research_flow_functions import set_user_text as _set_research_user_text
+    _set_research_user_text(user_text)
 
     intent = query_classifier.classify(user_text, is_first_message=(len(conv.get_context()) <= 1)) if query_classifier else QueryIntent(
         intent="general",
@@ -982,7 +1052,7 @@ async def _run_engine(
         )
 
     sections = {
-        "BASE": SYSTEM_PROMPT.format(date=now.strftime("%A, %Y-%m-%d %H:%M:%S %Z (%z)")),
+        "BASE": SYSTEM_PROMPT.format(date=now.strftime("%A, %Y-%m-%d %H:%M:%S %Z (%z)")) + _upcoming_days(now),
         "PERSONALITY": _personality_section,
         "WEATHER": WEATHER_INSTRUCTIONS,
         "PROJECT": PROJECT_INSTRUCTIONS,
@@ -1015,6 +1085,20 @@ async def _run_engine(
     # Compact PHF habitus disposition (phf.enabled only)
     system += _phf_context_section(user_text)
 
+    # Brain V2 P4: short "now" block (today's plan, waiting-on, open commitments).
+    try:
+        from backend.brain import context as brain_ctx
+        if brain_ctx._cfg()["enabled"]:
+            _now = brain_ctx.now_block()
+            if _now:
+                system += "\n\n### Now (the user's day; use it, don't recite it)\n" + _now
+            # Brain V3 P13: adapt tone/complexity to the user's current state (relative to their baseline)
+            from backend.brain import state as brain_state
+            if brain_state._cfg()["enabled"]:
+                system += brain_state.directives(brain_state.estimate())
+    except Exception as _nexc:
+        logger.debug("brain now block failed: %s", _nexc)
+
     # Auto-recall: inject known person / personal-info context when referenced.
     system += _personal_recall_section(user_text)
 
@@ -1036,7 +1120,25 @@ async def _run_engine(
         if keywords and len(keywords) >= 1:
             query = " ".join(keywords)
             memory_lines = ""
-            if magma_enabled:
+            _brain_recall = False
+            try:
+                from backend.brain import context as brain_ctx
+                _brain_recall = brain_ctx._cfg()["enabled"]
+            except Exception:
+                _brain_recall = False
+            if _brain_recall:
+                # Brain V2 P4: hybrid FTS5 + IDF + embeddings + graph, with coreference
+                # from the last user messages. Falls back to MAGMA on any error.
+                try:
+                    _recent_users = [str(m.get("content") or "") for m in conv.get_context()
+                                     if m.get("role") == "user"][-4:-1]
+                    memory_lines = brain_ctx.retrieve(user_text, _recent_users)
+                except Exception as _bexc:
+                    logger.warning("brain recall failed, using MAGMA: %s", _bexc)
+                    _brain_recall = False
+            if _brain_recall:
+                pass
+            elif magma_enabled:
                 try:
                     from backend.memory.retrieval import magma_retrieve
                     memory_lines = magma_retrieve(user_text, token_budget=magma_token_budget)
@@ -1099,46 +1201,33 @@ async def _run_engine(
                     memory_lines += "\n\n".join(_doc_lines)
                     memory_lines += "\n\n### IMPORTANT: Use the document content above to answer. Do NOT search the web — the answer is in these uploaded documents."
 
-            # Research auto-context injection (active topics via keyword match)
-            from backend.core.research_store import get_research_store
-            _rs = get_research_store()
-            _active_research = _rs.list_projects(status="active")
-            _matched_research = []
-            for _rp in _active_research:
-                if any(kw in _rp["topic"].lower() for kw in keywords):
-                    _full = _rs._get_by_topic(_rp["topic"])
-                    if _full:
-                        _matched_research.append(_full)
-            if _matched_research:
-                _rs_lines = []
-                for _rp in _matched_research:
-                    _rs_lines.append(f"Active research: {_rp['topic']} ({_rp['type']})")
-                    if _rp.get("summary"):
-                        _rs_lines.append(f"  Summary: {_rp['summary'][:200]}")
-                    for _dp in _rp.get("data_points", [])[:3]:
-                        _u = f" {_dp.get('unit', '')}" if _dp.get('unit') else ""
-                        _rs_lines.append(f"  - {_dp['label']}: {_dp['value']}{_u}")
-                if _rs_lines:
-                    memory_lines += "\n" if memory_lines else ""
-                    memory_lines += "\n".join(_rs_lines)
-
-            # Research folder search across ALL topics (active + completed)
+            # Research auto-context: verified answers, findings and claims from ALL topics
+            # (active and completed), retrieved by word-based search over the research index.
             from backend.core.research_index import get_research_index
-            _research_hits = get_research_index().search(" ".join(keywords), limit=4)
+            _research_hits = get_research_index().search(" ".join(keywords), limit=12)
             if _research_hits:
-                _rsc_lines = ["Past research found in the research folder:"]
+                _rsc_lines = ["From Mayday's research store (evidence-checked; cite the topic when you use it):"]
+                _content = [h for h in _research_hits if h["kind"] in ("answer", "finding", "claim")][:5]
+                for _rh in _content:
+                    # confidence is a float for claims but a word ("high") for findings
+                    _conf = _rh.get("confidence")
+                    _label = (f"verified claim, confidence {_conf:.2f}"
+                              if _rh["kind"] == "claim" and isinstance(_conf, (int, float)) else _rh["kind"])
+                    _rsc_lines.append(f"- [{_rh['topic']} | {_label}] {_rh['snippet']}")
+                _topics = []
                 for _rh in _research_hits:
-                    _rsc_lines.append(f"- [{_rh['kind']}] {_rh['topic']}"
-                                      + (f" / {_rh['filename']}" if _rh.get('filename') else ""))
-                _notes = _rs.list_research_notes(_research_hits[0]["topic"])
-                if _notes:
-                    _note_names = ", ".join(n["filename"] for n in _notes[:5])
-                    _rsc_lines.append(f"  Notes: {_note_names}")
+                    if _rh["topic"] not in _topics:
+                        _topics.append(_rh["topic"])
+                _rsc_lines.append("Related research topics: " + ", ".join(_topics[:4])
+                                  + ". For full answers and sources use research_status / research_claims.")
                 memory_lines += "\n" if memory_lines else ""
                 memory_lines += "\n".join(_rsc_lines)
 
             if memory_lines:
-                system += f"\n\n### Relevant memories:\n{memory_lines}\n###"
+                # Default prompts may go to a cloud model: mask phone/account
+                # numbers and e-mail addresses (Brain V2 sensitivity gating).
+                from backend.memory.sensitivity import redact
+                system += f"\n\n### Relevant memories:\n{redact(memory_lines)}\n###"
 
     HISTORY_KEYWORDS = re.compile(r"\b(delete|cancel|remov|yesterday|last\s*week|this\s*month|changed|created|operation|activity|log)\b", re.I)
     if HISTORY_KEYWORDS.search(user_text):
@@ -1174,7 +1263,9 @@ async def _run_engine(
     selector_names: set[str] = set()
     if selector is not None and llm_tool_choice != "none":
         try:
-            selector_names = selector.select_tool_names(user_text)
+            # `general` turns: only the 2 best-matching groups (Brain V2: ≤ ~30 tools)
+            selector_names = selector.select_tool_names(
+                user_text, max_groups=GENERAL_MAX_SELECTOR_GROUPS if intent.intent == "general" else None)
         except Exception as e:
             logger.warning("ToolSelector failed, continuing with intent groups: %s", e)
 
@@ -1200,6 +1291,27 @@ async def _run_engine(
             from backend.core.tool_selector import apply_tool_cap
             filtered_tools = apply_tool_cap(filtered_tools, selected_group_names, _cap)
 
+    # Brain V2 P5: order the routed tools by relevance and keep at most
+    # brain.tools.max_tools (default 30); tool_search fetches anything else.
+    _used_tools: list[str] = []
+    _searched_tools: list[str] = []
+    try:
+        from backend.brain import tools as brain_tools
+        _bt = brain_tools._cfg()
+        _exempt = set((load_config().get("brain", {}) or {}).get("tools", {}).get(
+            "exempt_intents", ["build"]))
+        if _bt["enabled"] and llm_tool_choice != "none" and intent.intent not in _exempt:
+            from backend.core.tool_router import ESSENTIAL_TOOL_NAMES
+            _intent_names: set[str] = set()
+            if intent.intent != "general":
+                for _g in intent.active_groups:
+                    if _g in GROUP_SETS and _g != "core":
+                        _intent_names.update(GROUP_SETS[_g])
+            filtered_tools = brain_tools.plan_tools(filtered_tools, user_text, brain_tools.index_for(tools),
+                                                    set(ESSENTIAL_TOOL_NAMES), _intent_names)
+    except Exception as _texc:
+        logger.warning("brain tool planner failed, using routed set: %s", _texc)
+
     if active_skill and skill_manager:
         skill = active_skill[0]
         body, skill_tool_defs, skill_func_map = skill_manager.apply_skill(skill.name)
@@ -1211,6 +1323,20 @@ async def _run_engine(
             filtered_tools = apply_tool_cap(filtered_tools, selected_group_names, _cap)
 
     send_tools = filtered_tools if llm_tool_choice != "none" else []
+
+    # Brain V3 P10: lessons from this user's past corrections (+ calibrated preferences)
+    try:
+        from backend.brain.lessons import prompt_block as _lessons_block
+        _lb = _lessons_block(user_text, [t.get("function", t).get("name", "") for t in send_tools],
+                             conv.current_id or "")
+        from backend.brain.routines import prompt_block as _routines_block   # Brain V3 P14
+        _lb += _routines_block(user_text)
+        if _lb:
+            system += _lb                      # later rebuilds of `messages` keep it
+            if messages and messages[0].get("role") == "system":
+                messages[0] = {**messages[0], "content": messages[0]["content"] + _lb}
+    except Exception as _lexc:
+        logger.debug("lessons block failed: %s", _lexc)
 
     try:
         def first_call(msgs):
@@ -1438,6 +1564,30 @@ async def _run_engine(
                     if url and "5174" in url:
                         fn_args["url"] = url.replace("5174", str(_active_dev_port))
                         logger.info("Rewrote Playwright URL 5174→%s for %s", _active_dev_port, fn_name)
+
+                # ---- Brain V2 P5: tool_search meta-tool + memory-aware arguments ----
+                if fn_name == "tool_search":
+                    from backend.brain.tools import handle_tool_search, index_for
+                    result, _added = handle_tool_search(str((fn_args or {}).get("query", "")),
+                                                        index_for(tools), filtered_tools)
+                    for _td in _added:
+                        if _td not in filtered_tools:
+                            filtered_tools.append(_td)
+                    _searched_tools.extend(t["function"]["name"] for t in _added)
+                    conv.add_message("tool", result, tool_call_id=tool_call_id)
+                    await _send_json(sender, {"type": "tool_call", "name": fn_name, "result": result,
+                                              "args": fn_args if isinstance(fn_args, dict) else {}})
+                    continue
+                _used_tools.append(fn_name)
+                try:
+                    from backend.brain.tools import resolve_args
+                    _recent_u = [str(m.get("content") or "") for m in conv.get_context()
+                                 if m.get("role") == "user"][-4:]
+                    fn_args, _arg_note = resolve_args(fn_name, fn_args, _recent_u)
+                    if _arg_note:
+                        logger.info("brain args: %s %s", fn_name, _arg_note)
+                except Exception as _rexc:
+                    logger.debug("resolve_args failed: %s", _rexc)
 
                 # ---- Pre-dispatch retain: if same successful call seen before, return cached without re-executing ----
                 _pre_args_hash = json.dumps(fn_args, sort_keys=True, ensure_ascii=False)
@@ -1709,6 +1859,7 @@ async def _run_engine(
 
                 tool_msg = {"type": "tool_call", "name": fn_name, "result": result,
                             "args": fn_args if isinstance(fn_args, dict) else {}}
+                _raw_result = result
 
                 try:
                     _data = json.loads(result)
@@ -1733,6 +1884,14 @@ async def _run_engine(
                             if "chart" in artifact_url or "chart" in artifact_title:
                                 tool_msg["open_in_new_tab"] = True
                             result = _data.get("message", result.split("}")[0] if "}" in result else result)
+                    # Inline OpenUI spec (backend/core/openui_builder.py): rendered in the chat
+                    # bubble; when present, the tool's artifact page is no longer auto-opened.
+                    if isinstance(_data, dict) and isinstance(_data.get("ui"), dict) and _data["ui"].get("lang"):
+                        tool_msg["ui"] = _data["ui"]
+                        tool_msg.pop("open_in_new_tab", None)
+                        tool_msg["raw_result"] = _raw_result  # Telegram scans it for file paths
+                        result = _data.get("message") or _data["ui"].get("fallback_text") or result
+                        tool_msg["result"] = result
                 except (json.JSONDecodeError, TypeError):
                     pass
 
@@ -1775,6 +1934,26 @@ async def _run_engine(
 
         if iteration >= MAX_ITERATIONS:
             content = (content or "") + "\n\n[Reached maximum iterations — the build may be incomplete.]"
+
+    # Brain V3 P10: tool errors -> lesson candidates (a lesson on the 2nd identical failure)
+    try:
+        _errs = [{"tool": c.get("function", {}).get("name", "?"), "error": str(c.get("result", ""))[:300],
+                  "args_keys": sorted((c.get("args") or {}).keys()) if isinstance(c.get("args"), dict) else []}
+                 for c in tool_calls_log if c.get("is_error")]
+        if _errs:
+            from backend.brain.lessons import get_queue
+            get_queue().observe_tool_errors(user_text, _errs, conv.current_id or "")
+            get_queue().process_async()
+    except Exception:
+        pass
+
+    # Brain V2 P5: log which tools were offered / used / fetched via tool_search.
+    try:
+        from backend.brain.tools import log_turn
+        log_turn(conv.current_id or "", intent.intent, user_text,
+                 [t.get("function", t).get("name", "") for t in send_tools], _used_tools, _searched_tools)
+    except Exception:
+        pass
 
     # A2: clear checkpoint on successful completion
     if _ckpt_project_id:
@@ -2006,6 +2185,7 @@ async def chat_websocket(websocket: WebSocket):
         # extra 3B pass just adds latency, so it's off by default for speed.
         return bool(tiering and load_config().get("models", {}).get("humanize_enabled", True))
 
+    gated_request: dict = {}
     try:
         while True:
             data = await websocket.receive_text()
@@ -2023,6 +2203,7 @@ async def chat_websocket(websocket: WebSocket):
                     from backend.core.approval_gate import should_gate, set_gate, clear_gate, is_gated
                     if should_gate(user_text, intent.intent):
                         set_gate(conv.current_id or "global", intent.intent, gated=True)
+                        gated_request["text"] = user_text  # resumed on Approve, not a bare "continue"
                         await _send_json(sender, {"type": "approval_gate", "phase": intent.intent, "message": f"Paused on phase {intent.intent} — awaiting your approval. Send Confirm to continue."})
                         # don't block engine completely; engine will check gate before each phase and pause
                     # if user says confirm while gated, clear gate so next turn proceeds
@@ -2049,7 +2230,22 @@ async def chat_websocket(websocket: WebSocket):
                 # Background LLM extraction (non-blocking): catches facts the regex
                 # scan misses. Runs concurrently with the reply.
                 try:
-                    asyncio.create_task(_background_remember(llm, user_text, conv.current_id))
+                    _prev_asst = ""
+                    try:
+                        for _m in reversed(conv.get_context()):
+                            if _m.get("role") == "assistant" and _m.get("content"):
+                                _prev_asst = str(_m["content"])
+                                break
+                    except Exception:
+                        pass
+                    _prev_users = []
+                    try:
+                        _prev_users = [str(_m.get("content") or "") for _m in conv.get_context()
+                                       if _m.get("role") == "user"][-3:]
+                    except Exception:
+                        pass
+                    asyncio.create_task(_background_remember(llm, user_text, conv.current_id, _prev_asst,
+                                                             _prev_users, "chat"))
                 except Exception:
                     pass
                 if tiering and not intent.requires_llm:
@@ -2095,9 +2291,10 @@ async def chat_websocket(websocket: WebSocket):
                     clear_gate(conv.current_id or "global")
                     await _send_json(sender, {"type": "approval_gate", "phase": msg.get("phase",""), "message": "Approved — continuing."})
                     # resume by running engine with last user context if provided
-                    resume_text = msg.get("content") or msg.get("text") or "continue"
+                    resume_text = (msg.get("content") or msg.get("text") or gated_request.pop("text", "")
+                                   or "continue")
                     await _run_engine(sender, resume_text, conv, llm, tools, mcp, kg,
-                                      selector=selector, skill_manager=skill_manager,
+                                      selector=selector, router=router, skill_manager=skill_manager,
                                       pending_suggestion=pending_suggestion,
                                       active_skill=active_skill,
                                       query_classifier=query_classifier,

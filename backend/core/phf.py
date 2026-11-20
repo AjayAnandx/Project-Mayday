@@ -234,25 +234,47 @@ def _personal_facts() -> str:
     (so person nodes render as 'Mom' not 'person:mom').
     """
     try:
+        from backend.memory.sensitivity import is_sensitive
         kg = get_graph()
         user = kg.get_node_by_label(_USER_LABEL)
-        if not user:
+        name = (user or {}).get("properties", {}).get("name")
+        # Facts about the user land on several "self" nodes: the awareness node,
+        # any `user` node (remember("user", ...)) and a node named after the user.
+        by_type = getattr(kg, "get_nodes_by_type", None)
+        self_ids = {n["id"] for n in (by_type("user") if by_type else [])}
+        if user:
+            self_ids.add(user["id"])
+        for lbl in ("user", "me", name or ""):
+            n = kg.get_node_by_label(lbl) if lbl else None
+            if n and n["type"] in ("user", "person", "concept"):
+                self_ids.add(n["id"])
+        if not self_ids:
             return ""
-        uid = user["id"]
-        name = user.get("properties", {}).get("name")
         by_rel: dict[str, list[str]] = {}
-        edges = kg._edges
-        edge_list = list(edges.values()) if isinstance(edges, dict) else edges
-        for e in edge_list:
-            if e.get("source") != uid:
-                continue
+        out_edges = []
+        adj = getattr(kg, "_adj_idx", None)
+        if adj is not None:
+            for sid in self_ids:
+                out_edges.extend(adj.get(sid, {}).get("out", []))
+        else:  # simple graphs (tests) without the adjacency index
+            edges = kg._edges
+            for e in (edges.values() if isinstance(edges, dict) else edges):
+                if e.get("source") in self_ids:
+                    out_edges.append(e)
+        for e in out_edges:
             tgt = kg.get_node(e.get("target"))
             if not tgt:
                 continue
             label = tgt["label"]
             if label.startswith("belief:"):
                 continue
-            text = tgt.get("properties", {}).get("name") or label
+            text = (tgt.get("properties", {}).get("name") or tgt.get("properties", {}).get("text") or label)
+            if is_sensitive(e.get("relation", ""), text):
+                continue  # never in a default (possibly cloud) prompt
+            if tgt.get("type") in ("project", "conversation", "email", "build_lesson"):
+                continue
+            if text.strip().lower() in {"user", "the user", "me", (name or "").lower()}:
+                continue  # "is: the user", "name: Ajay" carry no information
             by_rel.setdefault(e["relation"], []).append(text)
         if not by_rel and not name:
             return ""
@@ -277,6 +299,16 @@ def _personal_facts() -> str:
                 if v not in seen:
                     seen.append(v)
             lines.append(f"{rel}: " + ", ".join(seen[:6]))
+        # Brain V2 P6: weekly persona (evidence-cited summary of the user).
+        try:
+            store = getattr(kg, "_store", None)
+            if store is not None:
+                from backend.brain.reflection import latest_persona
+                persona = latest_persona(store)
+                if persona:
+                    lines.append("In short: " + " ".join(p["text"] for p in persona)[:1200])
+        except Exception:
+            pass
         return "\n".join(lines)
     except Exception:
         return ""

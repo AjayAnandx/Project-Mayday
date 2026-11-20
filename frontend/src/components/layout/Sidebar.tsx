@@ -1,7 +1,7 @@
-import { LayoutDashboard, MessageSquare, ListTodo, CalendarDays, BrainCircuit, Headphones, Plus, Search, FileText, Database } from 'lucide-react'
+import { LayoutDashboard, MessageSquare, CalendarCheck, BrainCircuit, Headphones, Plus, Search, FileText, Database, FlaskConical } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
-export type Page = 'dashboard' | 'chat' | 'todos' | 'calendar' | 'brain' | 'voice' | 'documents' | 'data'
+export type Page = 'dashboard' | 'chat' | 'planner' | 'brain' | 'voice' | 'documents' | 'data' | 'research'
 
 interface SidebarProps {
   currentPage: Page
@@ -15,9 +15,9 @@ const navItems: { page: Page; icon: typeof MessageSquare; label: string }[] = [
   { page: 'dashboard', icon: LayoutDashboard, label: 'Overview' },
   { page: 'chat', icon: MessageSquare, label: 'Chat' },
   { page: 'voice', icon: Headphones, label: 'Voice' },
-  { page: 'todos', icon: ListTodo, label: 'Todos' },
-  { page: 'calendar', icon: CalendarDays, label: 'Calendar' },
+  { page: 'planner', icon: CalendarCheck, label: 'Planner' },
   { page: 'documents', icon: FileText, label: 'Docs' },
+  { page: 'research', icon: FlaskConical, label: 'Research' },
   { page: 'data', icon: Database, label: 'Data' },
   { page: 'brain', icon: BrainCircuit, label: 'Brain' },
 ]

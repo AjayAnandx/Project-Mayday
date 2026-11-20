@@ -62,7 +62,7 @@ def export_dataset_pdf(topic: str, store_type: str = "research", filename: str |
     if not dps:
         return json.dumps({"error": "No data points to export — collect data first with batch_add_data_points."})
 
-    from fpdf import FPDF
+    from backend.core.report_generator import SafePDF as FPDF, source_labels
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=18)
@@ -97,7 +97,7 @@ def export_dataset_pdf(topic: str, store_type: str = "research", filename: str |
             pdf.rect(0, 0, 210, 297, "F")
             pdf.set_text_color(229, 229, 229)
             pdf.set_font("Helvetica", "", 7)
-        src_text = ", ".join(dp.get("sources", [])[:1]) if dp.get("sources") else "-"
+        src_text = ", ".join(source_labels(dp.get("sources"), 1)) or "-"
         if len(src_text) > 32:
             src_text = src_text[:30] + ".."
         unit_str = dp.get("unit", "") or "-"

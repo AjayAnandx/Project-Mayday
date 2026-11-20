@@ -1,0 +1,25 @@
+# Smoke suite: 3 cheap cases across very different categories. Run after any change.
+# expect: regexes of stable, well-documented facts that a correct answer must contain.
+preset: quick
+cases:
+  - id: health-anaphylaxis
+    topic: "Eval: anaphylaxis first-line treatment"
+    type: academic
+    request: "What is the first-line treatment for anaphylaxis, and how is it given?"
+    expect:
+      - "epinephrine|adrenaline"
+      - "intramuscular|\\bIM\\b|thigh"
+  - id: technical-postgres
+    topic: "Eval: PostgreSQL defaults and license"
+    type: technical
+    request: "What is PostgreSQL's default port and under which license is it released?"
+    expect:
+      - "5432"
+      - "PostgreSQL License|permissive|BSD|MIT"
+  - id: legal-gdpr
+    topic: "Eval: GDPR application date and fines"
+    type: legal
+    request: "When did the EU GDPR start to apply, and what is the maximum administrative fine?"
+    expect:
+      - "2018"
+      - "4\\s?%|20 million|€20"
